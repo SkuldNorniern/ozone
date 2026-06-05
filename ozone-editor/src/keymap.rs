@@ -16,69 +16,246 @@
 
 use ozone_config::KeymapConfig;
 
-/// A single chorded key press: modifiers + a normalized key token.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct KeyStroke {
+/// A physical modifier key as the platform reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PhysicalModifier {
+    Ctrl,
+    Alt,
+    Shift,
+    Meta, // the OS "super" key: Windows key / Command
+}
+
+/// Physical modifier state for a single key event.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PhysicalMods {
     pub ctrl: bool,
     pub alt: bool,
     pub shift: bool,
     pub meta: bool,
-    pub key: String,
+}
+
+impl PhysicalMods {
+    pub fn new(ctrl: bool, alt: bool, shift: bool, meta: bool) -> Self {
+        Self { ctrl, alt, shift, meta }
+    }
+    fn has(&self, m: PhysicalModifier) -> bool {
+        match m {
+            PhysicalModifier::Ctrl => self.ctrl,
+            PhysicalModifier::Alt => self.alt,
+            PhysicalModifier::Shift => self.shift,
+            PhysicalModifier::Meta => self.meta,
+        }
+    }
+}
+
+fn parse_physical_modifier(s: &str) -> Option<PhysicalModifier> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "ctrl" | "control" => Some(PhysicalModifier::Ctrl),
+        "alt" | "option" => Some(PhysicalModifier::Alt),
+        "shift" => Some(PhysicalModifier::Shift),
+        "meta" | "super" | "cmd" | "command" | "win" => Some(PhysicalModifier::Meta),
+        _ => None,
+    }
+}
+
+/// Maps Emacs-style logical modifiers to physical keys. Editable per platform.
+///
+/// Defaults: Control→Ctrl (Cmd on macOS), Meta→Alt, Super→the OS Win/Cmd key.
+#[derive(Debug, Clone, Copy)]
+pub struct ModifierMap {
+    pub control: PhysicalModifier,
+    pub meta: PhysicalModifier,
+    pub super_: PhysicalModifier,
+}
+
+impl ModifierMap {
+    pub fn platform_default() -> Self {
+        if cfg!(target_os = "macos") {
+            // macOS reports Command as the "Meta" key; Control on Cmd is the
+            // common editor mapping, Meta(M-) on Option, Super on the Ctrl key.
+            Self {
+                control: PhysicalModifier::Meta,
+                meta: PhysicalModifier::Alt,
+                super_: PhysicalModifier::Ctrl,
+            }
+        } else {
+            Self {
+                control: PhysicalModifier::Ctrl,
+                meta: PhysicalModifier::Alt,
+                super_: PhysicalModifier::Meta,
+            }
+        }
+    }
+
+    /// Override individual logical→physical mappings from config tokens.
+    pub fn with_overrides(
+        mut self,
+        control: Option<&str>,
+        meta: Option<&str>,
+        super_: Option<&str>,
+    ) -> Self {
+        if let Some(p) = control.and_then(parse_physical_modifier) {
+            self.control = p;
+        }
+        if let Some(p) = meta.and_then(parse_physical_modifier) {
+            self.meta = p;
+        }
+        if let Some(p) = super_.and_then(parse_physical_modifier) {
+            self.super_ = p;
+        }
+        self
+    }
+}
+
+impl Default for ModifierMap {
+    fn default() -> Self {
+        Self::platform_default()
+    }
+}
+
+/// The non-modifier key in a stroke — a structured value, not a raw string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Key {
+    /// A printable key, stored lowercase (letters, digits, symbols).
+    Char(char),
+    Space,
+    Enter,
+    Escape,
+    Tab,
+    Backspace,
+    Delete,
+    Insert,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Up,
+    Down,
+    Left,
+    Right,
+    /// Function key F1..=F12.
+    F(u8),
+}
+
+impl Key {
+    /// Parse a key token (`"enter"`, `"f5"`, `"a"`, `"pgdn"`). `None` if unknown.
+    pub fn parse(token: &str) -> Option<Self> {
+        let t = token.trim().to_ascii_lowercase();
+        Some(match t.as_str() {
+            "space" | "spc" => Key::Space,
+            "enter" | "return" => Key::Enter,
+            "escape" | "esc" => Key::Escape,
+            "tab" => Key::Tab,
+            "backspace" | "bs" => Key::Backspace,
+            "delete" | "del" => Key::Delete,
+            "insert" | "ins" => Key::Insert,
+            "home" => Key::Home,
+            "end" => Key::End,
+            "pageup" | "pgup" => Key::PageUp,
+            "pagedown" | "pgdn" | "pgdown" => Key::PageDown,
+            "up" => Key::Up,
+            "down" => Key::Down,
+            "left" => Key::Left,
+            "right" => Key::Right,
+            _ => {
+                // F-key, e.g. "f5"
+                if let Some(num) = t.strip_prefix('f').and_then(|n| n.parse::<u8>().ok()) {
+                    if (1..=12).contains(&num) {
+                        return Some(Key::F(num));
+                    }
+                }
+                // Single printable char.
+                let mut chars = t.chars();
+                let c = chars.next()?;
+                if chars.next().is_none() {
+                    Key::Char(c)
+                } else {
+                    return None;
+                }
+            }
+        })
+    }
+
+    /// Human-readable label (for which-key / chord display).
+    pub fn label(&self) -> String {
+        match self {
+            Key::Char(c) => c.to_uppercase().to_string(),
+            Key::Space => "Space".into(),
+            Key::Enter => "Enter".into(),
+            Key::Escape => "Esc".into(),
+            Key::Tab => "Tab".into(),
+            Key::Backspace => "Backspace".into(),
+            Key::Delete => "Del".into(),
+            Key::Insert => "Ins".into(),
+            Key::Home => "Home".into(),
+            Key::End => "End".into(),
+            Key::PageUp => "PgUp".into(),
+            Key::PageDown => "PgDn".into(),
+            Key::Up => "Up".into(),
+            Key::Down => "Down".into(),
+            Key::Left => "Left".into(),
+            Key::Right => "Right".into(),
+            Key::F(n) => format!("F{n}"),
+        }
+    }
+}
+
+/// A single chorded key press: Emacs-style *logical* modifiers + a [`Key`].
+/// What physical key each modifier means is resolved through a [`ModifierMap`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct KeyStroke {
+    pub control: bool,
+    pub meta: bool,
+    pub super_: bool,
+    pub shift: bool,
+    pub key: Key,
 }
 
 impl KeyStroke {
-    /// A modifier-free stroke for `key` (already normalized/lowercase).
-    pub fn key(key: impl Into<String>) -> Self {
-        Self { ctrl: false, alt: false, shift: false, meta: false, key: key.into() }
+    /// A modifier-free stroke for `key`.
+    pub fn key(key: Key) -> Self {
+        Self { control: false, meta: false, super_: false, shift: false, key }
     }
 
-    pub fn with_ctrl(mut self) -> Self { self.ctrl = true; self }
-    pub fn with_alt(mut self) -> Self { self.alt = true; self }
-    pub fn with_shift(mut self) -> Self { self.shift = true; self }
+    pub fn with_control(mut self) -> Self { self.control = true; self }
     pub fn with_meta(mut self) -> Self { self.meta = true; self }
+    pub fn with_super(mut self) -> Self { self.super_ = true; self }
+    pub fn with_shift(mut self) -> Self { self.shift = true; self }
 
-    /// Parse one stroke token like `"ctrl+shift+f"`. Returns `None` if there is
-    /// no key part (e.g. just `"ctrl"`).
+    /// Build a logical stroke from a physical key event via the modifier map.
+    pub fn from_physical(phys: PhysicalMods, key: Key, map: &ModifierMap) -> Self {
+        Self {
+            control: phys.has(map.control),
+            meta: phys.has(map.meta),
+            super_: phys.has(map.super_),
+            shift: phys.shift,
+            key,
+        }
+    }
+
+    /// Parse one stroke token like `"ctrl+shift+f"` or `"meta+x"`. Modifier
+    /// tokens: `ctrl`/`control`, `meta`/`alt`/`option`, `super`/`cmd`/`win`,
+    /// `shift`. Returns `None` if there is no recognized key part.
     pub fn parse(token: &str) -> Option<Self> {
-        let mut stroke = KeyStroke {
-            ctrl: false, alt: false, shift: false, meta: false, key: String::new(),
-        };
-        let mut have_key = false;
+        let mut control = false;
+        let mut meta = false;
+        let mut super_ = false;
+        let mut shift = false;
+        let mut key = None;
         for part in token.split('+') {
             let part = part.trim();
             if part.is_empty() {
                 continue;
             }
             match part.to_ascii_lowercase().as_str() {
-                "ctrl" | "control" => stroke.ctrl = true,
-                "alt" | "option" => stroke.alt = true,
-                "shift" => stroke.shift = true,
-                "meta" | "super" | "cmd" | "command" | "win" => stroke.meta = true,
-                other => {
-                    stroke.key = normalize_key(other);
-                    have_key = true;
-                }
+                "ctrl" | "control" => control = true,
+                "meta" | "alt" | "option" => meta = true,
+                "super" | "cmd" | "command" | "win" => super_ = true,
+                "shift" => shift = true,
+                other => key = Key::parse(other),
             }
         }
-        if have_key && !stroke.key.is_empty() {
-            Some(stroke)
-        } else {
-            None
-        }
-    }
-}
-
-/// Normalize a key token to the canonical form used at runtime.
-fn normalize_key(key: &str) -> String {
-    match key {
-        "esc" => "escape".to_string(),
-        "return" => "enter".to_string(),
-        "pgup" => "pageup".to_string(),
-        "pgdn" | "pgdown" => "pagedown".to_string(),
-        "del" => "delete".to_string(),
-        "bs" => "backspace".to_string(),
-        "spc" => "space".to_string(),
-        other => other.to_string(),
+        Some(Self { control, meta, super_, shift, key: key? })
     }
 }
 
@@ -250,30 +427,60 @@ impl Keymap {
 mod tests {
     use super::*;
 
-    fn s(key: &str) -> KeyStroke {
-        KeyStroke::key(key)
+    fn s(c: char) -> KeyStroke {
+        KeyStroke::key(Key::Char(c))
     }
 
     #[test]
     fn parses_modifiers_and_key() {
         let k = KeyStroke::parse("ctrl+shift+f").unwrap();
-        assert!(k.ctrl && k.shift && !k.alt);
-        assert_eq!(k.key, "f");
+        assert!(k.control && k.shift && !k.meta && !k.super_);
+        assert_eq!(k.key, Key::Char('f'));
         assert!(KeyStroke::parse("ctrl").is_none()); // no key part
+        assert_eq!(KeyStroke::parse("ctrl+k ctrl+s").is_none(), false);
+        assert_eq!(Key::parse("f5"), Some(Key::F(5)));
+        assert_eq!(Key::parse("pgdn"), Some(Key::PageDown));
+        // alt and meta are the same logical modifier (Emacs M-)
+        assert_eq!(KeyStroke::parse("alt+x"), KeyStroke::parse("meta+x"));
+        assert!(KeyStroke::parse("super+p").unwrap().super_);
+    }
+
+    #[test]
+    fn modifier_map_resolves_logical_from_physical() {
+        let map = ModifierMap {
+            control: PhysicalModifier::Ctrl,
+            meta: PhysicalModifier::Alt,
+            super_: PhysicalModifier::Meta,
+        };
+        // physical Ctrl+s -> logical control
+        let stroke = KeyStroke::from_physical(PhysicalMods::new(true, false, false, false), Key::Char('s'), &map);
+        assert_eq!(stroke, s('s').with_control());
+        // physical Alt+x -> logical meta (M-x)
+        let mx = KeyStroke::from_physical(PhysicalMods::new(false, true, false, false), Key::Char('x'), &map);
+        assert_eq!(mx, s('x').with_meta());
+    }
+
+    #[test]
+    fn modifier_map_override_swaps_physical_key() {
+        // Make logical Control map to the OS Meta/Cmd key.
+        let map = ModifierMap::platform_default().with_overrides(Some("meta"), None, None);
+        // physical Meta(cmd)+s now yields logical control
+        let stroke = KeyStroke::from_physical(PhysicalMods::new(false, false, false, true), Key::Char('s'), &map);
+        assert!(stroke.control);
     }
 
     #[test]
     fn normalizes_aliases() {
-        assert_eq!(KeyStroke::parse("esc").unwrap().key, "escape");
-        assert_eq!(KeyStroke::parse("ctrl+return").unwrap().key, "enter");
+        assert_eq!(KeyStroke::parse("esc").unwrap().key, Key::Escape);
+        assert_eq!(KeyStroke::parse("ctrl+return").unwrap().key, Key::Enter);
     }
 
     #[test]
     fn parses_chord_sequence() {
         let chord = parse_chord("ctrl+k ctrl+s").unwrap();
         assert_eq!(chord.len(), 2);
-        assert_eq!(chord[0], s("k").with_ctrl());
-        assert_eq!(chord[1], s("s").with_ctrl());
+        assert_eq!(chord[0], s('k').with_control());
+        assert_eq!(chord[1], s('s').with_control());
     }
 
     #[test]
@@ -281,10 +488,10 @@ mod tests {
         let mut km = Keymap::new();
         km.bind_default("ctrl+s", "file.save");
         assert_eq!(
-            km.resolve(&[], &s("s").with_ctrl(), None),
+            km.resolve(&[], &s('s').with_control(), None),
             KeymapOutcome::Execute("file.save".to_string())
         );
-        assert_eq!(km.resolve(&[], &s("x").with_ctrl(), None), KeymapOutcome::NoMatch);
+        assert_eq!(km.resolve(&[], &s('x').with_control(), None), KeymapOutcome::NoMatch);
     }
 
     #[test]
@@ -292,16 +499,16 @@ mod tests {
         let mut km = Keymap::new();
         km.bind_default("ctrl+k ctrl+s", "file.save-all");
 
-        let first = s("k").with_ctrl();
+        let first = s('k').with_control();
         assert_eq!(km.resolve(&[], &first, None), KeymapOutcome::Pending);
 
         let pending = vec![first];
         assert_eq!(
-            km.resolve(&pending, &s("s").with_ctrl(), None),
+            km.resolve(&pending, &s('s').with_control(), None),
             KeymapOutcome::Execute("file.save-all".to_string())
         );
         // Wrong continuation cancels the chord.
-        assert_eq!(km.resolve(&pending, &s("x").with_ctrl(), None), KeymapOutcome::NoMatch);
+        assert_eq!(km.resolve(&pending, &s('x').with_control(), None), KeymapOutcome::NoMatch);
     }
 
     #[test]
@@ -314,7 +521,7 @@ mod tests {
             filetype: None,
         }]);
         assert_eq!(
-            km.resolve(&[], &s("p").with_ctrl(), None),
+            km.resolve(&[], &s('p').with_control(), None),
             KeymapOutcome::Execute("command.palette".to_string())
         );
     }
@@ -327,7 +534,7 @@ mod tests {
             command: "lsp.format".to_string(),
             filetype: Some("rust".to_string()),
         }]);
-        let stroke = s("f").with_ctrl().with_shift();
+        let stroke = s('f').with_control().with_shift();
         assert_eq!(
             km.resolve(&[], &stroke, Some("rust")),
             KeymapOutcome::Execute("lsp.format".to_string())

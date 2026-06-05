@@ -130,6 +130,16 @@ pub struct LspConfig {
     pub capabilities: LspCapabilities,
 }
 
+/// Optional `[modifiers]` overrides: which physical key each Emacs-style logical
+/// modifier maps to. `None` = use the platform default. Values are physical
+/// modifier tokens: `ctrl`, `alt`, `shift`, `meta`/`super`/`cmd`/`win`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ModifierOverrides {
+    pub control: Option<String>,
+    pub meta: Option<String>,
+    pub super_: Option<String>,
+}
+
 /// Top-level configuration.
 #[derive(Debug, Clone, Default)]
 pub struct Config {
@@ -139,6 +149,7 @@ pub struct Config {
     pub autocmds: Vec<AutocmdConfig>,
     pub filetypes: Vec<FiletypeConfig>,
     pub lsps: Vec<LspConfig>,
+    pub modifiers: ModifierOverrides,
 }
 
 impl Config {
@@ -150,6 +161,7 @@ impl Config {
             autocmds: Vec::new(),
             filetypes: Vec::new(),
             lsps: Vec::new(),
+            modifiers: ModifierOverrides::default(),
         }
     }
 
@@ -235,6 +247,7 @@ impl Config {
         config.autocmds = parse_autocmds(&table);
         config.filetypes = parse_filetypes(&table);
         config.lsps = parse_lsps(&table);
+        config.modifiers = parse_modifiers(&table);
 
         config
     }
@@ -398,6 +411,20 @@ fn parse_lsp_capabilities(entry: &toml::Table) -> LspCapabilities {
 
 fn bool_field(table: &toml::Table, key: &str) -> bool {
     table.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
+/// Parse the optional `[modifiers]` table.
+fn parse_modifiers(table: &toml::Table) -> ModifierOverrides {
+    let Some(m) = table.get("modifiers").and_then(|v| v.as_table()) else {
+        return ModifierOverrides::default();
+    };
+    let get = |k: &str| m.get(k).and_then(|v| v.as_str()).map(str::to_string);
+    ModifierOverrides {
+        control: get("control"),
+        meta: get("meta"),
+        // accept either `super` or `super_`
+        super_: get("super").or_else(|| get("super_")),
+    }
 }
 
 #[cfg(test)]

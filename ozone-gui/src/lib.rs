@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use aurea::render::{Canvas, Color, DrawingContext, Font, Paint, PaintStyle, Point, Rect, RendererBackend};
 use aurea::{AureaResult, Element, Window, WindowEvent};
 use ozone_buffer::{BufferId, BufferKind};
-use ozone_editor::{AutocommandRegistry, CommandContext, CommandRegistry, EditorEvent, IndentConfig, KeyStroke, Keymap, KeymapOutcome, PaneTree, SplitAxis, ViewId, Workspace, matching_bracket};
+use ozone_editor::{AutocommandRegistry, CommandContext, CommandRegistry, EditorEvent, IndentConfig, Key, KeyStroke, Keymap, KeymapOutcome, ModifierMap, PhysicalMods, PaneTree, SplitAxis, ViewId, Workspace, matching_bracket};
 use ozone_editor::commands::register_defaults;
 use ozone_syntax::{Filetype, ScanState, TokenKind, scan_line};
 use ozone_config::{Config, CursorStyle, LineNumbers};
@@ -43,18 +43,28 @@ impl Element for SharedCanvas {
 // Command palette (M-x) overlay state
 // ---------------------------------------------------------------------------
 
+/// One selectable command in the palette.
+struct PaletteItem {
+    /// Command id used for execution, e.g. `file.save`.
+    id: String,
+    /// Human-friendly name shown in the list, e.g. `File: Save`.
+    display: String,
+    /// One-line description.
+    desc: String,
+}
+
 /// Runtime state for the floating command palette.
 struct PaletteState {
     query: String,
-    /// All commands as (name, description), sorted by name.
-    all: Vec<(String, String)>,
+    /// All commands, sorted by display name.
+    all: Vec<PaletteItem>,
     /// Indices into `all` matching the current query.
     filtered: Vec<usize>,
     selected: usize,
 }
 
 impl PaletteState {
-    fn new(all: Vec<(String, String)>) -> Self {
+    fn new(all: Vec<PaletteItem>) -> Self {
         let mut s = Self { query: String::new(), all, filtered: Vec::new(), selected: 0 };
         s.refilter();
         s
@@ -62,11 +72,15 @@ impl PaletteState {
 
     fn refilter(&mut self) {
         let q = self.query.to_lowercase();
+        // Match against the display name and the raw id, so both work.
         self.filtered = self
             .all
             .iter()
             .enumerate()
-            .filter(|(_, (name, _))| subsequence_match(&name.to_lowercase(), &q))
+            .filter(|(_, item)| {
+                subsequence_match(&item.display.to_lowercase(), &q)
+                    || subsequence_match(&item.id.to_lowercase(), &q)
+            })
             .map(|(i, _)| i)
             .collect();
         if self.selected >= self.filtered.len() {
@@ -94,7 +108,7 @@ impl PaletteState {
     }
 
     fn selected_command(&self) -> Option<String> {
-        self.filtered.get(self.selected).map(|&i| self.all[i].0.clone())
+        self.filtered.get(self.selected).map(|&i| self.all[i].id.clone())
     }
 }
 
@@ -119,10 +133,14 @@ fn subsequence_match(haystack: &str, needle: &str) -> bool {
 mod palette_tests {
     use super::*;
 
-    fn items() -> Vec<(String, String)> {
+    fn items() -> Vec<PaletteItem> {
         ["buffer.next", "pane.close", "pane.split-right", "file.save"]
             .iter()
-            .map(|n| (n.to_string(), String::new()))
+            .map(|n| PaletteItem {
+                id: n.to_string(),
+                display: ozone_editor::commands::pretty_command_name(n),
+                desc: String::new(),
+            })
             .collect()
     }
 
@@ -154,14 +172,110 @@ mod palette_tests {
     }
 }
 
-/// Snapshot all registered commands as (name, description), sorted by name.
-fn command_snapshot(reg: &CommandRegistry) -> Vec<(String, String)> {
-    let mut v: Vec<(String, String)> = reg
+/// Snapshot all registered commands as palette items, sorted by display name.
+fn command_snapshot(reg: &CommandRegistry) -> Vec<PaletteItem> {
+    let mut v: Vec<PaletteItem> = reg
         .names()
-        .map(|n| (n.to_string(), reg.description(n).unwrap_or("").to_string()))
+        .map(|n| PaletteItem {
+            id: n.to_string(),
+            display: reg.display_name(n),
+            desc: reg.description(n).unwrap_or("").to_string(),
+        })
         .collect();
-    v.sort_by(|a, b| a.0.cmp(&b.0));
+    v.sort_by(|a, b| a.display.cmp(&b.display));
     v
+}
+
+// ---------------------------------------------------------------------------
+// In-buffer search (Ctrl+F) state
+// ---------------------------------------------------------------------------
+
+struct SearchState {
+    query: String,
+    /// Byte offsets of matches in the active buffer.
+    matches: Vec<usize>,
+    current: usize,
+    case_sensitive: bool,
+}
+
+impl SearchState {
+    fn new(case_sensitive: bool) -> Self {
+        Self { query: String::new(), matches: Vec::new(), current: 0, case_sensitive }
+    }
+    fn current_offset(&self) -> Option<usize> {
+        self.matches.get(self.current).copied()
+    }
+    fn next(&mut self) {
+        if !self.matches.is_empty() {
+            self.current = (self.current + 1) % self.matches.len();
+        }
+    }
+    fn prev(&mut self) {
+        if !self.matches.is_empty() {
+            self.current = (self.current + self.matches.len() - 1) % self.matches.len();
+        }
+    }
+}
+
+/// Recompute matches for the active buffer from the current query.
+fn search_recompute(s: &mut SearchState, ws: &Workspace) {
+    let text = ws.active_buffer().map(|b| b.text()).unwrap_or_default();
+    s.matches = ozone_editor::find_matches(&text, &s.query, s.case_sensitive);
+    if s.current >= s.matches.len() {
+        s.current = 0;
+    }
+}
+
+/// Point `current` at the first match at/after the cursor (wrapping).
+fn search_select_from_cursor(s: &mut SearchState, ws: &Workspace) {
+    let from = ws
+        .active_view()
+        .and_then(|v| ws.buffers.get(&v.buffer_id).map(|b| b.pos_to_offset(v.cursor)))
+        .unwrap_or(0);
+    if let Some(i) = ozone_editor::search::first_match_from(&s.matches, from) {
+        s.current = i;
+    }
+}
+
+/// Move the cursor to the current match and scroll it into view.
+fn search_jump(s: &SearchState, ws: &mut Workspace) {
+    let Some(off) = s.current_offset() else { return };
+    let pos = ws.active_buffer().map(|b| b.offset_to_pos(off));
+    if let (Some(pos), Some(view)) = (pos, ws.active_view_mut()) {
+        view.cursor = pos;
+        view.col_memory = pos.col;
+        view.scroll_to_cursor(view.page_height.max(1));
+    }
+}
+
+/// Handle a key while search is active. Returns whether a redraw is needed.
+fn handle_search_key(key: aurea::KeyCode, search: &mut Option<SearchState>, ws: &mut Workspace) -> bool {
+    use aurea::KeyCode::*;
+    let Some(s) = search.as_mut() else { return false };
+    match key {
+        Escape => {
+            *search = None;
+            true
+        }
+        Enter | Down => {
+            s.next();
+            search_jump(s, ws);
+            true
+        }
+        Up => {
+            s.prev();
+            search_jump(s, ws);
+            true
+        }
+        Backspace => {
+            s.query.pop();
+            search_recompute(s, ws);
+            search_select_from_cursor(s, ws);
+            search_jump(s, ws);
+            true
+        }
+        _ => false,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -174,6 +288,7 @@ pub struct OzoneGui {
     config: Arc<Config>,
     autocmds: Arc<AutocommandRegistry>,
     keymap: Arc<Keymap>,
+    modmap: ModifierMap,
 }
 
 impl OzoneGui {
@@ -197,12 +312,20 @@ impl OzoneGui {
         let mut keymap = Keymap::with_defaults();
         keymap.add_user_config(&config.keymaps);
 
+        // Logical→physical modifier map: platform default + [modifiers] overrides.
+        let modmap = ModifierMap::platform_default().with_overrides(
+            config.modifiers.control.as_deref(),
+            config.modifiers.meta.as_deref(),
+            config.modifiers.super_.as_deref(),
+        );
+
         Self {
             workspace: Arc::new(Mutex::new(workspace)),
             commands: Arc::new(reg),
             config: Arc::new(config),
             autocmds: Arc::new(autocmds),
             keymap: Arc::new(keymap),
+            modmap,
         }
     }
 
@@ -239,7 +362,13 @@ impl OzoneGui {
         // calls SetFocus(window) so keyboard input works immediately.
         window.set_content(SharedCanvas(canvas_arc.clone()))?;
 
-        canvas_arc.lock().unwrap().invalidate_all();
+        {
+            let mut canvas = canvas_arc.lock().unwrap();
+            let mut ws = self.workspace.lock().unwrap();
+            let config = self.config.clone();
+            canvas.draw(|ctx| draw_editor(ctx, &mut ws, &config))?;
+            canvas.invalidate_all();
+        }
 
         let mut last_title = String::new();
         // Pending chord prefix carried across key events (e.g. after `ctrl+k`).
@@ -287,6 +416,7 @@ impl OzoneGui {
                                 &self.commands,
                                 &self.autocmds,
                                 &self.keymap,
+                                &self.modmap,
                                 &mut chord_pending,
                                 &mut pal,
                             );
@@ -419,6 +549,7 @@ fn handle_key(
     reg: &CommandRegistry,
     autocmds: &AutocommandRegistry,
     keymap: &Keymap,
+    modmap: &ModifierMap,
     pending: &mut Vec<KeyStroke>,
     palette: &mut Option<PaletteState>,
 ) -> bool {
@@ -448,7 +579,7 @@ fn handle_key(
     }
 
     // Resolve through the layered keymap (handles chords via `pending`).
-    if let Some(stroke) = keystroke_from(key, mods) {
+    if let Some(stroke) = keystroke_from(key, mods, modmap) {
         let filetype = active_filetype_name(ws);
         match keymap.resolve(pending, &stroke, filetype.as_deref()) {
             KeymapOutcome::Execute(cmd) => {
@@ -511,35 +642,37 @@ fn filetype_config_name(ft: Filetype) -> String {
     .to_string()
 }
 
-/// Convert a platform key + modifiers into a normalized [`KeyStroke`].
-/// Returns `None` for keys with no token (modifiers, unknown codes).
-fn keystroke_from(key: aurea::KeyCode, mods: aurea::Modifiers) -> Option<KeyStroke> {
-    let token = keycode_token(key)?;
-    Some(KeyStroke {
-        ctrl: mods.ctrl,
-        alt: mods.alt,
-        shift: mods.shift,
-        meta: mods.meta,
-        key: token.to_string(),
-    })
+/// Convert a platform key + physical modifiers into a logical [`KeyStroke`] via
+/// the modifier map. Returns `None` for keys with no token (modifiers, unknown).
+fn keystroke_from(key: aurea::KeyCode, mods: aurea::Modifiers, map: &ModifierMap) -> Option<KeyStroke> {
+    let k = keycode_key(key)?;
+    let phys = PhysicalMods::new(mods.ctrl, mods.alt, mods.shift, mods.meta);
+    Some(KeyStroke::from_physical(phys, k, map))
 }
 
-/// The normalized keymap token for a key code (lowercase, matches config parsing).
-fn keycode_token(key: aurea::KeyCode) -> Option<&'static str> {
+/// Map a platform key code to a structured [`Key`]. `None` for modifier-only
+/// or unknown codes.
+fn keycode_key(key: aurea::KeyCode) -> Option<Key> {
     use aurea::KeyCode::*;
     Some(match key {
-        A => "a", B => "b", C => "c", D => "d", E => "e", F => "f", G => "g",
-        H => "h", I => "i", J => "j", K => "k", L => "l", M => "m", N => "n",
-        O => "o", P => "p", Q => "q", R => "r", S => "s", T => "t", U => "u",
-        V => "v", W => "w", X => "x", Y => "y", Z => "z",
-        Key0 => "0", Key1 => "1", Key2 => "2", Key3 => "3", Key4 => "4",
-        Key5 => "5", Key6 => "6", Key7 => "7", Key8 => "8", Key9 => "9",
-        Space => "space", Enter => "enter", Escape => "escape", Tab => "tab",
-        Backspace => "backspace", Delete => "delete", Insert => "insert",
-        Home => "home", End => "end", PageUp => "pageup", PageDown => "pagedown",
-        Up => "up", Down => "down", Left => "left", Right => "right",
-        F1 => "f1", F2 => "f2", F3 => "f3", F4 => "f4", F5 => "f5", F6 => "f6",
-        F7 => "f7", F8 => "f8", F9 => "f9", F10 => "f10", F11 => "f11", F12 => "f12",
+        A => Key::Char('a'), B => Key::Char('b'), C => Key::Char('c'), D => Key::Char('d'),
+        E => Key::Char('e'), F => Key::Char('f'), G => Key::Char('g'), H => Key::Char('h'),
+        I => Key::Char('i'), J => Key::Char('j'), K => Key::Char('k'), L => Key::Char('l'),
+        M => Key::Char('m'), N => Key::Char('n'), O => Key::Char('o'), P => Key::Char('p'),
+        Q => Key::Char('q'), R => Key::Char('r'), S => Key::Char('s'), T => Key::Char('t'),
+        U => Key::Char('u'), V => Key::Char('v'), W => Key::Char('w'), X => Key::Char('x'),
+        Y => Key::Char('y'), Z => Key::Char('z'),
+        Key0 => Key::Char('0'), Key1 => Key::Char('1'), Key2 => Key::Char('2'),
+        Key3 => Key::Char('3'), Key4 => Key::Char('4'), Key5 => Key::Char('5'),
+        Key6 => Key::Char('6'), Key7 => Key::Char('7'), Key8 => Key::Char('8'),
+        Key9 => Key::Char('9'),
+        Space => Key::Space, Enter => Key::Enter, Escape => Key::Escape, Tab => Key::Tab,
+        Backspace => Key::Backspace, Delete => Key::Delete, Insert => Key::Insert,
+        Home => Key::Home, End => Key::End, PageUp => Key::PageUp, PageDown => Key::PageDown,
+        Up => Key::Up, Down => Key::Down, Left => Key::Left, Right => Key::Right,
+        F1 => Key::F(1), F2 => Key::F(2), F3 => Key::F(3), F4 => Key::F(4),
+        F5 => Key::F(5), F6 => Key::F(6), F7 => Key::F(7), F8 => Key::F(8),
+        F9 => Key::F(9), F10 => Key::F(10), F11 => Key::F(11), F12 => Key::F(12),
         Shift | Control | Alt | Meta | Unknown(_) => return None,
     })
 }
@@ -1186,19 +1319,20 @@ fn draw_palette(ctx: &mut dyn DrawingContext, p: &PaletteState, config: &Config)
     }
     for (row, &idx) in shown.iter().enumerate() {
         let y = list_top + row as f32 * line_h;
-        let (name, desc) = &p.all[idx];
+        let item = &p.all[idx];
         let selected = start + row == p.selected;
         if selected {
             fill_round_rect(ctx, Rect::new(px + pad, y, pw - 2.0 * pad, line_h), 6.0, PALETTE_SEL)?;
         }
         let bl = baseline_in_rect(y, line_h, ascent, descent);
-        ctx.draw_text_with_font(name, Point::new(px + pad + 8.0, bl), &font, &solid(PALETTE_FG))?;
-        if !desc.is_empty() {
-            let dw = measure(ctx, desc);
-            let name_w = measure(ctx, name);
+        // Display name (primary). Fall back to the description on the right.
+        ctx.draw_text_with_font(&item.display, Point::new(px + pad + 8.0, bl), &font, &solid(PALETTE_FG))?;
+        if !item.desc.is_empty() {
+            let dw = measure(ctx, &item.desc);
+            let name_w = measure(ctx, &item.display);
             let dx = px + pw - pad - 8.0 - dw;
             if dx > px + pad + 8.0 + name_w + 16.0 {
-                ctx.draw_text_with_font(desc, Point::new(dx, bl), &font, &solid(PALETTE_DESC))?;
+                ctx.draw_text_with_font(&item.desc, Point::new(dx, bl), &font, &solid(PALETTE_DESC))?;
             }
         }
     }
