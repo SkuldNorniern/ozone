@@ -7,7 +7,7 @@ use ozone_buffer::BufferKind;
 use ozone_editor::{CommandContext, CommandRegistry, Workspace};
 use ozone_editor::commands::register_defaults;
 use ozone_syntax::{Filetype, ScanState, TokenKind, scan_line};
-use ozone_config::{Config, LineNumbers};
+use ozone_config::{Config, CursorStyle, LineNumbers};
 
 // ---------------------------------------------------------------------------
 // SendableCanvas + SharedCanvas wrappers
@@ -341,6 +341,8 @@ const GUTTER_FG:    Color = Color::rgb(88,  91, 112);
 const GUTTER_ACT:   Color = Color::rgb(205, 214, 244);
 const STATUSBAR_BG: Color = Color::rgb(24,  24,  37);
 const STATUSBAR_FG: Color = Color::rgb(166, 227, 161);
+const STATUSBAR_DIM: Color = Color::rgb(137, 180, 250);
+const STATUS_MODE_BG: Color = Color::rgb(49,  50,  68);
 const BORDER:       Color = Color::rgb(49,  50,  68);
 const CURSOR_BG:    Color = Color::rgba(245, 224, 220, 220);
 const CURSOR_LINE:  Color = Color::rgba(49,  50,  68, 140);
@@ -364,7 +366,7 @@ fn token_color(kind: TokenKind) -> Color {
     }
 }
 
-const GUTTER_W: f32 = 52.0;
+const GUTTER_MIN_W: f32 = 52.0;
 const PAD:      f32 = 8.0;
 const STATUS_H: f32 = 28.0;
 const EDITOR_TOP_PAD: f32 = 10.0;
@@ -411,9 +413,13 @@ fn draw_editor(ctx: &mut dyn DrawingContext, ws: &Workspace, config: &Config) ->
     let line_count  = buf.line_count();
     let scroll      = view.scroll_line;
     let visible     = ((content_h / line_h) as usize).max(1) + 1;
+    let gutter_w    = gutter_width(line_count, char_w, config.editor.line_numbers);
+    let text_x      = gutter_w + PAD;
 
     // Gutter strip
-    ctx.draw_rect(Rect::new(0.0, 0.0, GUTTER_W, height), &solid(GUTTER_BG))?;
+    if gutter_w > 0.0 {
+        ctx.draw_rect(Rect::new(0.0, 0.0, gutter_w, height), &solid(GUTTER_BG))?;
+    }
 
     // Pre-scan: walk from line 0 to scroll to find block-comment state.
     // Acceptable for Phase 1 file sizes.
@@ -455,7 +461,8 @@ fn draw_editor(ctx: &mut dyn DrawingContext, ws: &Workspace, config: &Config) ->
         };
         if let Some(num) = gutter_label {
             let ng = if is_cursor { GUTTER_ACT } else { GUTTER_FG };
-            ctx.draw_text_with_font(&num, Point::new(4.0, baseline), &font, &solid(ng))?;
+            let num_x = (gutter_w - PAD - num.len() as f32 * char_w).max(4.0);
+            ctx.draw_text_with_font(&num, Point::new(num_x, baseline), &font, &solid(ng))?;
         }
 
         // Line text with syntax
@@ -466,24 +473,31 @@ fn draw_editor(ctx: &mut dyn DrawingContext, ws: &Workspace, config: &Config) ->
             if spans.is_empty() || ft == Filetype::Plain {
                 ctx.draw_text_with_font(
                     &line_text,
-                    Point::new(GUTTER_W + PAD, baseline),
+                    Point::new(text_x, baseline),
                     &font,
                     &solid(token_color(TokenKind::Default)),
                 )?;
             } else {
-                draw_highlighted(ctx, &line_text, &spans, GUTTER_W + PAD, baseline, char_w, &font)?;
+                draw_highlighted(ctx, &line_text, &spans, text_x, baseline, char_w, &font)?;
             }
         }
 
-        // Cursor bar
         if is_cursor {
-            let cx = GUTTER_W + PAD + view.cursor.col as f32 * char_w;
-            ctx.draw_rect(Rect::new(cx, line_top + 1.0, 2.0, line_h - 1.0), &solid(CURSOR_BG))?;
+            draw_cursor(
+                ctx,
+                text_x + view.cursor.col as f32 * char_w,
+                line_top,
+                line_h,
+                char_w,
+                config.editor.cursor_style,
+            )?;
         }
     }
 
     // Gutter divider
-    ctx.draw_line(GUTTER_W, 0.0, GUTTER_W, height, &stroke(BORDER, 1.0))?;
+    if gutter_w > 0.0 {
+        ctx.draw_line(gutter_w, 0.0, gutter_w, height, &stroke(BORDER, 1.0))?;
+    }
 
     draw_status_bar(ctx, width, height, &font, ws)?;
     Ok(())
@@ -543,7 +557,7 @@ fn draw_status_bar(
     ctx.draw_rect(Rect::new(0.0, bar_top, width, STATUS_H), &solid(STATUSBAR_BG))?;
     ctx.draw_line(0.0, bar_top, width, bar_top, &stroke(BORDER, 1.0))?;
 
-    let (mode, file_name, cursor_info, dirty) = if let (Some(view), Some(buf)) = (
+    let (mode, file_name, cursor_info, dirty, filetype) = if let (Some(view), Some(buf)) = (
         ws.active_view(), ws.active_buffer(),
     ) {
         let file_name = match &buf.kind {
@@ -552,12 +566,15 @@ fn draw_status_bar(
         };
         let cursor_info = format!("{}:{}", view.cursor.line + 1, view.cursor.col + 1);
         let dirty = if buf.is_dirty() { "*" } else { "" };
-        ("EDIT", file_name, cursor_info, dirty.to_string())
+        let filetype = match &buf.kind {
+            BufferKind::File(p) => filetype_label(Filetype::from_path(&p.to_string_lossy())),
+            _ => filetype_label(Filetype::Plain),
+        };
+        ("EDIT", file_name, cursor_info, dirty.to_string(), filetype)
     } else {
-        ("", String::new(), String::new(), String::new())
+        ("", String::new(), String::new(), String::new(), "plain")
     };
 
-    let text = format!("  {}  {}{}    {}  UTF-8", mode, file_name, dirty, cursor_info);
     let ascent = ctx
         .measure_text("M", font)
         .map(|m| m.ascent)
@@ -567,7 +584,25 @@ fn draw_status_bar(
         .map(|m| m.descent)
         .unwrap_or(font.size * 0.2);
     let baseline = baseline_in_rect(bar_top, STATUS_H, ascent, descent);
-    ctx.draw_text_with_font(&text, Point::new(4.0, baseline), font, &solid(STATUSBAR_FG))?;
+
+    let mode_text = format!(" {} ", mode);
+    let mode_w = ctx
+        .measure_text(&mode_text, font)
+        .map(|m| m.advance)
+        .unwrap_or(font.size * 4.0);
+    ctx.draw_rect(Rect::new(8.0, bar_top + 4.0, mode_w + 8.0, STATUS_H - 8.0), &solid(STATUS_MODE_BG))?;
+    ctx.draw_text_with_font(&mode_text, Point::new(12.0, baseline), font, &solid(STATUSBAR_FG))?;
+
+    let left = format!("  {}{}    {}", file_name, dirty, cursor_info);
+    ctx.draw_text_with_font(&left, Point::new(16.0 + mode_w, baseline), font, &solid(STATUSBAR_FG))?;
+
+    let right = format!("UTF-8  {}", filetype);
+    let right_w = ctx
+        .measure_text(&right, font)
+        .map(|m| m.advance)
+        .unwrap_or(right.len() as f32 * font.size * 0.6);
+    let right_x = (width - right_w - 12.0).max(16.0 + mode_w);
+    ctx.draw_text_with_font(&right, Point::new(right_x, baseline), font, &solid(STATUSBAR_DIM))?;
 
     Ok(())
 }
@@ -578,6 +613,46 @@ fn draw_status_bar(
 
 fn baseline_in_rect(top: f32, height: f32, ascent: f32, descent: f32) -> f32 {
     top + (height + ascent - descent) / 2.0
+}
+
+fn gutter_width(line_count: usize, char_w: f32, mode: LineNumbers) -> f32 {
+    if mode == LineNumbers::Off {
+        return 0.0;
+    }
+    let digits = line_count.max(1).to_string().len().max(2);
+    GUTTER_MIN_W.max((digits as f32 + 2.0) * char_w + PAD)
+}
+
+fn draw_cursor(
+    ctx: &mut dyn DrawingContext,
+    x: f32,
+    line_top: f32,
+    line_h: f32,
+    char_w: f32,
+    style: CursorStyle,
+) -> AureaResult<()> {
+    match style {
+        CursorStyle::Bar => {
+            ctx.draw_rect(Rect::new(x, line_top + 1.0, 2.0, line_h - 1.0), &solid(CURSOR_BG))?;
+        }
+        CursorStyle::Block => {
+            ctx.draw_rect(Rect::new(x, line_top + 2.0, char_w.max(6.0), line_h - 3.0), &solid(CURSOR_BG))?;
+        }
+        CursorStyle::Underline => {
+            ctx.draw_rect(Rect::new(x, line_top + line_h - 3.0, char_w.max(6.0), 2.0), &solid(CURSOR_BG))?;
+        }
+    }
+    Ok(())
+}
+
+fn filetype_label(filetype: Filetype) -> &'static str {
+    match filetype {
+        Filetype::Rust => "rust",
+        Filetype::Toml => "toml",
+        Filetype::Json => "json",
+        Filetype::Markdown => "markdown",
+        Filetype::Plain => "plain",
+    }
 }
 
 fn solid(c: Color) -> Paint { Paint::new().color(c).style(PaintStyle::Fill) }
