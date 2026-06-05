@@ -1,7 +1,6 @@
 use std::os::raw::c_void;
 use std::sync::{Arc, Mutex};
 
-use aurea::elements::{Box as AureaBox, BoxOrientation, Container};
 use aurea::render::{Canvas, Color, DrawingContext, Font, Paint, PaintStyle, Point, Rect, RendererBackend};
 use aurea::{AureaResult, Element, Window, WindowEvent};
 use ozone_buffer::BufferKind;
@@ -70,11 +69,12 @@ impl OzoneGui {
         })?;
 
         let canvas_arc = Arc::new(Mutex::new(SendableCanvas(raw_canvas)));
-        let shared = SharedCanvas(canvas_arc.clone());
 
-        let mut root = AureaBox::new(BoxOrientation::Vertical)?;
-        root.add_weighted(shared, 1.0)?;
-        window.set_content(root)?;
+        // Set canvas directly as window content — no Box wrapper.
+        // Keeps the HWND hierarchy as canvas → NativeGuiWindow (one hop).
+        // set_window_content resizes the canvas to fill the client area and
+        // calls SetFocus(window) so keyboard input works immediately.
+        window.set_content(SharedCanvas(canvas_arc.clone()))?;
 
         canvas_arc.lock().unwrap().invalidate_all();
 
@@ -331,7 +331,8 @@ fn token_color(kind: TokenKind) -> Color {
 
 const GUTTER_W: f32 = 52.0;
 const PAD:      f32 = 8.0;
-const STATUS_H: f32 = 26.0;
+const STATUS_H: f32 = 28.0;
+const EDITOR_TOP_PAD: f32 = 10.0;
 
 fn editor_font() -> Font { Font::new("Consolas", 14.0) }
 
@@ -347,9 +348,13 @@ fn draw_editor(ctx: &mut dyn DrawingContext, ws: &Workspace) -> AureaResult<()> 
 
     let font   = editor_font();
     let line_h = font.size * 1.4;
-    let content_h = height - STATUS_H;
+    let content_top = EDITOR_TOP_PAD;
+    let content_h = (height - content_top - STATUS_H).max(0.0);
 
-    let char_w = ctx.measure_text("M", &font).map(|m| m.advance).unwrap_or(font.size * 0.6);
+    let metrics = ctx.measure_text("M", &font).ok();
+    let char_w = metrics.as_ref().map(|m| m.advance).unwrap_or(font.size * 0.6);
+    let text_ascent = metrics.as_ref().map(|m| m.ascent).unwrap_or(font.size * 0.8);
+    let text_descent = metrics.as_ref().map(|m| m.descent).unwrap_or(font.size * 0.2);
 
     let Some(view) = ws.active_view() else {
         draw_status_bar(ctx, width, height, &font, ws)?;
@@ -371,7 +376,7 @@ fn draw_editor(ctx: &mut dyn DrawingContext, ws: &Workspace) -> AureaResult<()> 
     let visible     = ((content_h / line_h) as usize).max(1) + 1;
 
     // Gutter strip
-    ctx.draw_rect(Rect::new(0.0, 0.0, GUTTER_W, content_h), &solid(GUTTER_BG))?;
+    ctx.draw_rect(Rect::new(0.0, 0.0, GUTTER_W, height), &solid(GUTTER_BG))?;
 
     // Pre-scan: walk from line 0 to scroll to find block-comment state.
     // Acceptable for Phase 1 file sizes.
@@ -387,10 +392,10 @@ fn draw_editor(ctx: &mut dyn DrawingContext, ws: &Workspace) -> AureaResult<()> 
         let line_idx = scroll + i;
         if line_idx >= line_count { break; }
 
-        let line_top = i as f32 * line_h;
-        if line_top >= content_h { break; }
+        let line_top = content_top + i as f32 * line_h;
+        if line_top >= content_top + content_h { break; }
 
-        let baseline = (line_top + line_h).min(content_h - 2.0);
+        let baseline = baseline_in_rect(line_top, line_h, text_ascent, text_descent);
         let is_cursor = line_idx == view.cursor.line;
 
         // Cursor-line highlight
@@ -401,7 +406,7 @@ fn draw_editor(ctx: &mut dyn DrawingContext, ws: &Workspace) -> AureaResult<()> 
         // Gutter line number
         let num = format!("{:>4}", line_idx + 1);
         let ng  = if is_cursor { GUTTER_ACT } else { GUTTER_FG };
-        ctx.draw_text_with_font(&num, Point::new(4.0, baseline), &editor_font(), &solid(ng))?;
+        ctx.draw_text_with_font(&num, Point::new(4.0, baseline), &font, &solid(ng))?;
 
         // Line text with syntax
         if let Some(line_text) = buf.line(line_idx) {
@@ -428,7 +433,7 @@ fn draw_editor(ctx: &mut dyn DrawingContext, ws: &Workspace) -> AureaResult<()> 
     }
 
     // Gutter divider
-    ctx.draw_line(GUTTER_W, 0.0, GUTTER_W, content_h, &stroke(BORDER, 1.0))?;
+    ctx.draw_line(GUTTER_W, 0.0, GUTTER_W, height, &stroke(BORDER, 1.0))?;
 
     draw_status_bar(ctx, width, height, &font, ws)?;
     Ok(())
@@ -496,14 +501,22 @@ fn draw_status_bar(
             _ => "*scratch*".to_string(),
         };
         let cursor_info = format!("{}:{}", view.cursor.line + 1, view.cursor.col + 1);
-        let dirty = if buf.is_dirty() { " ●" } else { "" };
+        let dirty = if buf.is_dirty() { "*" } else { "" };
         ("NORMAL", file_name, cursor_info, dirty.to_string())
     } else {
         ("", String::new(), String::new(), String::new())
     };
 
     let text = format!("  {}  {}{}    {}  UTF-8", mode, file_name, dirty, cursor_info);
-    let baseline = bar_top + STATUS_H - font.size - 4.0;
+    let ascent = ctx
+        .measure_text("M", font)
+        .map(|m| m.ascent)
+        .unwrap_or(font.size * 0.8);
+    let descent = ctx
+        .measure_text("M", font)
+        .map(|m| m.descent)
+        .unwrap_or(font.size * 0.2);
+    let baseline = baseline_in_rect(bar_top, STATUS_H, ascent, descent);
     ctx.draw_text_with_font(&text, Point::new(4.0, baseline), font, &solid(STATUSBAR_FG))?;
 
     Ok(())
@@ -512,6 +525,10 @@ fn draw_status_bar(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+fn baseline_in_rect(top: f32, height: f32, ascent: f32, descent: f32) -> f32 {
+    top + (height + ascent - descent) / 2.0
+}
 
 fn solid(c: Color) -> Paint { Paint::new().color(c).style(PaintStyle::Fill) }
 fn stroke(c: Color, w: f32) -> Paint { Paint::new().color(c).style(PaintStyle::Stroke).stroke_width(w) }
