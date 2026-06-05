@@ -21,6 +21,8 @@ pub struct EditorConfig {
     pub word_wrap: bool,
     pub trim_trailing_whitespace: bool,
     pub auto_save: bool,
+    pub auto_format: bool,
+    pub jump_list_size: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,8 +75,59 @@ impl Default for EditorConfig {
             word_wrap: false,
             trim_trailing_whitespace: true,
             auto_save: false,
+            auto_format: false,
+            jump_list_size: 100,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeymapConfig {
+    pub keys: String,
+    pub command: String,
+    pub filetype: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutocmdConfig {
+    pub event: String,
+    pub pattern: String,
+    pub command: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FiletypeConfig {
+    pub name: String,
+    pub tab_width: Option<usize>,
+    pub soft_tabs: Option<bool>,
+    pub line_numbers: Option<LineNumbers>,
+    pub word_wrap: Option<bool>,
+    pub trim_trailing_whitespace: Option<bool>,
+    pub auto_format: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LspCapabilities {
+    pub completion: bool,
+    pub diagnostics: bool,
+    pub hover: bool,
+    pub goto_definition: bool,
+    pub find_references: bool,
+    pub rename: bool,
+    pub format: bool,
+    pub code_actions: bool,
+    pub inlay_hints: bool,
+    pub semantic_tokens: bool,
+    pub code_lens: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LspConfig {
+    pub language: String,
+    pub server: String,
+    pub args: Vec<String>,
+    pub lazy: bool,
+    pub capabilities: LspCapabilities,
 }
 
 /// Top-level configuration.
@@ -82,6 +135,10 @@ impl Default for EditorConfig {
 pub struct Config {
     pub editor: EditorConfig,
     pub theme: String,
+    pub keymaps: Vec<KeymapConfig>,
+    pub autocmds: Vec<AutocmdConfig>,
+    pub filetypes: Vec<FiletypeConfig>,
+    pub lsps: Vec<LspConfig>,
 }
 
 impl Config {
@@ -89,6 +146,10 @@ impl Config {
         Self {
             editor: EditorConfig::default(),
             theme: "catppuccin-mocha".to_string(),
+            keymaps: Vec::new(),
+            autocmds: Vec::new(),
+            filetypes: Vec::new(),
+            lsps: Vec::new(),
         }
     }
 
@@ -151,6 +212,12 @@ impl Config {
             if let Some(v) = editor.get("auto_save").and_then(|v| v.as_bool()) {
                 e.auto_save = v;
             }
+            if let Some(v) = editor.get("auto_format").and_then(|v| v.as_bool()) {
+                e.auto_format = v;
+            }
+            if let Some(v) = as_usize(editor.get("jump_list_size")) {
+                e.jump_list_size = v.max(1);
+            }
         }
 
         if let Some(name) = table
@@ -163,6 +230,11 @@ impl Config {
                 config.theme = name.to_string();
             }
         }
+
+        config.keymaps = parse_keymaps(&table);
+        config.autocmds = parse_autocmds(&table);
+        config.filetypes = parse_filetypes(&table);
+        config.lsps = parse_lsps(&table);
 
         config
     }
@@ -214,6 +286,120 @@ fn as_usize(value: Option<&toml::Value>) -> Option<usize> {
     }
 }
 
+fn table_array<'a>(table: &'a toml::Table, key: &str) -> impl Iterator<Item = &'a toml::Table> {
+    table
+        .get(key)
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flat_map(|items| items.iter())
+        .filter_map(|item| item.as_table())
+}
+
+fn non_empty_string(table: &toml::Table, key: &str) -> Option<String> {
+    table
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn string_array(table: &toml::Table, key: &str) -> Vec<String> {
+    table
+        .get(key)
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flat_map(|items| items.iter())
+        .filter_map(|item| item.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn parse_keymaps(table: &toml::Table) -> Vec<KeymapConfig> {
+    table_array(table, "keymap")
+        .filter_map(|entry| {
+            Some(KeymapConfig {
+                keys: non_empty_string(entry, "keys")?,
+                command: non_empty_string(entry, "command")?,
+                filetype: non_empty_string(entry, "filetype"),
+            })
+        })
+        .collect()
+}
+
+fn parse_autocmds(table: &toml::Table) -> Vec<AutocmdConfig> {
+    table_array(table, "autocmd")
+        .filter_map(|entry| {
+            Some(AutocmdConfig {
+                event: non_empty_string(entry, "event")?,
+                pattern: non_empty_string(entry, "pattern").unwrap_or_else(|| "*".to_string()),
+                command: non_empty_string(entry, "command")?,
+            })
+        })
+        .collect()
+}
+
+fn parse_filetypes(table: &toml::Table) -> Vec<FiletypeConfig> {
+    table_array(table, "filetype")
+        .filter_map(|entry| {
+            Some(FiletypeConfig {
+                name: non_empty_string(entry, "name")?,
+                tab_width: as_usize(entry.get("tab_width")).map(|v| v.max(1)),
+                soft_tabs: entry.get("soft_tabs").and_then(|v| v.as_bool()),
+                line_numbers: entry
+                    .get("line_numbers")
+                    .and_then(|v| v.as_str())
+                    .and_then(LineNumbers::parse),
+                word_wrap: entry.get("word_wrap").and_then(|v| v.as_bool()),
+                trim_trailing_whitespace: entry
+                    .get("trim_trailing_whitespace")
+                    .and_then(|v| v.as_bool()),
+                auto_format: entry.get("auto_format").and_then(|v| v.as_bool()),
+            })
+        })
+        .collect()
+}
+
+fn parse_lsps(table: &toml::Table) -> Vec<LspConfig> {
+    table_array(table, "lsp")
+        .filter_map(|entry| {
+            Some(LspConfig {
+                language: non_empty_string(entry, "language")?,
+                server: non_empty_string(entry, "server")?,
+                args: string_array(entry, "args"),
+                lazy: entry.get("lazy").and_then(|v| v.as_bool()).unwrap_or(true),
+                capabilities: parse_lsp_capabilities(entry),
+            })
+        })
+        .collect()
+}
+
+fn parse_lsp_capabilities(entry: &toml::Table) -> LspCapabilities {
+    let Some(caps) = entry.get("capabilities").and_then(|v| v.as_table()) else {
+        return LspCapabilities::default();
+    };
+
+    LspCapabilities {
+        completion: bool_field(caps, "completion"),
+        diagnostics: bool_field(caps, "diagnostics"),
+        hover: bool_field(caps, "hover"),
+        goto_definition: bool_field(caps, "goto_definition"),
+        find_references: bool_field(caps, "find_references"),
+        rename: bool_field(caps, "rename"),
+        format: bool_field(caps, "format"),
+        code_actions: bool_field(caps, "code_actions"),
+        inlay_hints: bool_field(caps, "inlay_hints"),
+        semantic_tokens: bool_field(caps, "semantic_tokens"),
+        code_lens: bool_field(caps, "code_lens"),
+    }
+}
+
+fn bool_field(table: &toml::Table, key: &str) -> bool {
+    table.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,6 +422,8 @@ mod tests {
             tab_width = 2
             line_numbers = "relative"
             cursor_style = "block"
+            auto_format = true
+            jump_list_size = 42
 
             [theme]
             name = "gruvbox"
@@ -247,6 +435,8 @@ mod tests {
         assert_eq!(c.editor.tab_width, 2);
         assert_eq!(c.editor.line_numbers, LineNumbers::Relative);
         assert_eq!(c.editor.cursor_style, CursorStyle::Block);
+        assert!(c.editor.auto_format);
+        assert_eq!(c.editor.jump_list_size, 42);
         assert_eq!(c.theme, "gruvbox");
     }
 
@@ -261,5 +451,89 @@ mod tests {
         let c = Config::parse_str("[editor]\nfont_size = 12\n");
         assert_eq!(c.editor.font_size, 12.0);
         assert_eq!(c.editor.tab_width, 4); // default preserved
+    }
+
+    #[test]
+    fn parses_keymap_autocmd_filetype_and_lsp_blocks() {
+        let c = Config::parse_str(
+            r#"
+            [[keymap]]
+            keys = "ctrl+s"
+            command = "file.save"
+
+            [[keymap]]
+            keys = "ctrl+shift+f"
+            command = "lsp.format"
+            filetype = "rust"
+
+            [[autocmd]]
+            event = "buffer.pre-save"
+            pattern = "rust"
+            command = "lsp.format"
+
+            [[filetype]]
+            name = "markdown"
+            word_wrap = true
+            tab_width = 2
+            line_numbers = "off"
+
+            [[lsp]]
+            language = "rust"
+            server = "rust-analyzer"
+            args = ["--stdio"]
+            lazy = true
+            [lsp.capabilities]
+            completion = true
+            diagnostics = true
+            semantic_tokens = false
+        "#,
+        );
+
+        assert_eq!(c.keymaps.len(), 2);
+        assert_eq!(c.keymaps[0].keys, "ctrl+s");
+        assert_eq!(c.keymaps[1].filetype.as_deref(), Some("rust"));
+
+        assert_eq!(c.autocmds.len(), 1);
+        assert_eq!(c.autocmds[0].event, "buffer.pre-save");
+
+        assert_eq!(c.filetypes.len(), 1);
+        assert_eq!(c.filetypes[0].name, "markdown");
+        assert_eq!(c.filetypes[0].word_wrap, Some(true));
+        assert_eq!(c.filetypes[0].tab_width, Some(2));
+        assert_eq!(c.filetypes[0].line_numbers, Some(LineNumbers::Off));
+
+        assert_eq!(c.lsps.len(), 1);
+        assert_eq!(c.lsps[0].language, "rust");
+        assert_eq!(c.lsps[0].server, "rust-analyzer");
+        assert_eq!(c.lsps[0].args, vec!["--stdio"]);
+        assert!(c.lsps[0].lazy);
+        assert!(c.lsps[0].capabilities.completion);
+        assert!(c.lsps[0].capabilities.diagnostics);
+        assert!(!c.lsps[0].capabilities.semantic_tokens);
+    }
+
+    #[test]
+    fn malformed_array_entries_are_ignored() {
+        let c = Config::parse_str(
+            r#"
+            [[keymap]]
+            keys = "ctrl+s"
+
+            [[keymap]]
+            keys = "ctrl+z"
+            command = "edit.undo"
+
+            [[filetype]]
+            tab_width = 2
+
+            [[lsp]]
+            language = "rust"
+        "#,
+        );
+
+        assert_eq!(c.keymaps.len(), 1);
+        assert_eq!(c.keymaps[0].command, "edit.undo");
+        assert!(c.filetypes.is_empty());
+        assert!(c.lsps.is_empty());
     }
 }

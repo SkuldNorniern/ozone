@@ -19,6 +19,71 @@ scroll_off   = 8
 word_wrap    = false
 trim_trailing_whitespace = true
 auto_save    = false
+auto_format  = false
+jump_list_size = 100
 
 [theme]
 name = "catppuccin-mocha"
+
+# Keybindings are parsed now; runtime layering/chords are wired in the next
+# editor phase. Defaults still live in code until then.
+[[keymap]]
+keys    = "ctrl+s"
+command = "file.save"
+
+[[keymap]]
+keys    = "ctrl+z"
+command = "edit.undo"
+
+[[keymap]]
+keys    = "ctrl+y"
+command = "edit.redo"
+
+[[keymap]]
+keys    = "ctrl+shift+p"
+command = "command.palette"
+
+[[keymap]]
+keys     = "ctrl+shift+f"
+command  = "lsp.format"
+filetype = "rust"
+
+# Filetype-local defaults. These are parsed but not fully applied yet.
+[[filetype]]
+name = "markdown"
+word_wrap = true
+tab_width = 2
+
+[[filetype]]
+name = "makefile"
+soft_tabs = false
+
+# Autocommands are parsed but not executed until AutocommandRegistry lands.
+[[autocmd]]
+event   = "buffer.pre-save"
+pattern = "*"
+command = "edit.trim-trailing-whitespace"
+
+[[autocmd]]
+event   = "buffer.filetype"
+pattern = "rust"
+command = "lsp.attach"
+
+# LSP blocks are parsed but LSP itself remains deferred.
+[[lsp]]
+language = "rust"
+server   = "rust-analyzer"
+lazy     = true
+
+[lsp.capabilities]
+completion       = true
+diagnostics      = true
+hover            = true
+goto_definition  = true
+find_references  = true
+rename           = true
+format           = true
+code_actions     = true
+inlay_hints      = false
+semantic_tokens  = false
+code_lens        = false
