@@ -136,6 +136,8 @@ impl Keymap {
             ("ctrl+z", "edit.undo"),
             ("ctrl+y", "edit.redo"),
             ("ctrl+p", "file.picker"),
+            ("alt+x", "command.palette"),       // Emacs M-x
+            ("ctrl+shift+p", "command.palette"),
             ("ctrl+tab", "buffer.next"),
             ("ctrl+shift+tab", "buffer.previous"),
             ("ctrl+k ctrl+s", "file.save-all"), // chord showcase

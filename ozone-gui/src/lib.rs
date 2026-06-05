@@ -40,6 +40,131 @@ impl Element for SharedCanvas {
 }
 
 // ---------------------------------------------------------------------------
+// Command palette (M-x) overlay state
+// ---------------------------------------------------------------------------
+
+/// Runtime state for the floating command palette.
+struct PaletteState {
+    query: String,
+    /// All commands as (name, description), sorted by name.
+    all: Vec<(String, String)>,
+    /// Indices into `all` matching the current query.
+    filtered: Vec<usize>,
+    selected: usize,
+}
+
+impl PaletteState {
+    fn new(all: Vec<(String, String)>) -> Self {
+        let mut s = Self { query: String::new(), all, filtered: Vec::new(), selected: 0 };
+        s.refilter();
+        s
+    }
+
+    fn refilter(&mut self) {
+        let q = self.query.to_lowercase();
+        self.filtered = self
+            .all
+            .iter()
+            .enumerate()
+            .filter(|(_, (name, _))| subsequence_match(&name.to_lowercase(), &q))
+            .map(|(i, _)| i)
+            .collect();
+        if self.selected >= self.filtered.len() {
+            self.selected = self.filtered.len().saturating_sub(1);
+        }
+    }
+
+    fn push(&mut self, c: char) {
+        self.query.push(c);
+        self.refilter();
+    }
+
+    fn backspace(&mut self) {
+        self.query.pop();
+        self.refilter();
+    }
+
+    fn move_sel(&mut self, delta: isize) {
+        if self.filtered.is_empty() {
+            return;
+        }
+        let len = self.filtered.len() as isize;
+        let next = (self.selected as isize + delta).rem_euclid(len);
+        self.selected = next as usize;
+    }
+
+    fn selected_command(&self) -> Option<String> {
+        self.filtered.get(self.selected).map(|&i| self.all[i].0.clone())
+    }
+}
+
+/// fzf-style subsequence match: every char of `needle` appears in `haystack` in order.
+fn subsequence_match(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let mut chars = haystack.chars();
+    'outer: for nc in needle.chars() {
+        for hc in chars.by_ref() {
+            if hc == nc {
+                continue 'outer;
+            }
+        }
+        return false;
+    }
+    true
+}
+
+#[cfg(test)]
+mod palette_tests {
+    use super::*;
+
+    fn items() -> Vec<(String, String)> {
+        ["buffer.next", "pane.close", "pane.split-right", "file.save"]
+            .iter()
+            .map(|n| (n.to_string(), String::new()))
+            .collect()
+    }
+
+    #[test]
+    fn subsequence_matches_in_order() {
+        assert!(subsequence_match("pane.split-right", "pansplit"));
+        assert!(subsequence_match("buffer.next", "bnext"));
+        assert!(subsequence_match("anything", "")); // empty matches all
+        assert!(!subsequence_match("pane.close", "xyz"));
+        assert!(!subsequence_match("abc", "cba")); // order matters
+    }
+
+    #[test]
+    fn palette_filters_and_wraps_selection() {
+        let mut p = PaletteState::new(items());
+        assert_eq!(p.filtered.len(), 4);
+        p.push('p');
+        p.push('a');
+        // "pa" matches the two pane.* commands
+        assert_eq!(p.filtered.len(), 2);
+        assert!(p.selected_command().unwrap().starts_with("pane."));
+        p.move_sel(1);
+        assert_eq!(p.selected, 1);
+        p.move_sel(1); // wraps back to 0 (2 items)
+        assert_eq!(p.selected, 0);
+        p.backspace();
+        p.backspace();
+        assert_eq!(p.filtered.len(), 4);
+    }
+}
+
+/// Snapshot all registered commands as (name, description), sorted by name.
+fn command_snapshot(reg: &CommandRegistry) -> Vec<(String, String)> {
+    let mut v: Vec<(String, String)> = reg
+        .names()
+        .map(|n| (n.to_string(), reg.description(n).unwrap_or("").to_string()))
+        .collect();
+    v.sort_by(|a, b| a.0.cmp(&b.0));
+    v
+}
+
+// ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
@@ -87,13 +212,23 @@ impl OzoneGui {
 
         let mut window = Window::new("Ozone", W as i32, H as i32)?;
 
+        // Command palette overlay state, shared with the draw callback.
+        let palette: Arc<Mutex<Option<PaletteState>>> = Arc::new(Mutex::new(None));
+
         let raw_canvas = Canvas::new(W, H, RendererBackend::Cpu)?;
         let workspace_for_draw = self.workspace.clone();
         let config_for_draw = self.config.clone();
+        let palette_for_draw = palette.clone();
 
         raw_canvas.set_draw_callback(move |ctx| {
-            let mut ws = workspace_for_draw.lock().unwrap();
-            draw_editor(ctx, &mut ws, &config_for_draw)
+            {
+                let mut ws = workspace_for_draw.lock().unwrap();
+                draw_editor(ctx, &mut ws, &config_for_draw)?;
+            }
+            if let Some(p) = palette_for_draw.lock().unwrap().as_ref() {
+                draw_palette(ctx, p, &config_for_draw)?;
+            }
+            Ok(())
         })?;
 
         let canvas_arc = Arc::new(Mutex::new(SendableCanvas(raw_canvas)));
@@ -120,6 +255,9 @@ impl OzoneGui {
             let events = window.poll_events();
             let mut should_close = false;
             let mut needs_redraw = false;
+            // When the palette opens via a key, the trigger char (e.g. the `x`
+            // of M-x) may also arrive as TextInput; swallow that one char.
+            let mut swallow_text = false;
 
             let has_text_input = events.iter().any(|event| {
                 matches!(event, WindowEvent::TextInput { text } if text.chars().any(|c| !c.is_control()))
@@ -134,27 +272,55 @@ impl OzoneGui {
                     }
 
                     WindowEvent::KeyInput { key, pressed: true, modifiers } => {
-                        if handle_key(
-                            key,
-                            modifiers,
-                            !has_text_input,
-                            &mut self.workspace.lock().unwrap(),
-                            &self.commands,
-                            &self.autocmds,
-                            &self.keymap,
-                            &mut chord_pending,
-                        ) {
-                            needs_redraw = true;
+                        let mut pal = palette.lock().unwrap();
+                        if pal.is_some() {
+                            let mut ws = self.workspace.lock().unwrap();
+                            if handle_palette_key(key, &mut pal, &mut ws, &self.commands, &self.autocmds) {
+                                needs_redraw = true;
+                            }
+                        } else {
+                            let r = handle_key(
+                                key,
+                                modifiers,
+                                !has_text_input,
+                                &mut self.workspace.lock().unwrap(),
+                                &self.commands,
+                                &self.autocmds,
+                                &self.keymap,
+                                &mut chord_pending,
+                                &mut pal,
+                            );
+                            if r {
+                                needs_redraw = true;
+                            }
+                            // If this key just opened the palette, drop the
+                            // trigger char that follows as TextInput.
+                            if pal.is_some() {
+                                swallow_text = true;
+                            }
                         }
                     }
 
-                    // Text input is the primary edit path. KeyInput handles commands
-                    // and provides a simple ASCII fallback for backends without WM_CHAR.
+                    // Text input is the primary edit path. While the palette is
+                    // open, typed chars filter it instead of editing the buffer.
                     WindowEvent::TextInput { text } => {
-                        let mut ws = self.workspace.lock().unwrap();
-                        if insert_text_raw(&text, &mut ws) {
-                            dispatch_autocmds(&mut ws, &self.commands, &self.autocmds);
-                            needs_redraw = true;
+                        if swallow_text {
+                            swallow_text = false; // drop the palette trigger char
+                            continue;
+                        }
+                        let mut pal = palette.lock().unwrap();
+                        if let Some(p) = pal.as_mut() {
+                            for c in text.chars().filter(|c| !c.is_control()) {
+                                p.push(c);
+                                needs_redraw = true;
+                            }
+                        } else {
+                            drop(pal);
+                            let mut ws = self.workspace.lock().unwrap();
+                            if insert_text_raw(&text, &mut ws) {
+                                dispatch_autocmds(&mut ws, &self.commands, &self.autocmds);
+                                needs_redraw = true;
+                            }
                         }
                     }
 
@@ -201,7 +367,14 @@ impl OzoneGui {
                 let mut canvas = canvas_arc.lock().unwrap();
                 let mut ws = self.workspace.lock().unwrap();
                 let config = self.config.clone();
-                canvas.draw(|ctx| draw_editor(ctx, &mut ws, &config))?;
+                let pal = palette.lock().unwrap();
+                canvas.draw(|ctx| {
+                    draw_editor(ctx, &mut ws, &config)?;
+                    if let Some(p) = pal.as_ref() {
+                        draw_palette(ctx, p, &config)?;
+                    }
+                    Ok(())
+                })?;
                 canvas.invalidate_all();
             }
 
@@ -247,6 +420,7 @@ fn handle_key(
     autocmds: &AutocommandRegistry,
     keymap: &Keymap,
     pending: &mut Vec<KeyStroke>,
+    palette: &mut Option<PaletteState>,
 ) -> bool {
     use aurea::KeyCode::*;
 
@@ -279,7 +453,12 @@ fn handle_key(
         match keymap.resolve(pending, &stroke, filetype.as_deref()) {
             KeymapOutcome::Execute(cmd) => {
                 pending.clear();
-                run_cmd(&cmd, ws, reg, autocmds);
+                if cmd == "command.palette" {
+                    // GUI-level command: open the overlay instead of dispatching.
+                    *palette = Some(PaletteState::new(command_snapshot(reg)));
+                } else {
+                    run_cmd(&cmd, ws, reg, autocmds);
+                }
                 return true;
             }
             KeymapOutcome::Pending => {
@@ -363,6 +542,47 @@ fn keycode_token(key: aurea::KeyCode) -> Option<&'static str> {
         F7 => "f7", F8 => "f8", F9 => "f9", F10 => "f10", F11 => "f11", F12 => "f12",
         Shift | Control | Alt | Meta | Unknown(_) => return None,
     })
+}
+
+/// Handle a key while the command palette is open. Letters arrive via TextInput;
+/// this covers navigation/commit/cancel. Returns whether a redraw is needed.
+fn handle_palette_key(
+    key: aurea::KeyCode,
+    palette: &mut Option<PaletteState>,
+    ws: &mut Workspace,
+    reg: &CommandRegistry,
+    autocmds: &AutocommandRegistry,
+) -> bool {
+    use aurea::KeyCode::*;
+    let Some(p) = palette.as_mut() else { return false };
+    match key {
+        Escape => {
+            *palette = None;
+            true
+        }
+        Enter => {
+            let cmd = p.selected_command();
+            *palette = None;
+            if let Some(cmd) = cmd {
+                run_cmd(&cmd, ws, reg, autocmds);
+            }
+            true
+        }
+        Up => {
+            p.move_sel(-1);
+            true
+        }
+        Down => {
+            p.move_sel(1);
+            true
+        }
+        Backspace => {
+            p.backspace();
+            true
+        }
+        // Modifier-only keys: ignore. Letters/symbols come through TextInput.
+        _ => false,
+    }
 }
 
 fn run_cmd(name: &str, ws: &mut Workspace, reg: &CommandRegistry, autocmds: &AutocommandRegistry) {
@@ -526,6 +746,14 @@ const CURSOR_BG:    Color = Color::rgba(245, 224, 220, 220);
 const CURSOR_LINE:  Color = Color::rgba(49,  50,  68, 140);
 const ACTIVE_PANE_BORDER: Color = Color::rgb(137, 180, 250);
 const BRACKET_MATCH: Color = Color::rgba(137, 180, 250, 70);
+const PALETTE_SCRIM:  Color = Color::rgba(0, 0, 0, 110);
+const PALETTE_BG:     Color = Color::rgb(24, 24, 37);
+const PALETTE_BORDER: Color = Color::rgb(69, 71, 90);
+const PALETTE_INPUT_BG: Color = Color::rgb(17, 17, 27);
+const PALETTE_SEL:    Color = Color::rgb(49, 50, 68);
+const PALETTE_FG:     Color = Color::rgb(205, 214, 244);
+const PALETTE_DESC:   Color = Color::rgb(127, 132, 156);
+const PALETTE_PROMPT: Color = Color::rgb(203, 166, 247);
 const SCROLLBAR_THUMB: Color = Color::rgba(88, 91, 112, 180);
 
 // Catppuccin Mocha syntax palette
@@ -897,6 +1125,98 @@ fn draw_status_bar(
     let right_x = (width - right_w - 12.0).max(16.0 + mode_w);
     ctx.draw_text_with_font(&right, Point::new(right_x, baseline), font, &solid(STATUSBAR_DIM))?;
 
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Command palette overlay rendering
+// ---------------------------------------------------------------------------
+
+fn draw_palette(ctx: &mut dyn DrawingContext, p: &PaletteState, config: &Config) -> AureaResult<()> {
+    let w = ctx.width() as f32;
+    let h = ctx.height() as f32;
+    let font = editor_font(config);
+    let line_h = (font.size * 1.7).max(18.0);
+    let pad = 14.0;
+    let radius = 10.0;
+
+    let m = ctx.measure_text("M", &font).ok();
+    let ascent = m.as_ref().map(|x| x.ascent).unwrap_or(font.size * 0.8);
+    let descent = m.as_ref().map(|x| x.descent).unwrap_or(font.size * 0.2);
+    let measure = |ctx: &mut dyn DrawingContext, s: &str| {
+        ctx.measure_text(s, &font).map(|m| m.advance).unwrap_or(s.len() as f32 * font.size * 0.6)
+    };
+
+    // Dim the editor behind the panel.
+    ctx.draw_rect(Rect::new(0.0, 0.0, w, h), &solid(PALETTE_SCRIM))?;
+
+    // Window the visible rows around the selection.
+    let max_rows = 12usize;
+    let start = if p.selected >= max_rows { p.selected + 1 - max_rows } else { 0 };
+    let shown: Vec<usize> = p.filtered.iter().skip(start).take(max_rows).copied().collect();
+
+    let pw = (w * 0.6).clamp(380.0, 760.0);
+    let header_h = line_h + pad * 2.0;
+    let body_rows = shown.len().max(1); // reserve a row for "no matches"
+    let ph = header_h + body_rows as f32 * line_h + pad;
+    let px = (w - pw) / 2.0;
+    let py = ((h - ph) / 2.0).max(20.0);
+
+    // Rounded panel with a 1px border.
+    fill_round_rect(ctx, Rect::new(px - 1.0, py - 1.0, pw + 2.0, ph + 2.0), radius + 1.0, PALETTE_BORDER)?;
+    fill_round_rect(ctx, Rect::new(px, py, pw, ph), radius, PALETTE_BG)?;
+
+    // Input box: "M-x <query>" with a caret.
+    let input_rect = Rect::new(px + pad, py + pad, pw - 2.0 * pad, line_h);
+    fill_round_rect(ctx, input_rect, 6.0, PALETTE_INPUT_BG)?;
+    let in_baseline = baseline_in_rect(input_rect.y, input_rect.height, ascent, descent);
+    ctx.draw_text_with_font("M-x", Point::new(input_rect.x + 8.0, in_baseline), &font, &solid(PALETTE_PROMPT))?;
+    let prompt_w = measure(ctx, "M-x ");
+    let query_x = input_rect.x + 8.0 + prompt_w;
+    ctx.draw_text_with_font(&p.query, Point::new(query_x, in_baseline), &font, &solid(PALETTE_FG))?;
+    let caret_x = query_x + measure(ctx, &p.query) + 1.0;
+    ctx.draw_rect(Rect::new(caret_x, input_rect.y + 4.0, 2.0, line_h - 8.0), &solid(PALETTE_FG))?;
+
+    // Command list.
+    let list_top = py + header_h;
+    if shown.is_empty() {
+        let bl = baseline_in_rect(list_top, line_h, ascent, descent);
+        ctx.draw_text_with_font("no matching commands", Point::new(px + pad + 8.0, bl), &font, &solid(PALETTE_DESC))?;
+        return Ok(());
+    }
+    for (row, &idx) in shown.iter().enumerate() {
+        let y = list_top + row as f32 * line_h;
+        let (name, desc) = &p.all[idx];
+        let selected = start + row == p.selected;
+        if selected {
+            fill_round_rect(ctx, Rect::new(px + pad, y, pw - 2.0 * pad, line_h), 6.0, PALETTE_SEL)?;
+        }
+        let bl = baseline_in_rect(y, line_h, ascent, descent);
+        ctx.draw_text_with_font(name, Point::new(px + pad + 8.0, bl), &font, &solid(PALETTE_FG))?;
+        if !desc.is_empty() {
+            let dw = measure(ctx, desc);
+            let name_w = measure(ctx, name);
+            let dx = px + pw - pad - 8.0 - dw;
+            if dx > px + pad + 8.0 + name_w + 16.0 {
+                ctx.draw_text_with_font(desc, Point::new(dx, bl), &font, &solid(PALETTE_DESC))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Fill a rounded rectangle using a cross of rects plus four corner circles.
+fn fill_round_rect(ctx: &mut dyn DrawingContext, rect: Rect, r: f32, color: Color) -> AureaResult<()> {
+    let r = r.min(rect.width / 2.0).min(rect.height / 2.0).max(0.0);
+    if r <= 0.5 {
+        return ctx.draw_rect(rect, &solid(color));
+    }
+    ctx.draw_rect(Rect::new(rect.x, rect.y + r, rect.width, rect.height - 2.0 * r), &solid(color))?;
+    ctx.draw_rect(Rect::new(rect.x + r, rect.y, rect.width - 2.0 * r, rect.height), &solid(color))?;
+    ctx.draw_circle(Point::new(rect.x + r, rect.y + r), r, &solid(color))?;
+    ctx.draw_circle(Point::new(rect.x + rect.width - r, rect.y + r), r, &solid(color))?;
+    ctx.draw_circle(Point::new(rect.x + r, rect.y + rect.height - r), r, &solid(color))?;
+    ctx.draw_circle(Point::new(rect.x + rect.width - r, rect.y + rect.height - r), r, &solid(color))?;
     Ok(())
 }
 
