@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use ozone_buffer::{Buffer, BufferId};
+use ozone_buffer::{Buffer, BufferId, BufferKind};
 
 use crate::events::EditorEvent;
-use crate::pane::{PaneTree, SplitAxis};
+use crate::pane::{FocusDirection, PaneTree, SplitAxis};
 use crate::view::{View, ViewId};
 
 /// Top-level state: all buffers and views.
@@ -53,14 +53,24 @@ impl Workspace {
         let view = View::new(buf_id);
         let view_id = view.id;
         self.views.insert(view_id, view);
-        self.active_view_id = Some(view_id);
-        self.panes = Some(PaneTree::leaf(view_id));
+        self.show_view_in_active_pane(view_id);
         self.emit(EditorEvent::BufferOpened { id: buf_id, path: path.clone() });
         self.emit(EditorEvent::BufferFiletype {
             id: buf_id,
             filetype: filetype_name(&path),
         });
         Ok((buf_id, view_id))
+    }
+
+    pub fn open_virtual_buffer(&mut self, kind: BufferKind, content: String) -> (BufferId, ViewId) {
+        let buf = Buffer::virtual_buffer(kind, &content);
+        let buf_id = buf.id;
+        self.buffers.insert(buf_id, buf);
+        let view = View::new(buf_id);
+        let view_id = view.id;
+        self.views.insert(view_id, view);
+        self.show_view_in_active_pane(view_id);
+        (buf_id, view_id)
     }
 
     pub fn active_view(&self) -> Option<&View> {
@@ -143,9 +153,28 @@ impl Workspace {
         Some(previous)
     }
 
+    pub fn focus_pane_in_direction(&mut self, direction: FocusDirection) -> Option<ViewId> {
+        let current = self.active_view_id?;
+        let target = self.panes.as_ref()?.neighbor_in_direction(current, direction)?;
+        self.active_view_id = Some(target);
+        Some(target)
+    }
+
     pub fn close_view(&mut self, view_id: ViewId) -> bool {
         if self.views.len() <= 1 {
             return false;
+        }
+
+        if matches!(self.panes.as_ref(), Some(PaneTree::Leaf { view_id: pane_view }) if *pane_view == view_id) {
+            let Some(fallback) = self.views.keys().copied().find(|id| *id != view_id) else {
+                return false;
+            };
+            if let Some(removed) = self.views.remove(&view_id) {
+                self.remove_unreferenced_virtual_buffer(removed.buffer_id);
+            }
+            self.panes = Some(PaneTree::leaf(fallback));
+            self.active_view_id = Some(fallback);
+            return true;
         }
 
         if let Some(panes) = self.panes.as_mut() {
@@ -153,7 +182,9 @@ impl Workspace {
                 return false;
             }
         }
-        self.views.remove(&view_id);
+        if let Some(removed) = self.views.remove(&view_id) {
+            self.remove_unreferenced_virtual_buffer(removed.buffer_id);
+        }
 
         if self.active_view_id == Some(view_id) {
             self.active_view_id = self
@@ -163,6 +194,38 @@ impl Workspace {
                 .or_else(|| self.views.keys().next().copied());
         }
         true
+    }
+
+    fn show_view_in_active_pane(&mut self, view_id: ViewId) {
+        if let (Some(active), Some(panes)) = (self.active_view_id, self.panes.as_mut())
+            && panes.replace_leaf(active, view_id)
+        {
+            self.active_view_id = Some(view_id);
+            return;
+        }
+
+        self.active_view_id = Some(view_id);
+        self.panes = Some(PaneTree::leaf(view_id));
+    }
+
+    fn remove_unreferenced_virtual_buffer(&mut self, buffer_id: BufferId) {
+        if self.views.values().any(|view| view.buffer_id == buffer_id) {
+            return;
+        }
+
+        let should_remove = self
+            .buffers
+            .get(&buffer_id)
+            .map(|buffer| {
+                matches!(
+                    buffer.kind,
+                    BufferKind::Search | BufferKind::References | BufferKind::Terminal
+                )
+            })
+            .unwrap_or(false);
+        if should_remove {
+            self.buffers.remove(&buffer_id);
+        }
     }
 }
 
@@ -234,6 +297,24 @@ mod tests {
         assert!(ws.close_view(split_view));
         assert_eq!(ws.active_view_id, Some(original_view));
         assert_eq!(ws.panes.as_ref().unwrap().leaves(), vec![original_view]);
+    }
+
+    #[test]
+    fn opening_virtual_buffer_preserves_previous_view_as_close_fallback() {
+        let mut ws = Workspace::new();
+        let original = ws.active_view_id.unwrap();
+
+        let (picker_buffer, picker) =
+            ws.open_virtual_buffer(BufferKind::Search, "Files\n-----\nPLAN.md\n".to_string());
+
+        assert_eq!(ws.active_view_id, Some(picker));
+        assert_eq!(ws.panes.as_ref().unwrap().leaves(), vec![picker]);
+        assert!(ws.views.contains_key(&original));
+
+        assert!(ws.close_view(picker));
+        assert_eq!(ws.active_view_id, Some(original));
+        assert_eq!(ws.panes.as_ref().unwrap().leaves(), vec![original]);
+        assert!(!ws.buffers.contains_key(&picker_buffer));
     }
 
     #[test]

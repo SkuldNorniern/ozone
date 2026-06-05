@@ -65,6 +65,7 @@ pub enum BufferKind {
     Scratch,
     Search,
     References,
+    Terminal,
 }
 
 /// A text buffer backed by an in-house piece table with undo/redo.
@@ -85,6 +86,10 @@ impl Buffer {
 
     pub fn from_str(content: &str) -> Self {
         Self::init(BufferId::next(), BufferKind::Scratch, PieceTable::new(content))
+    }
+
+    pub fn virtual_buffer(kind: BufferKind, content: &str) -> Self {
+        Self::init(BufferId::next(), kind, PieceTable::new(content))
     }
 
     pub fn open(path: PathBuf) -> std::io::Result<Self> {

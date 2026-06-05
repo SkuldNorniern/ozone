@@ -79,8 +79,8 @@ impl OzoneGui {
         let config_for_draw = self.config.clone();
 
         raw_canvas.set_draw_callback(move |ctx| {
-            let ws = workspace_for_draw.lock().unwrap();
-            draw_editor(ctx, &ws, &config_for_draw)
+            let mut ws = workspace_for_draw.lock().unwrap();
+            draw_editor(ctx, &mut ws, &config_for_draw)
         })?;
 
         let canvas_arc = Arc::new(Mutex::new(SendableCanvas(raw_canvas)));
@@ -143,13 +143,21 @@ impl OzoneGui {
 
                     WindowEvent::MouseWheel { delta_y, .. } => {
                         let mut ws = self.workspace.lock().unwrap();
+                        let max_scroll = ws
+                            .active_view()
+                            .and_then(|view| {
+                                ws.buffers
+                                    .get(&view.buffer_id)
+                                    .map(|buf| max_scroll_line(buf.line_count(), view.page_height))
+                            })
+                            .unwrap_or(0);
                         if let Some(view) = ws.active_view_mut() {
                             let lines = (delta_y.abs() * 3.0).round() as usize;
                             if lines > 0 {
                                 if delta_y > 0.0 {
                                     view.scroll_line = view.scroll_line.saturating_sub(lines);
                                 } else {
-                                    view.scroll_line = view.scroll_line.saturating_add(lines);
+                                    view.scroll_line = view.scroll_line.saturating_add(lines).min(max_scroll);
                                 }
                             }
                         }
@@ -174,9 +182,9 @@ impl OzoneGui {
 
             if needs_redraw {
                 let mut canvas = canvas_arc.lock().unwrap();
-                let ws = self.workspace.lock().unwrap();
+                let mut ws = self.workspace.lock().unwrap();
                 let config = self.config.clone();
-                canvas.draw(|ctx| draw_editor(ctx, &ws, &config))?;
+                canvas.draw(|ctx| draw_editor(ctx, &mut ws, &config))?;
                 canvas.invalidate_all();
             }
 
@@ -198,7 +206,10 @@ fn window_title(ws: &Workspace) -> String {
                     let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("?");
                     format!("Ozone - {}{}", dirty, name)
                 }
-                _ => format!("Ozone - {}scratch", dirty),
+                BufferKind::Scratch => format!("Ozone - {}scratch", dirty),
+                BufferKind::Search => format!("Ozone - {}files", dirty),
+                BufferKind::References => format!("Ozone - {}references", dirty),
+                BufferKind::Terminal => format!("Ozone - {}terminal", dirty),
             }
         }
         None => "Ozone".to_string(),
@@ -222,8 +233,10 @@ fn handle_key(
     // Temporary pane focus shortcuts until the layered keymap system owns this.
     if mods.ctrl && mods.alt {
         let cmd = match key {
-            Right => Some("pane.focus-next"),
-            Left => Some("pane.focus-previous"),
+            Right => Some("pane.focus-right"),
+            Left => Some("pane.focus-left"),
+            Down => Some("pane.focus-down"),
+            Up => Some("pane.focus-up"),
             _ => None,
         };
         if let Some(name) = cmd {
@@ -239,6 +252,7 @@ fn handle_key(
             S if !mods.shift => Some("file.save"),
             Z if !mods.shift => Some("edit.undo"),
             Y if !mods.shift => Some("edit.redo"),
+            P if !mods.shift => Some("file.picker"),
             Right if mods.shift => Some("pane.split-right"),
             Down if mods.shift => Some("pane.split-down"),
             W if mods.shift => Some("pane.close"),
@@ -248,7 +262,6 @@ fn handle_key(
             E if !mods.shift => Some("cursor.line-end"),
             B if !mods.shift => Some("cursor.move-left"),
             F if !mods.shift => Some("cursor.move-right"),
-            P if !mods.shift => Some("cursor.move-up"),
             N if !mods.shift => Some("cursor.move-down"),
 
             Home  => Some("cursor.file-start"),
@@ -483,7 +496,7 @@ fn editor_font(config: &Config) -> Font {
 // draw_editor
 // ---------------------------------------------------------------------------
 
-fn draw_editor(ctx: &mut dyn DrawingContext, ws: &Workspace, config: &Config) -> AureaResult<()> {
+fn draw_editor(ctx: &mut dyn DrawingContext, ws: &mut Workspace, config: &Config) -> AureaResult<()> {
     let width  = ctx.width()  as f32;
     let height = ctx.height() as f32;
 
@@ -499,9 +512,10 @@ fn draw_editor(ctx: &mut dyn DrawingContext, ws: &Workspace, config: &Config) ->
     let metrics = TextMetrics { char_w, text_ascent, text_descent };
 
     if let Some(panes) = &ws.panes {
-        draw_pane_tree(ctx, ws, config, panes, editor_rect, &font, metrics)?;
-    } else if let Some(view) = ws.active_view() {
-        draw_view(ctx, ws, config, view.id, editor_rect, &font, metrics)?;
+        let panes = panes.clone();
+        draw_pane_tree(ctx, ws, config, &panes, editor_rect, &font, metrics)?;
+    } else if let Some(view_id) = ws.active_view().map(|view| view.id) {
+        draw_view(ctx, ws, config, view_id, editor_rect, &font, metrics)?;
     }
 
     draw_status_bar(ctx, width, height, &font, ws)?;
@@ -517,7 +531,7 @@ struct TextMetrics {
 
 fn draw_pane_tree(
     ctx: &mut dyn DrawingContext,
-    ws: &Workspace,
+    ws: &mut Workspace,
     config: &Config,
     tree: &PaneTree,
     rect: Rect,
@@ -538,17 +552,17 @@ fn draw_pane_tree(
 
 fn draw_view(
     ctx: &mut dyn DrawingContext,
-    ws: &Workspace,
+    ws: &mut Workspace,
     config: &Config,
     view_id: ViewId,
     rect: Rect,
     font: &Font,
     metrics: TextMetrics,
 ) -> AureaResult<()> {
-    let Some(view) = ws.views.get(&view_id) else {
+    let Some(buffer_id) = ws.views.get(&view_id).map(|view| view.buffer_id) else {
         return Ok(());
     };
-    let Some(buf) = ws.buffers.get(&view.buffer_id) else {
+    let Some(line_count) = ws.buffers.get(&buffer_id).map(|buf| buf.line_count()) else {
         return Ok(());
     };
 
@@ -556,6 +570,19 @@ fn draw_view(
     let line_h = font.size * config.editor.line_height;
     let content_top = rect.y + EDITOR_TOP_PAD;
     let content_h = (rect.height - EDITOR_TOP_PAD).max(0.0);
+    let visible = ((content_h / line_h) as usize).max(1);
+
+    if let Some(view) = ws.views.get_mut(&view_id) {
+        view.page_height = visible;
+        view.scroll_line = view.scroll_line.min(max_scroll_line(line_count, visible));
+    }
+
+    let Some(view) = ws.views.get(&view_id) else {
+        return Ok(());
+    };
+    let Some(buf) = ws.buffers.get(&buffer_id) else {
+        return Ok(());
+    };
 
     ctx.draw_rect(rect, &solid(BG))?;
 
@@ -565,9 +592,8 @@ fn draw_view(
         _ => Filetype::Plain,
     };
 
-    let line_count  = buf.line_count();
     let scroll      = view.scroll_line;
-    let visible     = ((content_h / line_h) as usize).max(1) + 1;
+    let visible     = visible + 1;
     let gutter_w    = gutter_width(line_count, metrics.char_w, config.editor.line_numbers);
     let text_x      = rect.x + gutter_w + PAD;
 
@@ -720,7 +746,10 @@ fn draw_status_bar(
     ) {
         let file_name = match &buf.kind {
             BufferKind::File(p) => p.file_name().and_then(|n| n.to_str()).unwrap_or("?").to_string(),
-            _ => "*scratch*".to_string(),
+            BufferKind::Scratch => "*scratch*".to_string(),
+            BufferKind::Search => "*files*".to_string(),
+            BufferKind::References => "*references*".to_string(),
+            BufferKind::Terminal => "*terminal*".to_string(),
         };
         let cursor_info = format!("{}:{}", view.cursor.line + 1, view.cursor.col + 1);
         let dirty = if buf.is_dirty() { "*" } else { "" };
@@ -858,6 +887,10 @@ fn pane_status(ws: &Workspace, active: ViewId) -> String {
         return String::new();
     };
     format!("pane {}/{}", idx + 1, leaves.len())
+}
+
+fn max_scroll_line(line_count: usize, page_height: usize) -> usize {
+    line_count.saturating_sub(page_height.max(1))
 }
 
 fn solid(c: Color) -> Paint { Paint::new().color(c).style(PaintStyle::Fill) }

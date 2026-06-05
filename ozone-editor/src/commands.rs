@@ -1,9 +1,10 @@
 use std::collections::HashMap;
+use std::fs;
 
-use ozone_buffer::{BufferId, Pos};
+use ozone_buffer::{BufferId, BufferKind, Pos};
 
 use crate::events::EditorEvent;
-use crate::pane::SplitAxis;
+use crate::pane::{FocusDirection, SplitAxis};
 use crate::view::ViewId;
 use crate::workspace::Workspace;
 
@@ -291,6 +292,35 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
         }
     });
 
+    reg.register("file.picker", "Open a simple project file list buffer", |ctx| {
+        let mut entries = Vec::new();
+        if let Ok(dir) = std::env::current_dir()
+            && let Ok(read_dir) = fs::read_dir(dir)
+        {
+            for entry in read_dir.flatten() {
+                let path = entry.path();
+                let marker = if path.is_dir() { "/" } else { "" };
+                if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+                    entries.push(format!("{name}{marker}"));
+                }
+            }
+        }
+        entries.sort();
+        let content = if entries.is_empty() {
+            "No files found in the current directory.\n".to_string()
+        } else {
+            format!("Files\n-----\n{}\n", entries.join("\n"))
+        };
+        ctx.workspace.open_virtual_buffer(BufferKind::Search, content);
+    });
+
+    reg.register("terminal.open", "Open a terminal buffer placeholder", |ctx| {
+        ctx.workspace.open_virtual_buffer(
+            BufferKind::Terminal,
+            "Terminal\n--------\nProcess-backed terminal buffers are planned next.\n".to_string(),
+        );
+    });
+
     // --- word movement ---
 
     reg.register("cursor.word-forward", "Move cursor to start of next word", |ctx| {
@@ -328,7 +358,7 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
         view.cursor.line = (view.cursor.line + page).min(line_count.saturating_sub(1));
         view.cursor.col = view.cursor.col.min(buf.line_len(view.cursor.line));
         view.col_memory = view.cursor.col;
-        view.scroll_line = (view.scroll_line + page).min(line_count.saturating_sub(1));
+        view.scroll_line = (view.scroll_line + page).min(max_scroll_line(line_count, page));
         emit_cursor_moved(ctx, old);
     });
 
@@ -349,7 +379,7 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
     reg.register("view.scroll-down", "Scroll view down one line", |ctx| {
         let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
-        let max = buf.line_count().saturating_sub(1);
+        let max = max_scroll_line(buf.line_count(), view.page_height);
         view.scroll_line = (view.scroll_line + 1).min(max);
     });
 
@@ -379,6 +409,26 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
     reg.register("pane.focus-previous", "Focus the previous pane", |ctx| {
         ctx.workspace.focus_previous_pane();
     });
+
+    reg.register("pane.focus-right", "Focus the pane to the right", |ctx| {
+        ctx.workspace.focus_pane_in_direction(FocusDirection::Right);
+    });
+
+    reg.register("pane.focus-down", "Focus the pane below", |ctx| {
+        ctx.workspace.focus_pane_in_direction(FocusDirection::Down);
+    });
+
+    reg.register("pane.focus-left", "Focus the pane to the left", |ctx| {
+        ctx.workspace.focus_pane_in_direction(FocusDirection::Left);
+    });
+
+    reg.register("pane.focus-up", "Focus the pane above", |ctx| {
+        ctx.workspace.focus_pane_in_direction(FocusDirection::Up);
+    });
+}
+
+fn max_scroll_line(line_count: usize, page_height: usize) -> usize {
+    line_count.saturating_sub(page_height.max(1))
 }
 
 fn emit_cursor_moved(ctx: &mut CommandContext, old: Pos) {
