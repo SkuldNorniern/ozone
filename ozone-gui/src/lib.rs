@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use aurea::render::{Canvas, Color, DrawingContext, Font, Paint, PaintStyle, Point, Rect, RendererBackend};
 use aurea::{AureaResult, Element, Window, WindowEvent};
 use ozone_buffer::{BufferId, BufferKind};
-use ozone_editor::{AutocommandRegistry, CommandContext, CommandRegistry, EditorEvent, PaneTree, SplitAxis, ViewId, Workspace};
+use ozone_editor::{AutocommandRegistry, CommandContext, CommandRegistry, EditorEvent, KeyStroke, Keymap, KeymapOutcome, PaneTree, SplitAxis, ViewId, Workspace};
 use ozone_editor::commands::register_defaults;
 use ozone_syntax::{Filetype, ScanState, TokenKind, scan_line};
 use ozone_config::{Config, CursorStyle, LineNumbers};
@@ -48,6 +48,7 @@ pub struct OzoneGui {
     commands: Arc<CommandRegistry>,
     config: Arc<Config>,
     autocmds: Arc<AutocommandRegistry>,
+    keymap: Arc<Keymap>,
 }
 
 impl OzoneGui {
@@ -60,11 +61,17 @@ impl OzoneGui {
         register_defaults(&mut reg);
         let autocmds = AutocommandRegistry::from_config(&config.autocmds);
         dispatch_autocmds(&mut workspace, &reg, &autocmds);
+
+        // Layered keymap: shipped defaults, then the user's [[keymap]] on top.
+        let mut keymap = Keymap::with_defaults();
+        keymap.add_user_config(&config.keymaps);
+
         Self {
             workspace: Arc::new(Mutex::new(workspace)),
             commands: Arc::new(reg),
             config: Arc::new(config),
             autocmds: Arc::new(autocmds),
+            keymap: Arc::new(keymap),
         }
     }
 
@@ -94,6 +101,8 @@ impl OzoneGui {
         canvas_arc.lock().unwrap().invalidate_all();
 
         let mut last_title = String::new();
+        // Pending chord prefix carried across key events (e.g. after `ctrl+k`).
+        let mut chord_pending: Vec<KeyStroke> = Vec::new();
 
         // --------------- event loop ---------------
         loop {
@@ -126,6 +135,8 @@ impl OzoneGui {
                             &mut self.workspace.lock().unwrap(),
                             &self.commands,
                             &self.autocmds,
+                            &self.keymap,
+                            &mut chord_pending,
                         ) {
                             needs_redraw = true;
                         }
@@ -220,6 +231,7 @@ fn window_title(ws: &Workspace) -> String {
 // Key routing
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn handle_key(
     key: aurea::KeyCode,
     mods: aurea::Modifiers,
@@ -227,109 +239,64 @@ fn handle_key(
     ws: &mut Workspace,
     reg: &CommandRegistry,
     autocmds: &AutocommandRegistry,
+    keymap: &Keymap,
+    pending: &mut Vec<KeyStroke>,
 ) -> bool {
     use aurea::KeyCode::*;
 
-    // Temporary pane focus shortcuts until the layered keymap system owns this.
-    if mods.ctrl && mods.alt {
-        let cmd = match key {
-            Right => Some("pane.focus-right"),
-            Left => Some("pane.focus-left"),
-            Down => Some("pane.focus-down"),
-            Up => Some("pane.focus-up"),
-            _ => None,
-        };
-        if let Some(name) = cmd {
-            run_cmd(name, ws, reg, autocmds);
-            return true;
-        }
+    // Bare modifier presses are never a binding and never cancel a chord.
+    if matches!(key, Shift | Control | Alt | Meta) {
         return false;
     }
 
-    // Ctrl shortcuts (no Alt)
-    if mods.ctrl && !mods.alt {
-        let cmd = match key {
-            S if !mods.shift => Some("file.save"),
-            Z if !mods.shift => Some("edit.undo"),
-            Y if !mods.shift => Some("edit.redo"),
-            P if !mods.shift => Some("file.picker"),
-            Tab if !mods.shift => Some("buffer.next"),
-            Tab if mods.shift => Some("buffer.previous"),
-            Right if mods.shift => Some("pane.split-right"),
-            Down if mods.shift => Some("pane.split-down"),
-            W if mods.shift => Some("pane.close"),
-
-            // Emacs-style movement for the default non-modal editor.
-            A if !mods.shift => Some("cursor.line-start"),
-            E if !mods.shift => Some("cursor.line-end"),
-            B if !mods.shift => Some("cursor.move-left"),
-            F if !mods.shift => Some("cursor.move-right"),
-            N if !mods.shift => Some("cursor.move-down"),
-
-            Home  => Some("cursor.file-start"),
-            End   => Some("cursor.file-end"),
-            Left  => Some("cursor.word-backward"),
-            Right => Some("cursor.word-forward"),
-            _ => None,
-        };
-        if let Some(name) = cmd {
-            run_cmd(name, ws, reg, autocmds);
-            return true;
+    // Picker buffers take precedence so Enter/Esc act on the selection rather
+    // than the editing defaults. (Edit keys are swallowed to keep the list.)
+    let in_picker = matches!(ws.active_buffer().map(|b| &b.kind), Some(BufferKind::Search));
+    if in_picker && pending.is_empty() && !mods.ctrl && !mods.alt {
+        match key {
+            Enter => {
+                run_cmd("picker.open-selection", ws, reg, autocmds);
+                return true;
+            }
+            Escape => {
+                run_cmd("pane.close", ws, reg, autocmds);
+                return true;
+            }
+            Backspace | Delete | Tab => return true,
+            _ => {}
         }
-        return false;
     }
 
-    // Picker buffers (Ctrl+P file list): Enter opens the selection, Esc closes.
-    // Arrow keys still fall through to normal cursor movement below.
-    if !mods.ctrl && !mods.alt {
-        let in_picker = matches!(
-            ws.active_buffer().map(|b| &b.kind),
-            Some(BufferKind::Search)
-        );
-        if in_picker {
-            match key {
-                Enter => {
-                    run_cmd("picker.open-selection", ws, reg, autocmds);
+    // Resolve through the layered keymap (handles chords via `pending`).
+    if let Some(stroke) = keystroke_from(key, mods) {
+        let filetype = active_filetype_name(ws);
+        match keymap.resolve(pending, &stroke, filetype.as_deref()) {
+            KeymapOutcome::Execute(cmd) => {
+                pending.clear();
+                run_cmd(&cmd, ws, reg, autocmds);
+                return true;
+            }
+            KeymapOutcome::Pending => {
+                pending.push(stroke);
+                return true;
+            }
+            KeymapOutcome::NoMatch => {
+                // A failed chord continuation is swallowed; a fresh unmatched key
+                // falls through to text entry below.
+                let had_pending = !pending.is_empty();
+                pending.clear();
+                if had_pending {
                     return true;
                 }
-                Escape => {
-                    run_cmd("pane.close", ws, reg, autocmds);
-                    return true;
-                }
-                // Keep the list intact: swallow edit keys, allow navigation.
-                Backspace | Delete | Tab => return true,
-                _ => {}
             }
         }
     }
 
-    // Navigation / editing (no Ctrl, no Alt)
+    // Fallbacks for keys that are not bound commands.
     if !mods.ctrl && !mods.alt {
-        let cmd = match key {
-            Up        => Some("cursor.move-up"),
-            Down      => Some("cursor.move-down"),
-            Left      => Some("cursor.move-left"),
-            Right     => Some("cursor.move-right"),
-            Home      => Some("cursor.line-start"),
-            End       => Some("cursor.line-end"),
-            PageUp    => Some("view.page-up"),
-            PageDown  => Some("view.page-down"),
-            Backspace => Some("edit.delete-char-backward"),
-            Delete    => Some("edit.delete-char-forward"),
-            Enter     => Some("edit.insert-newline"),
-            Tab       => None, // soft-tab insertion below
-            _ => None,
-        };
-
-        if let Some(name) = cmd {
-            run_cmd(name, ws, reg, autocmds);
-            return true;
-        }
-
         if key == Tab {
-            return insert_text_raw("    ", ws);
+            return insert_text_raw("    ", ws); // soft tab
         }
-
         if allow_text_fallback && let Some(ch) = keycode_to_char(key, mods.shift) {
             let mut buf = [0u8; 4];
             return insert_text_raw(ch.encode_utf8(&mut buf), ws);
@@ -337,6 +304,58 @@ fn handle_key(
     }
 
     false
+}
+
+/// Filetype token for the active buffer (for filetype-scoped keymaps).
+fn active_filetype_name(ws: &Workspace) -> Option<String> {
+    match &ws.active_buffer()?.kind {
+        BufferKind::File(p) => Some(filetype_config_name(Filetype::from_path(&p.to_string_lossy()))),
+        _ => None,
+    }
+}
+
+fn filetype_config_name(ft: Filetype) -> String {
+    match ft {
+        Filetype::Rust => "rust",
+        Filetype::Toml => "toml",
+        Filetype::Json => "json",
+        Filetype::Markdown => "markdown",
+        Filetype::Plain => "plain",
+    }
+    .to_string()
+}
+
+/// Convert a platform key + modifiers into a normalized [`KeyStroke`].
+/// Returns `None` for keys with no token (modifiers, unknown codes).
+fn keystroke_from(key: aurea::KeyCode, mods: aurea::Modifiers) -> Option<KeyStroke> {
+    let token = keycode_token(key)?;
+    Some(KeyStroke {
+        ctrl: mods.ctrl,
+        alt: mods.alt,
+        shift: mods.shift,
+        meta: mods.meta,
+        key: token.to_string(),
+    })
+}
+
+/// The normalized keymap token for a key code (lowercase, matches config parsing).
+fn keycode_token(key: aurea::KeyCode) -> Option<&'static str> {
+    use aurea::KeyCode::*;
+    Some(match key {
+        A => "a", B => "b", C => "c", D => "d", E => "e", F => "f", G => "g",
+        H => "h", I => "i", J => "j", K => "k", L => "l", M => "m", N => "n",
+        O => "o", P => "p", Q => "q", R => "r", S => "s", T => "t", U => "u",
+        V => "v", W => "w", X => "x", Y => "y", Z => "z",
+        Key0 => "0", Key1 => "1", Key2 => "2", Key3 => "3", Key4 => "4",
+        Key5 => "5", Key6 => "6", Key7 => "7", Key8 => "8", Key9 => "9",
+        Space => "space", Enter => "enter", Escape => "escape", Tab => "tab",
+        Backspace => "backspace", Delete => "delete", Insert => "insert",
+        Home => "home", End => "end", PageUp => "pageup", PageDown => "pagedown",
+        Up => "up", Down => "down", Left => "left", Right => "right",
+        F1 => "f1", F2 => "f2", F3 => "f3", F4 => "f4", F5 => "f5", F6 => "f6",
+        F7 => "f7", F8 => "f8", F9 => "f9", F10 => "f10", F11 => "f11", F12 => "f12",
+        Shift | Control | Alt | Meta | Unknown(_) => return None,
+    })
 }
 
 fn run_cmd(name: &str, ws: &mut Workspace, reg: &CommandRegistry, autocmds: &AutocommandRegistry) {
