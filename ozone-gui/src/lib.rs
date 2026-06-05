@@ -335,18 +335,21 @@ impl OzoneGui {
 
         let mut window = Window::new("Ozone", W as i32, H as i32)?;
 
-        // Command palette overlay state, shared with the draw callback.
+        // Overlay states shared with the draw callback.
         let palette: Arc<Mutex<Option<PaletteState>>> = Arc::new(Mutex::new(None));
+        let search: Arc<Mutex<Option<SearchState>>> = Arc::new(Mutex::new(None));
 
         let raw_canvas = Canvas::new(W, H, RendererBackend::Cpu)?;
         let workspace_for_draw = self.workspace.clone();
         let config_for_draw = self.config.clone();
         let palette_for_draw = palette.clone();
+        let search_for_draw = search.clone();
 
         raw_canvas.set_draw_callback(move |ctx| {
             {
                 let mut ws = workspace_for_draw.lock().unwrap();
-                draw_editor(ctx, &mut ws, &config_for_draw)?;
+                let srch = search_for_draw.lock().unwrap();
+                draw_editor(ctx, &mut ws, &config_for_draw, srch.as_ref())?;
             }
             if let Some(p) = palette_for_draw.lock().unwrap().as_ref() {
                 draw_palette(ctx, p, &config_for_draw)?;
@@ -366,7 +369,7 @@ impl OzoneGui {
             let mut canvas = canvas_arc.lock().unwrap();
             let mut ws = self.workspace.lock().unwrap();
             let config = self.config.clone();
-            canvas.draw(|ctx| draw_editor(ctx, &mut ws, &config))?;
+            canvas.draw(|ctx| draw_editor(ctx, &mut ws, &config, None))?;
             canvas.invalidate_all();
         }
 
@@ -402,9 +405,15 @@ impl OzoneGui {
 
                     WindowEvent::KeyInput { key, pressed: true, modifiers } => {
                         let mut pal = palette.lock().unwrap();
+                        let mut srch = search.lock().unwrap();
                         if pal.is_some() {
                             let mut ws = self.workspace.lock().unwrap();
                             if handle_palette_key(key, &mut pal, &mut ws, &self.commands, &self.autocmds) {
+                                needs_redraw = true;
+                            }
+                        } else if srch.is_some() {
+                            let mut ws = self.workspace.lock().unwrap();
+                            if handle_search_key(key, &mut srch, &mut ws) {
                                 needs_redraw = true;
                             }
                         } else {
@@ -419,13 +428,15 @@ impl OzoneGui {
                                 &self.modmap,
                                 &mut chord_pending,
                                 &mut pal,
+                                &mut srch,
                             );
                             if r {
                                 needs_redraw = true;
                             }
-                            // If this key just opened the palette, drop the
-                            // trigger char that follows as TextInput.
-                            if pal.is_some() {
+                            // If a key just opened the palette or search, the
+                            // trigger char (M-x's `x`, M-f's `f`) also arrives as
+                            // TextInput on Windows; drop it so the query starts empty.
+                            if pal.is_some() || srch.is_some() {
                                 swallow_text = true;
                             }
                         }
@@ -446,10 +457,27 @@ impl OzoneGui {
                             }
                         } else {
                             drop(pal);
-                            let mut ws = self.workspace.lock().unwrap();
-                            if insert_text_raw(&text, &mut ws) {
-                                dispatch_autocmds(&mut ws, &self.commands, &self.autocmds);
-                                needs_redraw = true;
+                            let mut srch = search.lock().unwrap();
+                            if let Some(s) = srch.as_mut() {
+                                let mut ws = self.workspace.lock().unwrap();
+                                let mut changed = false;
+                                for c in text.chars().filter(|c| !c.is_control()) {
+                                    s.query.push(c);
+                                    changed = true;
+                                }
+                                if changed {
+                                    search_recompute(s, &ws);
+                                    search_select_from_cursor(s, &ws);
+                                    search_jump(s, &mut ws);
+                                    needs_redraw = true;
+                                }
+                            } else {
+                                drop(srch);
+                                let mut ws = self.workspace.lock().unwrap();
+                                if insert_text_raw(&text, &mut ws) {
+                                    dispatch_autocmds(&mut ws, &self.commands, &self.autocmds);
+                                    needs_redraw = true;
+                                }
                             }
                         }
                     }
@@ -498,8 +526,9 @@ impl OzoneGui {
                 let mut ws = self.workspace.lock().unwrap();
                 let config = self.config.clone();
                 let pal = palette.lock().unwrap();
+                let srch = search.lock().unwrap();
                 canvas.draw(|ctx| {
-                    draw_editor(ctx, &mut ws, &config)?;
+                    draw_editor(ctx, &mut ws, &config, srch.as_ref())?;
                     if let Some(p) = pal.as_ref() {
                         draw_palette(ctx, p, &config)?;
                     }
@@ -552,6 +581,7 @@ fn handle_key(
     modmap: &ModifierMap,
     pending: &mut Vec<KeyStroke>,
     palette: &mut Option<PaletteState>,
+    search: &mut Option<SearchState>,
 ) -> bool {
     use aurea::KeyCode::*;
 
@@ -587,6 +617,11 @@ fn handle_key(
                 if cmd == "command.palette" {
                     // GUI-level command: open the overlay instead of dispatching.
                     *palette = Some(PaletteState::new(command_snapshot(reg)));
+                } else if cmd == "search.start" {
+                    let mut s = SearchState::new(false);
+                    search_recompute(&mut s, ws);
+                    search_select_from_cursor(&mut s, ws);
+                    *search = Some(s);
                 } else {
                     run_cmd(&cmd, ws, reg, autocmds);
                 }
@@ -888,6 +923,8 @@ const PALETTE_FG:     Color = Color::rgb(205, 214, 244);
 const PALETTE_DESC:   Color = Color::rgb(127, 132, 156);
 const PALETTE_PROMPT: Color = Color::rgb(203, 166, 247);
 const SCROLLBAR_THUMB: Color = Color::rgba(88, 91, 112, 180);
+const SEARCH_MATCH:   Color = Color::rgba(249, 226, 175, 70);  // yellow, all matches
+const SEARCH_CURRENT: Color = Color::rgba(250, 179, 135, 150); // peach, current match
 
 // Catppuccin Mocha syntax palette
 fn token_color(kind: TokenKind) -> Color {
@@ -922,7 +959,12 @@ fn editor_font(config: &Config) -> Font {
 // draw_editor
 // ---------------------------------------------------------------------------
 
-fn draw_editor(ctx: &mut dyn DrawingContext, ws: &mut Workspace, config: &Config) -> AureaResult<()> {
+fn draw_editor(
+    ctx: &mut dyn DrawingContext,
+    ws: &mut Workspace,
+    config: &Config,
+    search: Option<&SearchState>,
+) -> AureaResult<()> {
     let width  = ctx.width()  as f32;
     let height = ctx.height() as f32;
 
@@ -939,9 +981,13 @@ fn draw_editor(ctx: &mut dyn DrawingContext, ws: &mut Workspace, config: &Config
 
     if let Some(panes) = &ws.panes {
         let panes = panes.clone();
-        draw_pane_tree(ctx, ws, config, &panes, editor_rect, &font, metrics)?;
+        draw_pane_tree(ctx, ws, config, &panes, editor_rect, &font, metrics, search)?;
     } else if let Some(view_id) = ws.active_view().map(|view| view.id) {
-        draw_view(ctx, ws, config, view_id, editor_rect, &font, metrics)?;
+        draw_view(ctx, ws, config, view_id, editor_rect, &font, metrics, search)?;
+    }
+
+    if let Some(s) = search {
+        draw_search_bar(ctx, s, &font, width)?;
     }
 
     draw_status_bar(ctx, width, height, &font, ws)?;
@@ -955,6 +1001,7 @@ struct TextMetrics {
     text_descent: f32,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_pane_tree(
     ctx: &mut dyn DrawingContext,
     ws: &mut Workspace,
@@ -963,19 +1010,21 @@ fn draw_pane_tree(
     rect: Rect,
     font: &Font,
     metrics: TextMetrics,
+    search: Option<&SearchState>,
 ) -> AureaResult<()> {
     match tree {
-        PaneTree::Leaf { view_id } => draw_view(ctx, ws, config, *view_id, rect, font, metrics),
+        PaneTree::Leaf { view_id } => draw_view(ctx, ws, config, *view_id, rect, font, metrics, search),
         PaneTree::Split { axis, ratio, first, second } => {
             let (first_rect, second_rect, divider) = split_rect(rect, *axis, *ratio);
-            draw_pane_tree(ctx, ws, config, first, first_rect, font, metrics)?;
-            draw_pane_tree(ctx, ws, config, second, second_rect, font, metrics)?;
+            draw_pane_tree(ctx, ws, config, first, first_rect, font, metrics, search)?;
+            draw_pane_tree(ctx, ws, config, second, second_rect, font, metrics, search)?;
             ctx.draw_rect(divider, &solid(BORDER))?;
             Ok(())
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_view(
     ctx: &mut dyn DrawingContext,
     ws: &mut Workspace,
@@ -984,6 +1033,7 @@ fn draw_view(
     rect: Rect,
     font: &Font,
     metrics: TextMetrics,
+    search: Option<&SearchState>,
 ) -> AureaResult<()> {
     let Some(buffer_id) = ws.views.get(&view_id).map(|view| view.buffer_id) else {
         return Ok(());
@@ -1030,6 +1080,18 @@ fn draw_view(
         None
     };
 
+    // Search-match positions for the active pane (Pos, is_current).
+    let search_hits: Vec<(ozone_buffer::Pos, bool)> = match (is_active_pane, search) {
+        (true, Some(s)) if !s.query.is_empty() => s
+            .matches
+            .iter()
+            .enumerate()
+            .map(|(i, &off)| (buf.offset_to_pos(off), i == s.current))
+            .collect(),
+        _ => Vec::new(),
+    };
+    let search_qlen = search.map(|s| s.query.chars().count()).unwrap_or(0);
+
     // Gutter strip
     if gutter_w > 0.0 {
         ctx.draw_rect(Rect::new(rect.x, rect.y, gutter_w, rect.height), &solid(GUTTER_BG))?;
@@ -1058,6 +1120,18 @@ fn draw_view(
         // Cursor-line highlight
         if is_cursor && is_active_pane {
             ctx.draw_rect(Rect::new(rect.x, line_top + 1.0, rect.width, line_h - 1.0), &solid(CURSOR_LINE))?;
+        }
+
+        // Search match highlights (behind the glyphs).
+        if search_qlen > 0 {
+            for (pos, is_current) in &search_hits {
+                if pos.line == line_idx {
+                    let hx = text_x + pos.col as f32 * metrics.char_w;
+                    let hw = search_qlen as f32 * metrics.char_w;
+                    let col = if *is_current { SEARCH_CURRENT } else { SEARCH_MATCH };
+                    ctx.draw_rect(Rect::new(hx, line_top + 1.0, hw, line_h - 2.0), &solid(col))?;
+                }
+            }
         }
 
         // Matching-bracket boxes (behind the glyphs).
@@ -1203,7 +1277,10 @@ fn draw_status_bar(
     ctx.draw_rect(Rect::new(0.0, bar_top, width, STATUS_H), &solid(STATUSBAR_BG))?;
     ctx.draw_line(0.0, bar_top, width, bar_top, &stroke(BORDER, 1.0))?;
 
-    let (mode, file_name, cursor_info, dirty, filetype, pane_info) = if let (Some(view), Some(buf)) = (
+    // Emacs-style modeline: the left badge is the buffer's *major mode*, not a
+    // generic "EDIT" (Ozone is non-modal). Transient input modes (find, M-x) have
+    // their own overlays, so they don't belong here.
+    let (mode, file_name, cursor_info, dirty, pane_info) = if let (Some(view), Some(buf)) = (
         ws.active_view(), ws.active_buffer(),
     ) {
         let file_name = match &buf.kind {
@@ -1215,14 +1292,17 @@ fn draw_status_bar(
         };
         let cursor_info = format!("{}:{}", view.cursor.line + 1, view.cursor.col + 1);
         let dirty = if buf.is_dirty() { "*" } else { "" };
-        let filetype = match &buf.kind {
-            BufferKind::File(p) => filetype_label(Filetype::from_path(&p.to_string_lossy())),
-            _ => filetype_label(Filetype::Plain),
+        let mode = match &buf.kind {
+            BufferKind::File(p) => major_mode_label(Filetype::from_path(&p.to_string_lossy())),
+            BufferKind::Search => "Files",
+            BufferKind::References => "Refs",
+            BufferKind::Terminal => "Term",
+            BufferKind::Scratch => "Text",
         };
         let pane_info = pane_status(ws, view.id);
-        ("EDIT", file_name, cursor_info, dirty.to_string(), filetype, pane_info)
+        (mode, file_name, cursor_info, dirty.to_string(), pane_info)
     } else {
-        ("", String::new(), String::new(), String::new(), "plain", String::new())
+        ("", String::new(), String::new(), String::new(), String::new())
     };
 
     let ascent = ctx
@@ -1247,9 +1327,9 @@ fn draw_status_bar(
     ctx.draw_text_with_font(&left, Point::new(16.0 + mode_w, baseline), font, &solid(STATUSBAR_FG))?;
 
     let right = if pane_info.is_empty() {
-        format!("UTF-8  {}", filetype)
+        "UTF-8".to_string()
     } else {
-        format!("{}  UTF-8  {}", pane_info, filetype)
+        format!("{}  UTF-8", pane_info)
     };
     let right_w = ctx
         .measure_text(&right, font)
@@ -1339,6 +1419,37 @@ fn draw_palette(ctx: &mut dyn DrawingContext, p: &PaletteState, config: &Config)
     Ok(())
 }
 
+/// Top-right find bar: `find: <query>   (i/n)`.
+fn draw_search_bar(ctx: &mut dyn DrawingContext, s: &SearchState, font: &Font, width: f32) -> AureaResult<()> {
+    let line_h = (font.size * 1.7).max(18.0);
+    let m = ctx.measure_text("M", font).ok();
+    let ascent = m.as_ref().map(|x| x.ascent).unwrap_or(font.size * 0.8);
+    let descent = m.as_ref().map(|x| x.descent).unwrap_or(font.size * 0.2);
+
+    let count = if s.matches.is_empty() {
+        if s.query.is_empty() { String::new() } else { "  (no matches)".to_string() }
+    } else {
+        format!("  ({}/{})", s.current + 1, s.matches.len())
+    };
+    let text = format!("find: {}{}", s.query, count);
+    let text_w = ctx.measure_text(&text, font).map(|m| m.advance).unwrap_or(text.len() as f32 * font.size * 0.6);
+
+    let pad = 10.0;
+    let bw = (text_w + pad * 2.0 + 16.0).min(width - 24.0);
+    let bx = width - bw - 12.0;
+    let by = 10.0;
+    fill_round_rect(ctx, Rect::new(bx - 1.0, by - 1.0, bw + 2.0, line_h + 2.0), 9.0, PALETTE_BORDER)?;
+    fill_round_rect(ctx, Rect::new(bx, by, bw, line_h), 8.0, PALETTE_BG)?;
+
+    let bl = baseline_in_rect(by, line_h, ascent, descent);
+    // Prompt dim, query bright.
+    let prompt_w = ctx.measure_text("find: ", font).map(|m| m.advance).unwrap_or(0.0);
+    ctx.draw_text_with_font("find: ", Point::new(bx + pad, bl), font, &solid(PALETTE_DESC))?;
+    let rest = format!("{}{}", s.query, count);
+    ctx.draw_text_with_font(&rest, Point::new(bx + pad + prompt_w, bl), font, &solid(PALETTE_FG))?;
+    Ok(())
+}
+
 /// Fill a rounded rectangle using a cross of rects plus four corner circles.
 fn fill_round_rect(ctx: &mut dyn DrawingContext, rect: Rect, r: f32, color: Color) -> AureaResult<()> {
     let r = r.min(rect.width / 2.0).min(rect.height / 2.0).max(0.0);
@@ -1420,13 +1531,14 @@ fn draw_cursor(
     Ok(())
 }
 
-fn filetype_label(filetype: Filetype) -> &'static str {
+/// Emacs-style major-mode label shown in the status badge.
+fn major_mode_label(filetype: Filetype) -> &'static str {
     match filetype {
-        Filetype::Rust => "rust",
-        Filetype::Toml => "toml",
-        Filetype::Json => "json",
-        Filetype::Markdown => "markdown",
-        Filetype::Plain => "plain",
+        Filetype::Rust => "Rust",
+        Filetype::Toml => "TOML",
+        Filetype::Json => "JSON",
+        Filetype::Markdown => "Markdown",
+        Filetype::Plain => "Text",
     }
 }
 

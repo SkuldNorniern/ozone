@@ -332,6 +332,7 @@ impl Keymap {
             ("ctrl+b", "cursor.move-left"),
             ("ctrl+f", "cursor.move-right"),
             ("ctrl+n", "cursor.move-down"),
+            ("meta+f", "search.start"), // M-f opens in-buffer find
             ("ctrl+home", "cursor.file-start"),
             ("ctrl+end", "cursor.file-end"),
             ("ctrl+left", "cursor.word-backward"),
