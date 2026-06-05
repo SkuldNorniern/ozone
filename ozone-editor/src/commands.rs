@@ -58,6 +58,32 @@ impl CommandRegistry {
     pub fn description(&self, name: &str) -> Option<&str> {
         self.descriptions.get(name).map(String::as_str)
     }
+
+    /// Human-friendly display name for UI (command palette). Derived from the id.
+    pub fn display_name(&self, name: &str) -> String {
+        pretty_command_name(name)
+    }
+}
+
+/// Turn a command id into a display name: `"pane.focus-left"` -> `"Pane: Focus Left"`.
+pub fn pretty_command_name(id: &str) -> String {
+    fn title(seg: &str) -> String {
+        seg.split(['-', '_'])
+            .filter(|w| !w.is_empty())
+            .map(|w| {
+                let mut c = w.chars();
+                match c.next() {
+                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                    None => String::new(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+    match id.split_once('.') {
+        Some((group, rest)) => format!("{}: {}", title(group), title(rest)),
+        None => title(id),
+    }
 }
 
 impl Default for CommandRegistry {
@@ -636,6 +662,15 @@ mod tests {
         let files = collect_workspace_files(&base, 3);
         assert!(files.len() <= 3);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn pretty_command_names() {
+        use super::pretty_command_name;
+        assert_eq!(pretty_command_name("pane.focus-left"), "Pane: Focus Left");
+        assert_eq!(pretty_command_name("file.save"), "File: Save");
+        assert_eq!(pretty_command_name("command.palette"), "Command: Palette");
+        assert_eq!(pretty_command_name("buffer.next"), "Buffer: Next");
     }
 
     #[test]
