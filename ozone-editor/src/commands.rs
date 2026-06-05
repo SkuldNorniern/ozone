@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use ozone_buffer::{BufferId, Pos};
 
 use crate::events::EditorEvent;
+use crate::pane::SplitAxis;
 use crate::view::ViewId;
 use crate::workspace::Workspace;
 
@@ -355,6 +356,20 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
     reg.register("view.scroll-up", "Scroll view up one line", |ctx| {
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
         view.scroll_line = view.scroll_line.saturating_sub(1);
+    });
+
+    // --- panes ---
+
+    reg.register("pane.split-right", "Split the active pane vertically", |ctx| {
+        ctx.workspace.split_active_pane(SplitAxis::Vertical);
+    });
+
+    reg.register("pane.split-down", "Split the active pane horizontally", |ctx| {
+        ctx.workspace.split_active_pane(SplitAxis::Horizontal);
+    });
+
+    reg.register("pane.close", "Close the active pane", |ctx| {
+        ctx.workspace.close_view(ctx.view_id);
     });
 }
 
