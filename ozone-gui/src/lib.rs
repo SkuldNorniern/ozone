@@ -19,6 +19,9 @@ impl std::ops::Deref for SendableCanvas {
     type Target = Canvas;
     fn deref(&self) -> &Self::Target { &self.0 }
 }
+impl std::ops::DerefMut for SendableCanvas {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.0 }
+}
 impl Element for SendableCanvas {
     fn handle(&self) -> *mut c_void { self.0.handle() }
     unsafe fn invalidate_platform(&self, rect: Option<aurea::render::Rect>) {
@@ -91,18 +94,32 @@ impl OzoneGui {
             let mut should_close = false;
             let mut needs_redraw = false;
 
+            let has_text_input = events.iter().any(|event| {
+                matches!(event, WindowEvent::TextInput { text } if text.chars().any(|c| !c.is_control()))
+            });
+
             for event in events {
                 match event {
                     WindowEvent::CloseRequested => { should_close = true; }
-                    WindowEvent::Resized { .. } => { needs_redraw = true; }
+                    WindowEvent::Resized { width, height } => {
+                        let _ = (width, height);
+                        needs_redraw = true;
+                    }
 
                     WindowEvent::KeyInput { key, pressed: true, modifiers } => {
-                        if handle_key(key, modifiers, &mut self.workspace.lock().unwrap(), &self.commands) {
+                        if handle_key(
+                            key,
+                            modifiers,
+                            !has_text_input,
+                            &mut self.workspace.lock().unwrap(),
+                            &self.commands,
+                        ) {
                             needs_redraw = true;
                         }
                     }
 
-                    // TextInput is a bonus; KeyInput covers typing via keycode_to_char.
+                    // Text input is the primary edit path. KeyInput handles commands
+                    // and provides a simple ASCII fallback for backends without WM_CHAR.
                     WindowEvent::TextInput { text } => {
                         if insert_text_raw(&text, &mut self.workspace.lock().unwrap()) {
                             needs_redraw = true;
@@ -141,7 +158,10 @@ impl OzoneGui {
             }
 
             if needs_redraw {
-                canvas_arc.lock().unwrap().invalidate_all();
+                let mut canvas = canvas_arc.lock().unwrap();
+                let ws = self.workspace.lock().unwrap();
+                canvas.draw(|ctx| draw_editor(ctx, &ws))?;
+                canvas.invalidate_all();
             }
 
             window.process_frames()?;
@@ -176,6 +196,7 @@ fn window_title(ws: &Workspace) -> String {
 fn handle_key(
     key: aurea::KeyCode,
     mods: aurea::Modifiers,
+    allow_text_fallback: bool,
     ws: &mut Workspace,
     reg: &CommandRegistry,
 ) -> bool {
@@ -183,19 +204,24 @@ fn handle_key(
 
     // Ctrl shortcuts (no Alt)
     if mods.ctrl && !mods.alt {
-        let cmd = if mods.shift {
-            match key { _ => None }
-        } else {
-            match key {
-                S     => Some("file.save"),
-                Z     => Some("edit.undo"),
-                Y     => Some("edit.redo"),
-                Home  => Some("cursor.file-start"),
-                End   => Some("cursor.file-end"),
-                Left  => Some("cursor.word-backward"),
-                Right => Some("cursor.word-forward"),
-                _ => None,
-            }
+        let cmd = match key {
+            S if !mods.shift => Some("file.save"),
+            Z if !mods.shift => Some("edit.undo"),
+            Y if !mods.shift => Some("edit.redo"),
+
+            // Emacs-style movement for the default non-modal editor.
+            A if !mods.shift => Some("cursor.line-start"),
+            E if !mods.shift => Some("cursor.line-end"),
+            B if !mods.shift => Some("cursor.move-left"),
+            F if !mods.shift => Some("cursor.move-right"),
+            P if !mods.shift => Some("cursor.move-up"),
+            N if !mods.shift => Some("cursor.move-down"),
+
+            Home  => Some("cursor.file-start"),
+            End   => Some("cursor.file-end"),
+            Left  => Some("cursor.word-backward"),
+            Right => Some("cursor.word-forward"),
+            _ => None,
         };
         if let Some(name) = cmd {
             run_cmd(name, ws, reg);
@@ -231,7 +257,7 @@ fn handle_key(
             return insert_text_raw("    ", ws);
         }
 
-        if let Some(ch) = keycode_to_char(key, mods.shift) {
+        if allow_text_fallback && let Some(ch) = keycode_to_char(key, mods.shift) {
             let mut buf = [0u8; 4];
             return insert_text_raw(ch.encode_utf8(&mut buf), ws);
         }
@@ -502,7 +528,7 @@ fn draw_status_bar(
         };
         let cursor_info = format!("{}:{}", view.cursor.line + 1, view.cursor.col + 1);
         let dirty = if buf.is_dirty() { "*" } else { "" };
-        ("NORMAL", file_name, cursor_info, dirty.to_string())
+        ("EDIT", file_name, cursor_info, dirty.to_string())
     } else {
         ("", String::new(), String::new(), String::new())
     };
