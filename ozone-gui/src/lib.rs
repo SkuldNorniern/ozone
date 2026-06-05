@@ -253,6 +253,8 @@ fn handle_key(
             Z if !mods.shift => Some("edit.undo"),
             Y if !mods.shift => Some("edit.redo"),
             P if !mods.shift => Some("file.picker"),
+            Tab if !mods.shift => Some("buffer.next"),
+            Tab if mods.shift => Some("buffer.previous"),
             Right if mods.shift => Some("pane.split-right"),
             Down if mods.shift => Some("pane.split-down"),
             W if mods.shift => Some("pane.close"),
@@ -275,6 +277,30 @@ fn handle_key(
             return true;
         }
         return false;
+    }
+
+    // Picker buffers (Ctrl+P file list): Enter opens the selection, Esc closes.
+    // Arrow keys still fall through to normal cursor movement below.
+    if !mods.ctrl && !mods.alt {
+        let in_picker = matches!(
+            ws.active_buffer().map(|b| &b.kind),
+            Some(BufferKind::Search)
+        );
+        if in_picker {
+            match key {
+                Enter => {
+                    run_cmd("picker.open-selection", ws, reg, autocmds);
+                    return true;
+                }
+                Escape => {
+                    run_cmd("pane.close", ws, reg, autocmds);
+                    return true;
+                }
+                // Keep the list intact: swallow edit keys, allow navigation.
+                Backspace | Delete | Tab => return true,
+                _ => {}
+            }
+        }
     }
 
     // Navigation / editing (no Ctrl, no Alt)
@@ -402,11 +428,22 @@ fn insert_text_raw(text: &str, ws: &mut Workspace) -> bool {
     let cursor = view.cursor;
     let buf_id = view.buffer_id;
 
+    // Virtual/read-only surfaces (pickers, terminal placeholder) reject edits.
+    if matches!(
+        ws.buffers.get(&buf_id).map(|b| &b.kind),
+        Some(BufferKind::Search | BufferKind::References | BufferKind::Terminal)
+    ) {
+        return false;
+    }
+
     if let Some(buf) = ws.buffers.get_mut(&buf_id) {
         let delta = buf.insert(cursor, &filtered);
-        let chars = filtered.chars().count();
+        // Cursor columns are byte offsets (see Pos docs); advance by the inserted
+        // byte length, not the char count, or multi-byte input desyncs the cursor
+        // from the buffer offset.
+        let bytes = filtered.len();
         let cursor_event = ws.active_view_mut().map(|view| {
-            view.cursor.col += chars;
+            view.cursor.col += bytes;
             view.col_memory = view.cursor.col;
             view.scroll_to_cursor(view.page_height.max(1));
             EditorEvent::CursorMoved { view_id: view.id, pos: view.cursor }
@@ -462,6 +499,7 @@ const BORDER:       Color = Color::rgb(49,  50,  68);
 const CURSOR_BG:    Color = Color::rgba(245, 224, 220, 220);
 const CURSOR_LINE:  Color = Color::rgba(49,  50,  68, 140);
 const ACTIVE_PANE_BORDER: Color = Color::rgb(137, 180, 250);
+const SCROLLBAR_THUMB: Color = Color::rgba(88, 91, 112, 180);
 
 // Catppuccin Mocha syntax palette
 fn token_color(kind: TokenKind) -> Color {
@@ -678,6 +716,22 @@ fn draw_view(
     // Gutter divider
     if gutter_w > 0.0 {
         ctx.draw_line(rect.x + gutter_w, rect.y, rect.x + gutter_w, rect.y + rect.height, &stroke(BORDER, 1.0))?;
+    }
+
+    // Scrollbar thumb (right edge), only when content overflows the viewport.
+    let viewport_lines = (content_h / line_h).max(1.0);
+    if (line_count as f32) > viewport_lines {
+        let track_h = rect.height;
+        let thumb_h = (track_h * viewport_lines / line_count as f32).clamp(24.0, track_h);
+        let max_scroll = max_scroll_line(line_count, viewport_lines as usize);
+        let t = if max_scroll > 0 {
+            (scroll as f32 / max_scroll as f32).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let thumb_y = rect.y + t * (track_h - thumb_h);
+        let bar_x = rect.x + rect.width - 4.0;
+        ctx.draw_rect(Rect::new(bar_x, thumb_y, 3.0, thumb_h), &solid(SCROLLBAR_THUMB))?;
     }
 
     if is_active_pane {

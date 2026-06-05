@@ -292,27 +292,66 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
         }
     });
 
-    reg.register("file.picker", "Open a simple project file list buffer", |ctx| {
-        let mut entries = Vec::new();
-        if let Ok(dir) = std::env::current_dir()
-            && let Ok(read_dir) = fs::read_dir(dir)
-        {
-            for entry in read_dir.flatten() {
-                let path = entry.path();
-                let marker = if path.is_dir() { "/" } else { "" };
-                if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
-                    entries.push(format!("{name}{marker}"));
-                }
+    reg.register(
+        "file.picker",
+        "List workspace files in a picker buffer (Enter opens, Esc closes)",
+        |ctx| {
+            let entries = match std::env::current_dir() {
+                Ok(dir) => collect_workspace_files(&dir, 5000),
+                Err(_) => Vec::new(),
+            };
+            let content = if entries.is_empty() {
+                "No files found.\n".to_string()
+            } else {
+                // One relative path per line so a line maps directly to a file.
+                format!("{}\n", entries.join("\n"))
+            };
+            ctx.workspace.open_virtual_buffer(BufferKind::Search, content);
+        },
+    );
+
+    reg.register(
+        "picker.open-selection",
+        "Open the file on the picker's current line",
+        |ctx| {
+            // Only meaningful inside a picker (Search) buffer.
+            let is_picker = matches!(
+                ctx.workspace.buffers.get(&ctx.buffer_id).map(|b| &b.kind),
+                Some(BufferKind::Search)
+            );
+            if !is_picker {
+                return;
             }
-        }
-        entries.sort();
-        let content = if entries.is_empty() {
-            "No files found in the current directory.\n".to_string()
-        } else {
-            format!("Files\n-----\n{}\n", entries.join("\n"))
-        };
-        ctx.workspace.open_virtual_buffer(BufferKind::Search, content);
-    });
+            let line = ctx
+                .workspace
+                .views
+                .get(&ctx.view_id)
+                .and_then(|view| {
+                    ctx.workspace
+                        .buffers
+                        .get(&ctx.buffer_id)
+                        .and_then(|buf| buf.line(view.cursor.line))
+                });
+            let Some(line) = line else { return };
+            let rel = line.trim();
+            if rel.is_empty() {
+                return;
+            }
+            let Ok(base) = std::env::current_dir() else {
+                return;
+            };
+            let target = base.join(rel);
+            if !target.is_file() {
+                return;
+            }
+            let picker_view = ctx.view_id;
+            if ctx.workspace.open_file(target).is_ok() {
+                // The picker view was replaced in the active pane; drop it so the
+                // transient buffer/view don't accumulate.
+                ctx.workspace.discard_orphan_view(picker_view);
+            }
+        },
+    );
 
     reg.register("terminal.open", "Open a terminal buffer placeholder", |ctx| {
         ctx.workspace.open_virtual_buffer(
@@ -390,6 +429,14 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
 
     // --- panes ---
 
+    reg.register("buffer.next", "Switch the active pane to the next buffer", |ctx| {
+        ctx.workspace.cycle_buffer(true);
+    });
+
+    reg.register("buffer.previous", "Switch the active pane to the previous buffer", |ctx| {
+        ctx.workspace.cycle_buffer(false);
+    });
+
     reg.register("pane.split-right", "Split the active pane vertically", |ctx| {
         ctx.workspace.split_active_pane(SplitAxis::Vertical);
     });
@@ -429,6 +476,47 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
 
 fn max_scroll_line(line_count: usize, page_height: usize) -> usize {
     line_count.saturating_sub(page_height.max(1))
+}
+
+/// Names skipped when walking the workspace for the file picker.
+fn is_ignored_name(name: &str) -> bool {
+    matches!(name, "target" | "node_modules" | ".git" | ".hg" | ".svn")
+        || name.starts_with('.')
+}
+
+/// Recursively collect file paths under `base`, relative and `/`-separated,
+/// skipping VCS/build/hidden entries. Bounded by `cap`. No external crates.
+fn collect_workspace_files(base: &std::path::Path, cap: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut stack = vec![base.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        if out.len() >= cap {
+            break;
+        }
+        let Ok(read_dir) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if is_ignored_name(name) {
+                continue;
+            }
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            if is_dir {
+                stack.push(path);
+            } else if let Ok(rel) = path.strip_prefix(base) {
+                out.push(rel.to_string_lossy().replace('\\', "/"));
+                if out.len() >= cap {
+                    break;
+                }
+            }
+        }
+    }
+    out.sort();
+    out
 }
 
 fn emit_cursor_moved(ctx: &mut CommandContext, old: Pos) {
@@ -474,7 +562,7 @@ fn is_word_char(c: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::trailing_whitespace_ranges;
+    use super::{collect_workspace_files, is_ignored_name, trailing_whitespace_ranges};
 
     #[test]
     fn finds_trailing_space_ranges() {
@@ -482,6 +570,46 @@ mod tests {
             trailing_whitespace_ranges("a  \nb\t\nc\n  "),
             vec![(1, 2), (5, 1), (9, 2)]
         );
+    }
+
+    #[test]
+    fn ignores_vcs_build_and_hidden() {
+        assert!(is_ignored_name("target"));
+        assert!(is_ignored_name(".git"));
+        assert!(is_ignored_name(".hidden"));
+        assert!(!is_ignored_name("src"));
+        assert!(!is_ignored_name("Cargo.toml"));
+    }
+
+    #[test]
+    fn collect_walks_recursively_skipping_ignored() {
+        let base = std::env::temp_dir().join(format!("ozone_pick_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("src")).unwrap();
+        std::fs::create_dir_all(base.join("target")).unwrap();
+        std::fs::write(base.join("Cargo.toml"), "x").unwrap();
+        std::fs::write(base.join("src").join("main.rs"), "x").unwrap();
+        std::fs::write(base.join("target").join("junk.o"), "x").unwrap();
+
+        let files = collect_workspace_files(&base, 5000);
+        assert!(files.contains(&"Cargo.toml".to_string()));
+        assert!(files.contains(&"src/main.rs".to_string()));
+        assert!(!files.iter().any(|f| f.contains("target")));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn collect_respects_cap() {
+        let base = std::env::temp_dir().join(format!("ozone_cap_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        for i in 0..10 {
+            std::fs::write(base.join(format!("f{i}.txt")), "x").unwrap();
+        }
+        let files = collect_workspace_files(&base, 3);
+        assert!(files.len() <= 3);
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
 

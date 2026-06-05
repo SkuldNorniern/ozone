@@ -160,6 +160,64 @@ impl Workspace {
         Some(target)
     }
 
+    /// Switch the active pane to the next/previous open buffer (by id order,
+    /// wrapping). Repoints the active view and clamps its cursor to the new
+    /// buffer. Returns true if the buffer changed.
+    pub fn cycle_buffer(&mut self, forward: bool) -> bool {
+        // Only cycle real, editable buffers — skip transient picker/terminal surfaces.
+        let mut ids: Vec<BufferId> = self
+            .buffers
+            .iter()
+            .filter(|(_, buf)| matches!(buf.kind, BufferKind::File(_) | BufferKind::Scratch))
+            .map(|(id, _)| *id)
+            .collect();
+        if ids.len() <= 1 {
+            return false;
+        }
+        ids.sort_by_key(|id| id.raw());
+
+        let Some(view_id) = self.active_view_id else {
+            return false;
+        };
+        let Some(current) = self.views.get(&view_id).map(|v| v.buffer_id) else {
+            return false;
+        };
+        let idx = ids.iter().position(|id| *id == current).unwrap_or(0);
+        let next = if forward {
+            (idx + 1) % ids.len()
+        } else {
+            (idx + ids.len() - 1) % ids.len()
+        };
+        let target = ids[next];
+        if target == current {
+            return false;
+        }
+
+        let (last_line, line_len) = {
+            let buf = match self.buffers.get(&target) {
+                Some(buf) => buf,
+                None => return false,
+            };
+            let last_line = buf.line_count().saturating_sub(1);
+            (last_line, buf.line_len(last_line))
+        };
+
+        let cursor = if let Some(view) = self.views.get_mut(&view_id) {
+            view.buffer_id = target;
+            view.cursor.line = view.cursor.line.min(last_line);
+            view.cursor.col = view.cursor.col.min(line_len);
+            view.col_memory = view.cursor.col;
+            view.scroll_line = 0;
+            Some((view.id, view.cursor))
+        } else {
+            None
+        };
+        if let Some((id, pos)) = cursor {
+            self.emit(EditorEvent::CursorMoved { view_id: id, pos });
+        }
+        true
+    }
+
     pub fn close_view(&mut self, view_id: ViewId) -> bool {
         if self.views.len() <= 1 {
             return false;
@@ -194,6 +252,26 @@ impl Workspace {
                 .or_else(|| self.views.keys().next().copied());
         }
         true
+    }
+
+    /// Drop a view that is no longer shown in any pane (e.g. a picker view that
+    /// was replaced when its selection opened a file), cleaning up its transient
+    /// virtual buffer. No-op if the view is still active or still in the tree.
+    pub fn discard_orphan_view(&mut self, view_id: ViewId) {
+        if self.active_view_id == Some(view_id) {
+            return;
+        }
+        let in_tree = self
+            .panes
+            .as_ref()
+            .map(|panes| panes.leaves().contains(&view_id))
+            .unwrap_or(false);
+        if in_tree {
+            return;
+        }
+        if let Some(removed) = self.views.remove(&view_id) {
+            self.remove_unreferenced_virtual_buffer(removed.buffer_id);
+        }
     }
 
     fn show_view_in_active_pane(&mut self, view_id: ViewId) {
@@ -324,6 +402,35 @@ mod tests {
 
         assert!(!ws.close_view(only_view));
         assert_eq!(ws.active_view_id, Some(only_view));
+    }
+
+    #[test]
+    fn cycle_buffer_switches_active_view_between_buffers() {
+        let mut ws = Workspace::new(); // starts with one scratch buffer
+        let scratch = ws.active_buffer().unwrap().id;
+
+        // Open a real file buffer so two editable buffers exist.
+        let tmp = std::env::temp_dir().join(format!("ozone_cycle_{}.txt", std::process::id()));
+        std::fs::write(&tmp, "alpha\nbeta\n").unwrap();
+        let (file_buf, _) = ws.open_file(tmp.clone()).unwrap();
+
+        assert_eq!(ws.active_view().unwrap().buffer_id, file_buf);
+
+        // Cycling forward wraps to scratch (2 editable buffers total).
+        assert!(ws.cycle_buffer(true));
+        assert_eq!(ws.active_view().unwrap().buffer_id, scratch);
+
+        // Cycling again returns to the file buffer.
+        assert!(ws.cycle_buffer(true));
+        assert_eq!(ws.active_view().unwrap().buffer_id, file_buf);
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn cycle_buffer_noop_with_single_buffer() {
+        let mut ws = Workspace::new();
+        assert!(!ws.cycle_buffer(true));
     }
 
     #[test]

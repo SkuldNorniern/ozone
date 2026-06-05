@@ -1,6 +1,8 @@
 /// In-house piece table: two-buffer (original + add), vec-of-pieces.
 /// All coordinates are byte offsets; callers convert to/from (line, col).
 
+use std::cell::{Ref, RefCell};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Buf {
     Original,
@@ -18,6 +20,10 @@ pub struct PieceTable {
     original: Vec<u8>,
     add: Vec<u8>,
     pieces: Vec<Piece>,
+    /// Lazily materialized full text, reused across reads within a frame and
+    /// invalidated on every edit. Without this, each `line()` / position
+    /// conversion rebuilt the whole buffer — O(n) per visible line per frame.
+    cache: RefCell<Option<String>>,
 }
 
 impl PieceTable {
@@ -28,20 +34,36 @@ impl PieceTable {
         } else {
             vec![Piece { buf: Buf::Original, start: 0, len: original.len() }]
         };
-        Self { original, add: Vec::new(), pieces }
+        Self { original, add: Vec::new(), pieces, cache: RefCell::new(None) }
+    }
+
+    /// Borrow the materialized full text, building (and caching) it on demand.
+    fn materialized(&self) -> Ref<'_, str> {
+        {
+            let mut cache = self.cache.borrow_mut();
+            if cache.is_none() {
+                let mut out = String::with_capacity(self.total_len());
+                for p in &self.pieces {
+                    out.push_str(self.piece_str(p));
+                }
+                *cache = Some(out);
+            }
+        }
+        Ref::map(self.cache.borrow(), |c| c.as_deref().unwrap_or(""))
+    }
+
+    /// Drop the cached text after a mutation.
+    fn invalidate(&mut self) {
+        self.cache.get_mut().take();
     }
 
     pub fn total_len(&self) -> usize {
         self.pieces.iter().map(|p| p.len).sum()
     }
-
-    /// Collect full text. O(n).
+   
+    /// Collect full text. O(n) on a cold cache, O(1) clone when warm.
     pub fn text(&self) -> String {
-        let mut out = String::with_capacity(self.total_len());
-        for p in &self.pieces {
-            out.push_str(self.piece_str(p));
-        }
-        out
+        self.materialized().to_string()
     }
 
     pub fn line_count(&self) -> usize {
@@ -53,13 +75,13 @@ impl PieceTable {
     }
 
     pub fn line(&self, idx: usize) -> Option<String> {
-        let text = self.text();
+        let text = self.materialized();
         text.split('\n').nth(idx).map(|s| s.to_string())
     }
 
     /// Convert (line, col) to byte offset. Clamps to total length.
     pub fn pos_to_offset(&self, line: usize, col: usize) -> usize {
-        let text = self.text();
+        let text = self.materialized();
         let total = text.len();
 
         if line == 0 {
@@ -78,10 +100,14 @@ impl PieceTable {
         total
     }
 
-    /// Convert byte offset to (line, col).
+    /// Convert byte offset to (line, col). Snaps to a char boundary so callers
+    /// passing an offset that lands inside a multi-byte char never panic.
     pub fn offset_to_pos(&self, offset: usize) -> (usize, usize) {
-        let text = self.text();
-        let offset = offset.min(text.len());
+        let text = self.materialized();
+        let mut offset = offset.min(text.len());
+        while offset > 0 && !text.is_char_boundary(offset) {
+            offset -= 1;
+        }
         let prefix = &text[..offset];
         let line = prefix.bytes().filter(|&b| b == b'\n').count();
         let line_start = prefix.rfind('\n').map(|i| i + 1).unwrap_or(0);
@@ -108,6 +134,7 @@ impl PieceTable {
             let right = Piece { buf: old.buf, start: old.start + inner,  len: old.len - inner };
             self.pieces.splice(pi..=pi, [left, new_piece, right]);
         }
+        self.invalidate();
     }
 
     /// Delete `len` bytes starting at `offset`. Returns deleted text.
@@ -123,7 +150,7 @@ impl PieceTable {
 
         // Collect deleted bytes for undo
         let deleted = {
-            let text = self.text();
+            let text = self.materialized();
             text[offset..end_offset].to_string()
         };
 
@@ -147,6 +174,7 @@ impl PieceTable {
         let splice_end = if ep < self.pieces.len() { ep + 1 } else { self.pieces.len() };
         self.pieces.splice(sp..splice_end, replacement);
 
+        self.invalidate();
         deleted
     }
 
@@ -262,5 +290,38 @@ mod tests {
         assert_eq!(t.text(), "hello world");
         t.delete(5, 6);
         assert_eq!(t.text(), "hello");
+    }
+
+    #[test]
+    fn cache_invalidates_on_edit() {
+        let mut t = PieceTable::new("ab\ncd");
+        // warm the cache
+        assert_eq!(t.line(1).as_deref(), Some("cd"));
+        t.insert(0, "X");
+        // a stale cache would still report the old line contents
+        assert_eq!(t.text(), "Xab\ncd");
+        assert_eq!(t.line(0).as_deref(), Some("Xab"));
+        t.delete(0, 1);
+        assert_eq!(t.line(0).as_deref(), Some("ab"));
+    }
+
+    #[test]
+    fn offset_to_pos_snaps_to_char_boundary() {
+        // "é" is two bytes (0xC3 0xA9); an offset of 1 lands mid-char.
+        let t = PieceTable::new("é\nx");
+        // must not panic and must clamp back to the start of the char
+        assert_eq!(t.offset_to_pos(1), (0, 0));
+        assert_eq!(t.offset_to_pos(2), (0, 2)); // end of line 0
+        assert_eq!(t.offset_to_pos(3), (1, 0)); // start of line 1
+    }
+
+    #[test]
+    fn repeated_line_reads_are_consistent() {
+        let t = PieceTable::new("one\ntwo\nthree");
+        for _ in 0..3 {
+            assert_eq!(t.line(0).as_deref(), Some("one"));
+            assert_eq!(t.line(2).as_deref(), Some("three"));
+            assert_eq!(t.line(3), None);
+        }
     }
 }
