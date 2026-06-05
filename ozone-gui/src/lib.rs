@@ -7,6 +7,7 @@ use ozone_buffer::BufferKind;
 use ozone_editor::{CommandContext, CommandRegistry, Workspace};
 use ozone_editor::commands::register_defaults;
 use ozone_syntax::{Filetype, ScanState, TokenKind, scan_line};
+use ozone_config::{Config, LineNumbers};
 
 // ---------------------------------------------------------------------------
 // SendableCanvas + SharedCanvas wrappers
@@ -45,15 +46,21 @@ impl Element for SharedCanvas {
 pub struct OzoneGui {
     workspace: Arc<Mutex<Workspace>>,
     commands: Arc<CommandRegistry>,
+    config: Arc<Config>,
 }
 
 impl OzoneGui {
     pub fn new(workspace: Workspace) -> Self {
+        Self::with_config(workspace, Config::default_config())
+    }
+
+    pub fn with_config(workspace: Workspace, config: Config) -> Self {
         let mut reg = CommandRegistry::new();
         register_defaults(&mut reg);
         Self {
             workspace: Arc::new(Mutex::new(workspace)),
             commands: Arc::new(reg),
+            config: Arc::new(config),
         }
     }
 
@@ -65,10 +72,11 @@ impl OzoneGui {
 
         let raw_canvas = Canvas::new(W, H, RendererBackend::Cpu)?;
         let workspace_for_draw = self.workspace.clone();
+        let config_for_draw = self.config.clone();
 
         raw_canvas.set_draw_callback(move |ctx| {
             let ws = workspace_for_draw.lock().unwrap();
-            draw_editor(ctx, &ws)
+            draw_editor(ctx, &ws, &config_for_draw)
         })?;
 
         let canvas_arc = Arc::new(Mutex::new(SendableCanvas(raw_canvas)));
@@ -160,7 +168,8 @@ impl OzoneGui {
             if needs_redraw {
                 let mut canvas = canvas_arc.lock().unwrap();
                 let ws = self.workspace.lock().unwrap();
-                canvas.draw(|ctx| draw_editor(ctx, &ws))?;
+                let config = self.config.clone();
+                canvas.draw(|ctx| draw_editor(ctx, &ws, &config))?;
                 canvas.invalidate_all();
             }
 
@@ -360,20 +369,22 @@ const PAD:      f32 = 8.0;
 const STATUS_H: f32 = 28.0;
 const EDITOR_TOP_PAD: f32 = 10.0;
 
-fn editor_font() -> Font { Font::new("Consolas", 14.0) }
+fn editor_font(config: &Config) -> Font {
+    Font::new(&config.editor.font, config.editor.font_size)
+}
 
 // ---------------------------------------------------------------------------
 // draw_editor
 // ---------------------------------------------------------------------------
 
-fn draw_editor(ctx: &mut dyn DrawingContext, ws: &Workspace) -> AureaResult<()> {
+fn draw_editor(ctx: &mut dyn DrawingContext, ws: &Workspace, config: &Config) -> AureaResult<()> {
     let width  = ctx.width()  as f32;
     let height = ctx.height() as f32;
 
     ctx.clear(BG)?;
 
-    let font   = editor_font();
-    let line_h = font.size * 1.4;
+    let font   = editor_font(config);
+    let line_h = font.size * config.editor.line_height;
     let content_top = EDITOR_TOP_PAD;
     let content_h = (height - content_top - STATUS_H).max(0.0);
 
@@ -429,10 +440,23 @@ fn draw_editor(ctx: &mut dyn DrawingContext, ws: &Workspace) -> AureaResult<()> 
             ctx.draw_rect(Rect::new(0.0, line_top + 1.0, width, line_h - 1.0), &solid(CURSOR_LINE))?;
         }
 
-        // Gutter line number
-        let num = format!("{:>4}", line_idx + 1);
-        let ng  = if is_cursor { GUTTER_ACT } else { GUTTER_FG };
-        ctx.draw_text_with_font(&num, Point::new(4.0, baseline), &font, &solid(ng))?;
+        // Gutter line number (absolute / relative / off per config)
+        let gutter_label = match config.editor.line_numbers {
+            LineNumbers::Off => None,
+            LineNumbers::Absolute => Some(format!("{:>4}", line_idx + 1)),
+            LineNumbers::Relative => {
+                if is_cursor {
+                    Some(format!("{:<4}", line_idx + 1))
+                } else {
+                    let dist = line_idx.abs_diff(view.cursor.line);
+                    Some(format!("{:>4}", dist))
+                }
+            }
+        };
+        if let Some(num) = gutter_label {
+            let ng = if is_cursor { GUTTER_ACT } else { GUTTER_FG };
+            ctx.draw_text_with_font(&num, Point::new(4.0, baseline), &font, &solid(ng))?;
+        }
 
         // Line text with syntax
         if let Some(line_text) = buf.line(line_idx) {

@@ -6,7 +6,9 @@ use std::path::PathBuf;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
-    let _config = Config::default_config();
+    // Load user config (~/.config/ozone/config.toml or %APPDATA%\ozone\config.toml),
+    // falling back to defaults when absent or malformed.
+    let config = Config::load_user();
 
     let mut workspace = Workspace::new();
 
@@ -18,7 +20,7 @@ fn main() {
         }
     }
 
-    let gui = OzoneGui::new(workspace);
+    let gui = OzoneGui::with_config(workspace, config);
 
     if let Err(e) = gui.run() {
         eprintln!("ozone: fatal: {e}");

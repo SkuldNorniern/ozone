@@ -1,0 +1,24 @@
+# Ozone configuration (reference / default).
+#
+# Copy this to your user config location to customize:
+#   Windows: %APPDATA%\ozone\config.toml
+#   Linux/macOS: ~/.config/ozone/config.toml
+#
+# Every field is optional — anything omitted (or invalid) falls back to the
+# built-in default, so a partial or broken file never breaks the editor.
+
+[editor]
+font         = "Consolas"     # any installed font family
+font_size    = 13             # points
+line_height  = 1.4            # multiplier applied to font_size
+tab_width    = 4
+soft_tabs    = true
+line_numbers = "relative"     # "off" | "absolute" | "relative"
+cursor_style = "bar"          # "block" | "bar" | "underline"
+scroll_off   = 8
+word_wrap    = false
+trim_trailing_whitespace = true
+auto_save    = false
+
+[theme]
+name = "catppuccin-mocha"
