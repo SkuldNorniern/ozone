@@ -1,0 +1,9 @@
+[package]
+name = "ozone-gui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ozone-editor = { workspace = true }
+ozone-buffer = { workspace = true }
+aurea        = { workspace = true }

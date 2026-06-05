@@ -1,0 +1,28 @@
+[package]
+name = "ozone"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+members = [
+    "ozone-buffer",
+    "ozone-editor",
+    "ozone-gui",
+    "ozone-syntax",
+    "ozone-config",
+]
+resolver = "2"
+
+[workspace.dependencies]
+aurea       = { path = "../aurea" }
+toml        = "0.8"
+ozone-buffer = { path = "ozone-buffer" }
+ozone-editor = { path = "ozone-editor" }
+ozone-gui    = { path = "ozone-gui" }
+ozone-syntax = { path = "ozone-syntax" }
+ozone-config = { path = "ozone-config" }
+
+[dependencies]
+ozone-editor = { workspace = true }
+ozone-gui    = { workspace = true }
+ozone-config = { workspace = true }
