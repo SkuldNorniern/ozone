@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use aurea::render::{Canvas, Color, DrawingContext, Font, Paint, PaintStyle, Point, Rect, RendererBackend};
 use aurea::{AureaResult, Element, Window, WindowEvent};
 use ozone_buffer::{BufferId, BufferKind};
-use ozone_editor::{AutocommandRegistry, CommandContext, CommandRegistry, EditorEvent, KeyStroke, Keymap, KeymapOutcome, PaneTree, SplitAxis, ViewId, Workspace};
+use ozone_editor::{AutocommandRegistry, CommandContext, CommandRegistry, EditorEvent, IndentConfig, KeyStroke, Keymap, KeymapOutcome, PaneTree, SplitAxis, ViewId, Workspace, matching_bracket};
 use ozone_editor::commands::register_defaults;
 use ozone_syntax::{Filetype, ScanState, TokenKind, scan_line};
 use ozone_config::{Config, CursorStyle, LineNumbers};
@@ -57,6 +57,12 @@ impl OzoneGui {
     }
 
     pub fn with_config(mut workspace: Workspace, config: Config) -> Self {
+        // Editing uses the configured indentation.
+        workspace.indent = IndentConfig {
+            width: config.editor.tab_width,
+            soft_tabs: config.editor.soft_tabs,
+        };
+
         let mut reg = CommandRegistry::new();
         register_defaults(&mut reg);
         let autocmds = AutocommandRegistry::from_config(&config.autocmds);
@@ -295,7 +301,8 @@ fn handle_key(
     // Fallbacks for keys that are not bound commands.
     if !mods.ctrl && !mods.alt {
         if key == Tab {
-            return insert_text_raw("    ", ws); // soft tab
+            let unit = ws.indent.unit(); // soft tab / tab per config
+            return insert_text_raw(&unit, ws);
         }
         if allow_text_fallback && let Some(ch) = keycode_to_char(key, mods.shift) {
             let mut buf = [0u8; 4];
@@ -518,6 +525,7 @@ const BORDER:       Color = Color::rgb(49,  50,  68);
 const CURSOR_BG:    Color = Color::rgba(245, 224, 220, 220);
 const CURSOR_LINE:  Color = Color::rgba(49,  50,  68, 140);
 const ACTIVE_PANE_BORDER: Color = Color::rgb(137, 180, 250);
+const BRACKET_MATCH: Color = Color::rgba(137, 180, 250, 70);
 const SCROLLBAR_THUMB: Color = Color::rgba(88, 91, 112, 180);
 
 // Catppuccin Mocha syntax palette
@@ -654,6 +662,13 @@ fn draw_view(
     let gutter_w    = gutter_width(line_count, metrics.char_w, config.editor.line_numbers);
     let text_x      = rect.x + gutter_w + PAD;
 
+    // Matching-bracket pair for the active cursor (highlighted behind the glyphs).
+    let bracket_pair = if is_active_pane {
+        matching_bracket(buf, view.cursor)
+    } else {
+        None
+    };
+
     // Gutter strip
     if gutter_w > 0.0 {
         ctx.draw_rect(Rect::new(rect.x, rect.y, gutter_w, rect.height), &solid(GUTTER_BG))?;
@@ -682,6 +697,19 @@ fn draw_view(
         // Cursor-line highlight
         if is_cursor && is_active_pane {
             ctx.draw_rect(Rect::new(rect.x, line_top + 1.0, rect.width, line_h - 1.0), &solid(CURSOR_LINE))?;
+        }
+
+        // Matching-bracket boxes (behind the glyphs).
+        if let Some((p1, p2)) = bracket_pair {
+            for bp in [p1, p2] {
+                if bp.line == line_idx {
+                    let bx = text_x + bp.col as f32 * metrics.char_w;
+                    ctx.draw_rect(
+                        Rect::new(bx, line_top + 1.0, metrics.char_w, line_h - 2.0),
+                        &solid(BRACKET_MATCH),
+                    )?;
+                }
+            }
         }
 
         // Gutter line number (absolute / relative / off per config)

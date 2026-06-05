@@ -221,15 +221,32 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
         }
     });
 
-    reg.register("edit.insert-newline", "Insert a newline at cursor", |ctx| {
-        let view = ctx.workspace.views.get(&ctx.view_id).unwrap();
-        let cursor = view.cursor;
+    reg.register("edit.insert-newline", "Insert a newline, preserving indentation", |ctx| {
+        let cursor = ctx.workspace.views.get(&ctx.view_id).unwrap().cursor;
+        let indent_unit = ctx.workspace.indent.unit();
+
+        // Smart indent: copy the current line's leading whitespace, and add one
+        // level when the text before the cursor ends with an opening bracket.
+        let indent = {
+            let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
+            let line_text = buf.line(cursor.line).unwrap_or_default();
+            let lead = leading_whitespace(&line_text);
+            let before = &line_text[..cursor.col.min(line_text.len())];
+            let opens_block = before.trim_end().ends_with(['{', '(', '[']);
+            if opens_block {
+                format!("{lead}{indent_unit}")
+            } else {
+                lead.to_string()
+            }
+        };
+
+        let insert = format!("\n{indent}");
         let buf = ctx.workspace.buffers.get_mut(&ctx.buffer_id).unwrap();
-        let delta = buf.insert(cursor, "\n");
+        let delta = buf.insert(cursor, &insert);
         let cursor = {
             let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
-            view.cursor = Pos::new(cursor.line + 1, 0);
-            view.col_memory = 0;
+            view.cursor = Pos::new(cursor.line + 1, indent.len());
+            view.col_memory = view.cursor.col;
             view.cursor
         };
         ctx.workspace.emit(EditorEvent::BufferChanged { id: ctx.buffer_id, delta });
@@ -560,6 +577,15 @@ fn is_word_char(c: u8) -> bool {
     c.is_ascii_alphanumeric() || c == b'_'
 }
 
+/// The leading run of spaces/tabs at the start of `line`.
+fn leading_whitespace(line: &str) -> &str {
+    let end = line
+        .bytes()
+        .position(|b| b != b' ' && b != b'\t')
+        .unwrap_or(line.len());
+    &line[..end]
+}
+
 #[cfg(test)]
 mod tests {
     use super::{collect_workspace_files, is_ignored_name, trailing_whitespace_ranges};
@@ -610,6 +636,52 @@ mod tests {
         let files = collect_workspace_files(&base, 3);
         assert!(files.len() <= 3);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn leading_whitespace_extracts_indent() {
+        assert_eq!(super::leading_whitespace("    foo"), "    ");
+        assert_eq!(super::leading_whitespace("\t\tbar"), "\t\t");
+        assert_eq!(super::leading_whitespace("none"), "");
+        assert_eq!(super::leading_whitespace("   "), "   ");
+    }
+
+    fn run_newline(content: &str, cursor_col: usize) -> (Option<String>, ozone_buffer::Pos) {
+        use crate::{CommandRegistry, Workspace};
+        use ozone_buffer::Pos;
+        let mut reg = CommandRegistry::new();
+        super::register_defaults(&mut reg);
+        let mut ws = Workspace::new();
+        let buf_id = ws.active_buffer().unwrap().id;
+        let view_id = ws.active_view_id.unwrap();
+        ws.buffers.get_mut(&buf_id).unwrap().insert(Pos::new(0, 0), content);
+        ws.views.get_mut(&view_id).unwrap().cursor = Pos::new(0, cursor_col);
+        let mut ctx = super::CommandContext::new(&mut ws).unwrap();
+        reg.execute("edit.insert-newline", &mut ctx);
+        let line1 = ws.buffers.get(&buf_id).unwrap().line(1);
+        (line1, ws.active_view().unwrap().cursor)
+    }
+
+    #[test]
+    fn newline_preserves_indentation() {
+        let (line1, cursor) = run_newline("    foo", 7);
+        assert_eq!(line1.as_deref(), Some("    "));
+        assert_eq!(cursor, ozone_buffer::Pos::new(1, 4));
+    }
+
+    #[test]
+    fn newline_adds_level_after_opening_brace() {
+        // default indent is 4 soft spaces; line has no lead but ends with '{'
+        let (line1, cursor) = run_newline("fn x() {", 8);
+        assert_eq!(line1.as_deref(), Some("    "));
+        assert_eq!(cursor, ozone_buffer::Pos::new(1, 4));
+    }
+
+    #[test]
+    fn newline_plain_line_has_no_indent() {
+        let (line1, cursor) = run_newline("hello", 5);
+        assert_eq!(line1.as_deref(), Some(""));
+        assert_eq!(cursor, ozone_buffer::Pos::new(1, 0));
     }
 }
 

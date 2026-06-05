@@ -7,12 +7,37 @@ use crate::events::EditorEvent;
 use crate::pane::{FocusDirection, PaneTree, SplitAxis};
 use crate::view::{View, ViewId};
 
+/// Indentation settings used by editing commands (smart indent, soft tabs).
+#[derive(Debug, Clone, Copy)]
+pub struct IndentConfig {
+    pub width: usize,
+    pub soft_tabs: bool,
+}
+
+impl Default for IndentConfig {
+    fn default() -> Self {
+        Self { width: 4, soft_tabs: true }
+    }
+}
+
+impl IndentConfig {
+    /// One indentation level as a string (spaces or a tab).
+    pub fn unit(&self) -> String {
+        if self.soft_tabs {
+            " ".repeat(self.width.max(1))
+        } else {
+            "\t".to_string()
+        }
+    }
+}
+
 /// Top-level state: all buffers and views.
 pub struct Workspace {
     pub buffers: HashMap<BufferId, Buffer>,
     pub views: HashMap<ViewId, View>,
     pub active_view_id: Option<ViewId>,
     pub panes: Option<PaneTree>,
+    pub indent: IndentConfig,
     events: Vec<EditorEvent>,
 }
 
@@ -23,6 +48,7 @@ impl Workspace {
             views: HashMap::new(),
             active_view_id: None,
             panes: None,
+            indent: IndentConfig::default(),
             events: Vec::new(),
         };
         // Always have a *scratch* buffer open.
