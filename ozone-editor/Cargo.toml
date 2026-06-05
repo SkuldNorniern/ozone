@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 ozone-buffer = { workspace = true }
+ozone-config = { workspace = true }
