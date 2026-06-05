@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use aurea::render::{Canvas, Color, DrawingContext, Font, Paint, PaintStyle, Point, Rect, RendererBackend};
 use aurea::{AureaResult, Element, Window, WindowEvent};
-use ozone_buffer::BufferKind;
-use ozone_editor::{CommandContext, CommandRegistry, Workspace};
+use ozone_buffer::{BufferId, BufferKind};
+use ozone_editor::{AutocommandRegistry, CommandContext, CommandRegistry, EditorEvent, Workspace};
 use ozone_editor::commands::register_defaults;
 use ozone_syntax::{Filetype, ScanState, TokenKind, scan_line};
 use ozone_config::{Config, CursorStyle, LineNumbers};
@@ -47,6 +47,7 @@ pub struct OzoneGui {
     workspace: Arc<Mutex<Workspace>>,
     commands: Arc<CommandRegistry>,
     config: Arc<Config>,
+    autocmds: Arc<AutocommandRegistry>,
 }
 
 impl OzoneGui {
@@ -54,13 +55,16 @@ impl OzoneGui {
         Self::with_config(workspace, Config::default_config())
     }
 
-    pub fn with_config(workspace: Workspace, config: Config) -> Self {
+    pub fn with_config(mut workspace: Workspace, config: Config) -> Self {
         let mut reg = CommandRegistry::new();
         register_defaults(&mut reg);
+        let autocmds = AutocommandRegistry::from_config(&config.autocmds);
+        dispatch_autocmds(&mut workspace, &reg, &autocmds);
         Self {
             workspace: Arc::new(Mutex::new(workspace)),
             commands: Arc::new(reg),
             config: Arc::new(config),
+            autocmds: Arc::new(autocmds),
         }
     }
 
@@ -121,6 +125,7 @@ impl OzoneGui {
                             !has_text_input,
                             &mut self.workspace.lock().unwrap(),
                             &self.commands,
+                            &self.autocmds,
                         ) {
                             needs_redraw = true;
                         }
@@ -129,7 +134,9 @@ impl OzoneGui {
                     // Text input is the primary edit path. KeyInput handles commands
                     // and provides a simple ASCII fallback for backends without WM_CHAR.
                     WindowEvent::TextInput { text } => {
-                        if insert_text_raw(&text, &mut self.workspace.lock().unwrap()) {
+                        let mut ws = self.workspace.lock().unwrap();
+                        if insert_text_raw(&text, &mut ws) {
+                            dispatch_autocmds(&mut ws, &self.commands, &self.autocmds);
                             needs_redraw = true;
                         }
                     }
@@ -208,6 +215,7 @@ fn handle_key(
     allow_text_fallback: bool,
     ws: &mut Workspace,
     reg: &CommandRegistry,
+    autocmds: &AutocommandRegistry,
 ) -> bool {
     use aurea::KeyCode::*;
 
@@ -233,7 +241,7 @@ fn handle_key(
             _ => None,
         };
         if let Some(name) = cmd {
-            run_cmd(name, ws, reg);
+            run_cmd(name, ws, reg, autocmds);
             return true;
         }
         return false;
@@ -258,7 +266,7 @@ fn handle_key(
         };
 
         if let Some(name) = cmd {
-            run_cmd(name, ws, reg);
+            run_cmd(name, ws, reg, autocmds);
             return true;
         }
 
@@ -275,12 +283,84 @@ fn handle_key(
     false
 }
 
-fn run_cmd(name: &str, ws: &mut Workspace, reg: &CommandRegistry) {
+fn run_cmd(name: &str, ws: &mut Workspace, reg: &CommandRegistry, autocmds: &AutocommandRegistry) {
+    if name == "file.save" {
+        if let Some(buffer_id) = ws.active_view().map(|view| view.buffer_id) {
+            run_pre_save_autocmds(buffer_id, ws, reg, autocmds);
+        }
+    } else if name == "file.save-all" {
+        let ids: Vec<_> = ws.buffers.keys().copied().collect();
+        for id in ids {
+            run_pre_save_autocmds(id, ws, reg, autocmds);
+        }
+    }
+
+    execute_command(name, ws, reg);
+    dispatch_autocmds(ws, reg, autocmds);
+}
+
+fn execute_command(name: &str, ws: &mut Workspace, reg: &CommandRegistry) {
     if let Some(mut ctx) = CommandContext::new(ws) {
         reg.execute(name, &mut ctx);
     }
     if let Some(view) = ws.active_view_mut() {
         view.scroll_to_cursor(view.page_height.max(1));
+    }
+}
+
+fn run_pre_save_autocmds(
+    buffer_id: BufferId,
+    ws: &mut Workspace,
+    reg: &CommandRegistry,
+    autocmds: &AutocommandRegistry,
+) {
+    let path = ws.buffers.get(&buffer_id).and_then(|buf| match &buf.kind {
+        BufferKind::File(path) => Some(path.clone()),
+        _ => None,
+    });
+    let Some(path) = path else {
+        return;
+    };
+
+    let event = EditorEvent::BufferPreSave { id: buffer_id, path };
+    let commands: Vec<String> = autocmds
+        .matching_commands(&event)
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    for command in commands {
+        if command == "file.save" || command == "file.save-all" {
+            continue;
+        }
+        execute_command(&command, ws, reg);
+    }
+}
+
+fn dispatch_autocmds(ws: &mut Workspace, reg: &CommandRegistry, autocmds: &AutocommandRegistry) {
+    const MAX_AUTOCMD_ROUNDS: usize = 16;
+
+    for _ in 0..MAX_AUTOCMD_ROUNDS {
+        let events = ws.drain_events();
+        if events.is_empty() {
+            break;
+        }
+
+        let commands: Vec<String> = events
+            .iter()
+            .flat_map(|event| autocmds.matching_commands(event))
+            .map(str::to_string)
+            .collect();
+
+        if commands.is_empty() {
+            continue;
+        }
+
+        for command in commands {
+            if command == "file.save" || command == "file.save-all" {
+                continue;
+            }
+            execute_command(&command, ws, reg);
+        }
     }
 }
 
@@ -293,13 +373,18 @@ fn insert_text_raw(text: &str, ws: &mut Workspace) -> bool {
     let buf_id = view.buffer_id;
 
     if let Some(buf) = ws.buffers.get_mut(&buf_id) {
-        buf.insert(cursor, &filtered);
+        let delta = buf.insert(cursor, &filtered);
         let chars = filtered.chars().count();
-        if let Some(view) = ws.active_view_mut() {
+        let cursor_event = ws.active_view_mut().map(|view| {
             view.cursor.col += chars;
             view.col_memory = view.cursor.col;
             view.scroll_to_cursor(view.page_height.max(1));
+            EditorEvent::CursorMoved { view_id: view.id, pos: view.cursor }
+        });
+        if let Some(event) = cursor_event {
+            ws.emit(event);
         }
+        ws.emit(EditorEvent::BufferChanged { id: buf_id, delta });
         return true;
     }
     false

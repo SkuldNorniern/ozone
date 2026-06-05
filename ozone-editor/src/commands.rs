@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use ozone_buffer::{BufferId, Pos};
 
+use crate::events::EditorEvent;
 use crate::view::ViewId;
 use crate::workspace::Workspace;
 
@@ -69,6 +70,7 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
 
     reg.register("cursor.move-left", "Move cursor one character left", |ctx| {
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+        let old = view.cursor;
         view.selection = None;
         if view.cursor.col > 0 {
             view.cursor.col -= 1;
@@ -78,11 +80,13 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
             view.cursor.col = buf.line_len(view.cursor.line);
         }
         view.col_memory = view.cursor.col;
+        emit_cursor_moved(ctx, old);
     });
 
     reg.register("cursor.move-right", "Move cursor one character right", |ctx| {
         let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+        let old = view.cursor;
         view.selection = None;
         let line_len = buf.line_len(view.cursor.line);
         if view.cursor.col < line_len {
@@ -92,60 +96,73 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
             view.cursor.col = 0;
         }
         view.col_memory = view.cursor.col;
+        emit_cursor_moved(ctx, old);
     });
 
     reg.register("cursor.move-up", "Move cursor one line up", |ctx| {
         let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+        let old = view.cursor;
         view.selection = None;
         if view.cursor.line > 0 {
             view.cursor.line -= 1;
             let target_col = view.col_memory;
             view.cursor.col = target_col.min(buf.line_len(view.cursor.line));
         }
+        emit_cursor_moved(ctx, old);
     });
 
     reg.register("cursor.move-down", "Move cursor one line down", |ctx| {
         let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+        let old = view.cursor;
         view.selection = None;
         if view.cursor.line + 1 < buf.line_count() {
             view.cursor.line += 1;
             let target_col = view.col_memory;
             view.cursor.col = target_col.min(buf.line_len(view.cursor.line));
         }
+        emit_cursor_moved(ctx, old);
     });
 
     reg.register("cursor.line-start", "Move cursor to line start", |ctx| {
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+        let old = view.cursor;
         view.selection = None;
         view.cursor.col = 0;
         view.col_memory = 0;
+        emit_cursor_moved(ctx, old);
     });
 
     reg.register("cursor.line-end", "Move cursor to line end", |ctx| {
         let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+        let old = view.cursor;
         view.selection = None;
         view.cursor.col = buf.line_len(view.cursor.line);
         view.col_memory = view.cursor.col;
+        emit_cursor_moved(ctx, old);
     });
 
     reg.register("cursor.file-start", "Move cursor to file start", |ctx| {
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+        let old = view.cursor;
         view.selection = None;
         view.cursor = Pos::zero();
         view.col_memory = 0;
         view.scroll_line = 0;
+        emit_cursor_moved(ctx, old);
     });
 
     reg.register("cursor.file-end", "Move cursor to file end", |ctx| {
         let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+        let old = view.cursor;
         view.selection = None;
         let last_line = buf.line_count().saturating_sub(1);
         view.cursor = Pos::new(last_line, buf.line_len(last_line));
         view.col_memory = view.cursor.col;
+        emit_cursor_moved(ctx, old);
     });
 
     // --- editing ---
@@ -158,19 +175,33 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
         if cursor.col > 0 {
             let offset = buf.pos_to_offset(cursor) - 1;
             let buf = ctx.workspace.buffers.get_mut(&ctx.buffer_id).unwrap();
-            buf.delete_at(offset, 1);
-            let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
-            view.cursor.col -= 1;
-            view.col_memory = view.cursor.col;
+            let delta = buf.delete_at(offset, 1);
+            let cursor = {
+                let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+                view.cursor.col -= 1;
+                view.col_memory = view.cursor.col;
+                view.cursor
+            };
+            if let Some(delta) = delta {
+                ctx.workspace.emit(EditorEvent::BufferChanged { id: ctx.buffer_id, delta });
+            }
+            ctx.workspace.emit(EditorEvent::CursorMoved { view_id: ctx.view_id, pos: cursor });
         } else if cursor.line > 0 {
             // Join with previous line
             let prev_line_len = buf.line_len(cursor.line - 1);
             let offset = buf.pos_to_offset(Pos::new(cursor.line - 1, prev_line_len));
             let buf = ctx.workspace.buffers.get_mut(&ctx.buffer_id).unwrap();
-            buf.delete_at(offset, 1); // delete the '\n'
-            let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
-            view.cursor = Pos::new(cursor.line - 1, prev_line_len);
-            view.col_memory = view.cursor.col;
+            let delta = buf.delete_at(offset, 1); // delete the '\n'
+            let cursor = {
+                let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+                view.cursor = Pos::new(cursor.line - 1, prev_line_len);
+                view.col_memory = view.cursor.col;
+                view.cursor
+            };
+            if let Some(delta) = delta {
+                ctx.workspace.emit(EditorEvent::BufferChanged { id: ctx.buffer_id, delta });
+            }
+            ctx.workspace.emit(EditorEvent::CursorMoved { view_id: ctx.view_id, pos: cursor });
         }
     });
 
@@ -182,7 +213,9 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
         let total = buf.text().len();
         if offset < total {
             let buf = ctx.workspace.buffers.get_mut(&ctx.buffer_id).unwrap();
-            buf.delete_at(offset, 1);
+            if let Some(delta) = buf.delete_at(offset, 1) {
+                ctx.workspace.emit(EditorEvent::BufferChanged { id: ctx.buffer_id, delta });
+            }
         }
     });
 
@@ -190,18 +223,25 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
         let view = ctx.workspace.views.get(&ctx.view_id).unwrap();
         let cursor = view.cursor;
         let buf = ctx.workspace.buffers.get_mut(&ctx.buffer_id).unwrap();
-        buf.insert(cursor, "\n");
-        let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
-        view.cursor = Pos::new(cursor.line + 1, 0);
-        view.col_memory = 0;
+        let delta = buf.insert(cursor, "\n");
+        let cursor = {
+            let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+            view.cursor = Pos::new(cursor.line + 1, 0);
+            view.col_memory = 0;
+            view.cursor
+        };
+        ctx.workspace.emit(EditorEvent::BufferChanged { id: ctx.buffer_id, delta });
+        ctx.workspace.emit(EditorEvent::CursorMoved { view_id: ctx.view_id, pos: cursor });
     });
 
     reg.register("edit.undo", "Undo last edit", |ctx| {
         let buf = ctx.workspace.buffers.get_mut(&ctx.buffer_id).unwrap();
         if let Some(pos) = buf.undo() {
             let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+            let old = view.cursor;
             view.cursor = pos;
             view.col_memory = pos.col;
+            emit_cursor_moved(ctx, old);
         }
     });
 
@@ -209,21 +249,44 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
         let buf = ctx.workspace.buffers.get_mut(&ctx.buffer_id).unwrap();
         if let Some(pos) = buf.redo() {
             let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+            let old = view.cursor;
             view.cursor = pos;
             view.col_memory = pos.col;
+            emit_cursor_moved(ctx, old);
+        }
+    });
+
+    reg.register("edit.trim-trailing-whitespace", "Trim trailing spaces and tabs", |ctx| {
+        let ranges = {
+            let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
+            trailing_whitespace_ranges(&buf.text())
+        };
+        if ranges.is_empty() {
+            return;
+        }
+
+        let mut deltas = Vec::new();
+        let buf = ctx.workspace.buffers.get_mut(&ctx.buffer_id).unwrap();
+        for (offset, len) in ranges.into_iter().rev() {
+            if let Some(delta) = buf.delete_at(offset, len) {
+                deltas.push(delta);
+            }
+        }
+        for delta in deltas {
+            ctx.workspace.emit(EditorEvent::BufferChanged { id: ctx.buffer_id, delta });
         }
     });
 
     // --- file ---
 
     reg.register("file.save", "Save the current buffer", |ctx| {
-        let buf = ctx.workspace.buffers.get_mut(&ctx.buffer_id).unwrap();
-        let _ = buf.save();
+        let _ = ctx.workspace.save_buffer(ctx.buffer_id);
     });
 
     reg.register("file.save-all", "Save all dirty buffers", |ctx| {
-        for buf in ctx.workspace.buffers.values_mut() {
-            let _ = buf.save();
+        let ids: Vec<_> = ctx.workspace.buffers.keys().copied().collect();
+        for id in ids {
+            let _ = ctx.workspace.save_buffer(id);
         }
     });
 
@@ -234,9 +297,11 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
         let view = ctx.workspace.views.get(&ctx.view_id).unwrap();
         let pos = word_forward(buf, view.cursor);
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+        let old = view.cursor;
         view.selection = None;
         view.cursor = pos;
         view.col_memory = pos.col;
+        emit_cursor_moved(ctx, old);
     });
 
     reg.register("cursor.word-backward", "Move cursor to start of previous word", |ctx| {
@@ -244,9 +309,11 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
         let view = ctx.workspace.views.get(&ctx.view_id).unwrap();
         let pos = word_backward(buf, view.cursor);
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+        let old = view.cursor;
         view.selection = None;
         view.cursor = pos;
         view.col_memory = pos.col;
+        emit_cursor_moved(ctx, old);
     });
 
     // --- page movement ---
@@ -255,21 +322,25 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
         let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
         let line_count = buf.line_count();
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+        let old = view.cursor;
         let page = view.page_height.max(1);
         view.cursor.line = (view.cursor.line + page).min(line_count.saturating_sub(1));
         view.cursor.col = view.cursor.col.min(buf.line_len(view.cursor.line));
         view.col_memory = view.cursor.col;
         view.scroll_line = (view.scroll_line + page).min(line_count.saturating_sub(1));
+        emit_cursor_moved(ctx, old);
     });
 
     reg.register("view.page-up", "Scroll up one page", |ctx| {
         let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+        let old = view.cursor;
         let page = view.page_height.max(1);
         view.cursor.line = view.cursor.line.saturating_sub(page);
         view.cursor.col = view.cursor.col.min(buf.line_len(view.cursor.line));
         view.col_memory = view.cursor.col;
         view.scroll_line = view.scroll_line.saturating_sub(page);
+        emit_cursor_moved(ctx, old);
     });
 
     // --- view scroll (without cursor move) ---
@@ -287,12 +358,58 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
     });
 }
 
+fn emit_cursor_moved(ctx: &mut CommandContext, old: Pos) {
+    let Some(view) = ctx.workspace.views.get(&ctx.view_id) else {
+        return;
+    };
+    if view.cursor != old {
+        ctx.workspace.emit(EditorEvent::CursorMoved { view_id: ctx.view_id, pos: view.cursor });
+    }
+}
+
+fn trailing_whitespace_ranges(text: &str) -> Vec<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let mut ranges = Vec::new();
+    let mut line_start = 0usize;
+    let mut i = 0usize;
+
+    while i <= bytes.len() {
+        if i == bytes.len() || bytes[i] == b'\n' {
+            let line_end = i;
+            let mut trim_start = line_end;
+            while trim_start > line_start && matches!(bytes[trim_start - 1], b' ' | b'\t') {
+                trim_start -= 1;
+            }
+            if trim_start < line_end {
+                ranges.push((trim_start, line_end - trim_start));
+            }
+            line_start = i + 1;
+        }
+        i += 1;
+    }
+
+    ranges
+}
+
 // ---------------------------------------------------------------------------
 // Word-movement helpers
 // ---------------------------------------------------------------------------
 
 fn is_word_char(c: u8) -> bool {
     c.is_ascii_alphanumeric() || c == b'_'
+}
+
+#[cfg(test)]
+mod tests {
+    use super::trailing_whitespace_ranges;
+
+    #[test]
+    fn finds_trailing_space_ranges() {
+        assert_eq!(
+            trailing_whitespace_ranges("a  \nb\t\nc\n  "),
+            vec![(1, 2), (5, 1), (9, 2)]
+        );
+    }
 }
 
 fn word_forward(buf: &ozone_buffer::Buffer, pos: Pos) -> Pos {
