@@ -63,6 +63,18 @@ impl PaneTree {
         out
     }
 
+    pub fn next_leaf_after(&self, current: ViewId) -> Option<ViewId> {
+        let leaves = self.leaves();
+        let idx = leaves.iter().position(|id| *id == current)?;
+        Some(leaves[(idx + 1) % leaves.len()])
+    }
+
+    pub fn previous_leaf_before(&self, current: ViewId) -> Option<ViewId> {
+        let leaves = self.leaves();
+        let idx = leaves.iter().position(|id| *id == current)?;
+        Some(leaves[(idx + leaves.len() - 1) % leaves.len()])
+    }
+
     pub fn first_leaf(&self) -> ViewId {
         match self {
             Self::Leaf { view_id } => *view_id,
@@ -176,5 +188,22 @@ mod tests {
         assert_eq!(tree.leaves(), vec![a, c]);
         assert_eq!(tree.remove_leaf(a), Some(a));
         assert_eq!(tree.leaves(), vec![c]);
+    }
+
+    #[test]
+    fn focus_order_wraps_through_leaves() {
+        let a = ViewId::next();
+        let b = ViewId::next();
+        let c = ViewId::next();
+        let mut tree = PaneTree::leaf(a);
+
+        assert!(tree.split_leaf(a, b, SplitAxis::Vertical, 0.5));
+        assert!(tree.split_leaf(b, c, SplitAxis::Horizontal, 0.5));
+
+        assert_eq!(tree.next_leaf_after(a), Some(b));
+        assert_eq!(tree.next_leaf_after(b), Some(c));
+        assert_eq!(tree.next_leaf_after(c), Some(a));
+        assert_eq!(tree.previous_leaf_before(a), Some(c));
+        assert_eq!(tree.previous_leaf_before(c), Some(b));
     }
 }

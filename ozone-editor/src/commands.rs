@@ -371,6 +371,14 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
     reg.register("pane.close", "Close the active pane", |ctx| {
         ctx.workspace.close_view(ctx.view_id);
     });
+
+    reg.register("pane.focus-next", "Focus the next pane", |ctx| {
+        ctx.workspace.focus_next_pane();
+    });
+
+    reg.register("pane.focus-previous", "Focus the previous pane", |ctx| {
+        ctx.workspace.focus_previous_pane();
+    });
 }
 
 fn emit_cursor_moved(ctx: &mut CommandContext, old: Pos) {

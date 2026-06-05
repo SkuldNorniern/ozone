@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use aurea::render::{Canvas, Color, DrawingContext, Font, Paint, PaintStyle, Point, Rect, RendererBackend};
 use aurea::{AureaResult, Element, Window, WindowEvent};
 use ozone_buffer::{BufferId, BufferKind};
-use ozone_editor::{AutocommandRegistry, CommandContext, CommandRegistry, EditorEvent, Workspace};
+use ozone_editor::{AutocommandRegistry, CommandContext, CommandRegistry, EditorEvent, PaneTree, SplitAxis, ViewId, Workspace};
 use ozone_editor::commands::register_defaults;
 use ozone_syntax::{Filetype, ScanState, TokenKind, scan_line};
 use ozone_config::{Config, CursorStyle, LineNumbers};
@@ -219,12 +219,29 @@ fn handle_key(
 ) -> bool {
     use aurea::KeyCode::*;
 
+    // Temporary pane focus shortcuts until the layered keymap system owns this.
+    if mods.ctrl && mods.alt {
+        let cmd = match key {
+            Right => Some("pane.focus-next"),
+            Left => Some("pane.focus-previous"),
+            _ => None,
+        };
+        if let Some(name) = cmd {
+            run_cmd(name, ws, reg, autocmds);
+            return true;
+        }
+        return false;
+    }
+
     // Ctrl shortcuts (no Alt)
     if mods.ctrl && !mods.alt {
         let cmd = match key {
             S if !mods.shift => Some("file.save"),
             Z if !mods.shift => Some("edit.undo"),
             Y if !mods.shift => Some("edit.redo"),
+            Right if mods.shift => Some("pane.split-right"),
+            Down if mods.shift => Some("pane.split-down"),
+            W if mods.shift => Some("pane.close"),
 
             // Emacs-style movement for the default non-modal editor.
             A if !mods.shift => Some("cursor.line-start"),
@@ -431,6 +448,7 @@ const STATUS_MODE_BG: Color = Color::rgb(49,  50,  68);
 const BORDER:       Color = Color::rgb(49,  50,  68);
 const CURSOR_BG:    Color = Color::rgba(245, 224, 220, 220);
 const CURSOR_LINE:  Color = Color::rgba(49,  50,  68, 140);
+const ACTIVE_PANE_BORDER: Color = Color::rgb(137, 180, 250);
 
 // Catppuccin Mocha syntax palette
 fn token_color(kind: TokenKind) -> Color {
@@ -455,6 +473,7 @@ const GUTTER_MIN_W: f32 = 52.0;
 const PAD:      f32 = 8.0;
 const STATUS_H: f32 = 28.0;
 const EDITOR_TOP_PAD: f32 = 10.0;
+const SPLIT_GAP: f32 = 4.0;
 
 fn editor_font(config: &Config) -> Font {
     Font::new(&config.editor.font, config.editor.font_size)
@@ -471,23 +490,74 @@ fn draw_editor(ctx: &mut dyn DrawingContext, ws: &Workspace, config: &Config) ->
     ctx.clear(BG)?;
 
     let font   = editor_font(config);
-    let line_h = font.size * config.editor.line_height;
-    let content_top = EDITOR_TOP_PAD;
-    let content_h = (height - content_top - STATUS_H).max(0.0);
-
     let metrics = ctx.measure_text("M", &font).ok();
     let char_w = metrics.as_ref().map(|m| m.advance).unwrap_or(font.size * 0.6);
     let text_ascent = metrics.as_ref().map(|m| m.ascent).unwrap_or(font.size * 0.8);
     let text_descent = metrics.as_ref().map(|m| m.descent).unwrap_or(font.size * 0.2);
 
-    let Some(view) = ws.active_view() else {
-        draw_status_bar(ctx, width, height, &font, ws)?;
+    let editor_rect = Rect::new(0.0, 0.0, width, (height - STATUS_H).max(0.0));
+    let metrics = TextMetrics { char_w, text_ascent, text_descent };
+
+    if let Some(panes) = &ws.panes {
+        draw_pane_tree(ctx, ws, config, panes, editor_rect, &font, metrics)?;
+    } else if let Some(view) = ws.active_view() {
+        draw_view(ctx, ws, config, view.id, editor_rect, &font, metrics)?;
+    }
+
+    draw_status_bar(ctx, width, height, &font, ws)?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TextMetrics {
+    char_w: f32,
+    text_ascent: f32,
+    text_descent: f32,
+}
+
+fn draw_pane_tree(
+    ctx: &mut dyn DrawingContext,
+    ws: &Workspace,
+    config: &Config,
+    tree: &PaneTree,
+    rect: Rect,
+    font: &Font,
+    metrics: TextMetrics,
+) -> AureaResult<()> {
+    match tree {
+        PaneTree::Leaf { view_id } => draw_view(ctx, ws, config, *view_id, rect, font, metrics),
+        PaneTree::Split { axis, ratio, first, second } => {
+            let (first_rect, second_rect, divider) = split_rect(rect, *axis, *ratio);
+            draw_pane_tree(ctx, ws, config, first, first_rect, font, metrics)?;
+            draw_pane_tree(ctx, ws, config, second, second_rect, font, metrics)?;
+            ctx.draw_rect(divider, &solid(BORDER))?;
+            Ok(())
+        }
+    }
+}
+
+fn draw_view(
+    ctx: &mut dyn DrawingContext,
+    ws: &Workspace,
+    config: &Config,
+    view_id: ViewId,
+    rect: Rect,
+    font: &Font,
+    metrics: TextMetrics,
+) -> AureaResult<()> {
+    let Some(view) = ws.views.get(&view_id) else {
         return Ok(());
     };
     let Some(buf) = ws.buffers.get(&view.buffer_id) else {
-        draw_status_bar(ctx, width, height, &font, ws)?;
         return Ok(());
     };
+
+    let is_active_pane = ws.active_view_id == Some(view_id);
+    let line_h = font.size * config.editor.line_height;
+    let content_top = rect.y + EDITOR_TOP_PAD;
+    let content_h = (rect.height - EDITOR_TOP_PAD).max(0.0);
+
+    ctx.draw_rect(rect, &solid(BG))?;
 
     // Filetype for syntax
     let ft = match &buf.kind {
@@ -498,12 +568,12 @@ fn draw_editor(ctx: &mut dyn DrawingContext, ws: &Workspace, config: &Config) ->
     let line_count  = buf.line_count();
     let scroll      = view.scroll_line;
     let visible     = ((content_h / line_h) as usize).max(1) + 1;
-    let gutter_w    = gutter_width(line_count, char_w, config.editor.line_numbers);
-    let text_x      = gutter_w + PAD;
+    let gutter_w    = gutter_width(line_count, metrics.char_w, config.editor.line_numbers);
+    let text_x      = rect.x + gutter_w + PAD;
 
     // Gutter strip
     if gutter_w > 0.0 {
-        ctx.draw_rect(Rect::new(0.0, 0.0, gutter_w, height), &solid(GUTTER_BG))?;
+        ctx.draw_rect(Rect::new(rect.x, rect.y, gutter_w, rect.height), &solid(GUTTER_BG))?;
     }
 
     // Pre-scan: walk from line 0 to scroll to find block-comment state.
@@ -521,14 +591,14 @@ fn draw_editor(ctx: &mut dyn DrawingContext, ws: &Workspace, config: &Config) ->
         if line_idx >= line_count { break; }
 
         let line_top = content_top + i as f32 * line_h;
-        if line_top >= content_top + content_h { break; }
+        if line_top >= content_top + content_h || line_top >= rect.y + rect.height { break; }
 
-        let baseline = baseline_in_rect(line_top, line_h, text_ascent, text_descent);
+        let baseline = baseline_in_rect(line_top, line_h, metrics.text_ascent, metrics.text_descent);
         let is_cursor = line_idx == view.cursor.line;
 
         // Cursor-line highlight
-        if is_cursor {
-            ctx.draw_rect(Rect::new(0.0, line_top + 1.0, width, line_h - 1.0), &solid(CURSOR_LINE))?;
+        if is_cursor && is_active_pane {
+            ctx.draw_rect(Rect::new(rect.x, line_top + 1.0, rect.width, line_h - 1.0), &solid(CURSOR_LINE))?;
         }
 
         // Gutter line number (absolute / relative / off per config)
@@ -546,7 +616,7 @@ fn draw_editor(ctx: &mut dyn DrawingContext, ws: &Workspace, config: &Config) ->
         };
         if let Some(num) = gutter_label {
             let ng = if is_cursor { GUTTER_ACT } else { GUTTER_FG };
-            let num_x = (gutter_w - PAD - num.len() as f32 * char_w).max(4.0);
+            let num_x = (rect.x + gutter_w - PAD - num.len() as f32 * metrics.char_w).max(rect.x + 4.0);
             ctx.draw_text_with_font(&num, Point::new(num_x, baseline), &font, &solid(ng))?;
         }
 
@@ -563,17 +633,17 @@ fn draw_editor(ctx: &mut dyn DrawingContext, ws: &Workspace, config: &Config) ->
                     &solid(token_color(TokenKind::Default)),
                 )?;
             } else {
-                draw_highlighted(ctx, &line_text, &spans, text_x, baseline, char_w, &font)?;
+                draw_highlighted(ctx, &line_text, &spans, text_x, baseline, metrics.char_w, &font)?;
             }
         }
 
-        if is_cursor {
+        if is_cursor && is_active_pane {
             draw_cursor(
                 ctx,
-                text_x + view.cursor.col as f32 * char_w,
+                text_x + view.cursor.col as f32 * metrics.char_w,
                 line_top,
                 line_h,
-                char_w,
+                metrics.char_w,
                 config.editor.cursor_style,
             )?;
         }
@@ -581,10 +651,13 @@ fn draw_editor(ctx: &mut dyn DrawingContext, ws: &Workspace, config: &Config) ->
 
     // Gutter divider
     if gutter_w > 0.0 {
-        ctx.draw_line(gutter_w, 0.0, gutter_w, height, &stroke(BORDER, 1.0))?;
+        ctx.draw_line(rect.x + gutter_w, rect.y, rect.x + gutter_w, rect.y + rect.height, &stroke(BORDER, 1.0))?;
     }
 
-    draw_status_bar(ctx, width, height, &font, ws)?;
+    if is_active_pane {
+        ctx.draw_rect(Rect::new(rect.x, rect.y, rect.width, 2.0), &solid(ACTIVE_PANE_BORDER))?;
+    }
+
     Ok(())
 }
 
@@ -642,7 +715,7 @@ fn draw_status_bar(
     ctx.draw_rect(Rect::new(0.0, bar_top, width, STATUS_H), &solid(STATUSBAR_BG))?;
     ctx.draw_line(0.0, bar_top, width, bar_top, &stroke(BORDER, 1.0))?;
 
-    let (mode, file_name, cursor_info, dirty, filetype) = if let (Some(view), Some(buf)) = (
+    let (mode, file_name, cursor_info, dirty, filetype, pane_info) = if let (Some(view), Some(buf)) = (
         ws.active_view(), ws.active_buffer(),
     ) {
         let file_name = match &buf.kind {
@@ -655,9 +728,10 @@ fn draw_status_bar(
             BufferKind::File(p) => filetype_label(Filetype::from_path(&p.to_string_lossy())),
             _ => filetype_label(Filetype::Plain),
         };
-        ("EDIT", file_name, cursor_info, dirty.to_string(), filetype)
+        let pane_info = pane_status(ws, view.id);
+        ("EDIT", file_name, cursor_info, dirty.to_string(), filetype, pane_info)
     } else {
-        ("", String::new(), String::new(), String::new(), "plain")
+        ("", String::new(), String::new(), String::new(), "plain", String::new())
     };
 
     let ascent = ctx
@@ -681,7 +755,11 @@ fn draw_status_bar(
     let left = format!("  {}{}    {}", file_name, dirty, cursor_info);
     ctx.draw_text_with_font(&left, Point::new(16.0 + mode_w, baseline), font, &solid(STATUSBAR_FG))?;
 
-    let right = format!("UTF-8  {}", filetype);
+    let right = if pane_info.is_empty() {
+        format!("UTF-8  {}", filetype)
+    } else {
+        format!("{}  UTF-8  {}", pane_info, filetype)
+    };
     let right_w = ctx
         .measure_text(&right, font)
         .map(|m| m.advance)
@@ -706,6 +784,34 @@ fn gutter_width(line_count: usize, char_w: f32, mode: LineNumbers) -> f32 {
     }
     let digits = line_count.max(1).to_string().len().max(2);
     GUTTER_MIN_W.max((digits as f32 + 2.0) * char_w + PAD)
+}
+
+fn split_rect(rect: Rect, axis: SplitAxis, ratio: f32) -> (Rect, Rect, Rect) {
+    let ratio = ratio.clamp(0.1, 0.9);
+    match axis {
+        SplitAxis::Vertical => {
+            let first_w = (rect.width * ratio - SPLIT_GAP / 2.0).max(0.0);
+            let divider_x = rect.x + first_w;
+            let second_x = divider_x + SPLIT_GAP;
+            let second_w = (rect.x + rect.width - second_x).max(0.0);
+            (
+                Rect::new(rect.x, rect.y, first_w, rect.height),
+                Rect::new(second_x, rect.y, second_w, rect.height),
+                Rect::new(divider_x, rect.y, SPLIT_GAP, rect.height),
+            )
+        }
+        SplitAxis::Horizontal => {
+            let first_h = (rect.height * ratio - SPLIT_GAP / 2.0).max(0.0);
+            let divider_y = rect.y + first_h;
+            let second_y = divider_y + SPLIT_GAP;
+            let second_h = (rect.y + rect.height - second_y).max(0.0);
+            (
+                Rect::new(rect.x, rect.y, rect.width, first_h),
+                Rect::new(rect.x, second_y, rect.width, second_h),
+                Rect::new(rect.x, divider_y, rect.width, SPLIT_GAP),
+            )
+        }
+    }
 }
 
 fn draw_cursor(
@@ -738,6 +844,20 @@ fn filetype_label(filetype: Filetype) -> &'static str {
         Filetype::Markdown => "markdown",
         Filetype::Plain => "plain",
     }
+}
+
+fn pane_status(ws: &Workspace, active: ViewId) -> String {
+    let Some(panes) = &ws.panes else {
+        return String::new();
+    };
+    let leaves = panes.leaves();
+    if leaves.len() <= 1 {
+        return String::new();
+    }
+    let Some(idx) = leaves.iter().position(|id| *id == active) else {
+        return String::new();
+    };
+    format!("pane {}/{}", idx + 1, leaves.len())
 }
 
 fn solid(c: Color) -> Paint { Paint::new().color(c).style(PaintStyle::Fill) }

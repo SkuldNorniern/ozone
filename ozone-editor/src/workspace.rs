@@ -111,8 +111,7 @@ impl Workspace {
 
     pub fn split_active_pane(&mut self, axis: SplitAxis) -> Option<ViewId> {
         let active_view_id = self.active_view_id?;
-        let buffer_id = self.views.get(&active_view_id)?.buffer_id;
-        let new_view = View::new(buffer_id);
+        let new_view = self.views.get(&active_view_id)?.duplicate_for_split();
         let new_view_id = new_view.id;
         self.views.insert(new_view_id, new_view);
 
@@ -128,6 +127,20 @@ impl Workspace {
         self.active_view_id = Some(new_view_id);
         self.emit(EditorEvent::PaneSplit { new_view_id });
         Some(new_view_id)
+    }
+
+    pub fn focus_next_pane(&mut self) -> Option<ViewId> {
+        let current = self.active_view_id?;
+        let next = self.panes.as_ref()?.next_leaf_after(current)?;
+        self.active_view_id = Some(next);
+        Some(next)
+    }
+
+    pub fn focus_previous_pane(&mut self) -> Option<ViewId> {
+        let current = self.active_view_id?;
+        let previous = self.panes.as_ref()?.previous_leaf_before(current)?;
+        self.active_view_id = Some(previous);
+        Some(previous)
     }
 
     pub fn close_view(&mut self, view_id: ViewId) -> bool {
@@ -191,13 +204,24 @@ mod tests {
     fn split_active_pane_creates_second_view_on_same_buffer() {
         let mut ws = Workspace::new();
         let original_view = ws.active_view_id.unwrap();
-        let original_buffer = ws.views.get(&original_view).unwrap().buffer_id;
+        {
+            let view = ws.views.get_mut(&original_view).unwrap();
+            view.cursor = ozone_buffer::Pos::new(4, 2);
+            view.scroll_line = 3;
+        }
+        let original = ws.views.get(&original_view).unwrap();
+        let original_buffer = original.buffer_id;
+        let original_cursor = original.cursor;
+        let original_scroll = original.scroll_line;
 
         let split_view = ws.split_active_pane(SplitAxis::Vertical).unwrap();
 
         assert_ne!(original_view, split_view);
         assert_eq!(ws.active_view_id, Some(split_view));
-        assert_eq!(ws.views.get(&split_view).unwrap().buffer_id, original_buffer);
+        let split = ws.views.get(&split_view).unwrap();
+        assert_eq!(split.buffer_id, original_buffer);
+        assert_eq!(split.cursor, original_cursor);
+        assert_eq!(split.scroll_line, original_scroll);
         assert_eq!(ws.panes.as_ref().unwrap().leaves(), vec![original_view, split_view]);
     }
 
@@ -219,5 +243,19 @@ mod tests {
 
         assert!(!ws.close_view(only_view));
         assert_eq!(ws.active_view_id, Some(only_view));
+    }
+
+    #[test]
+    fn focus_next_and_previous_wrap_between_panes() {
+        let mut ws = Workspace::new();
+        let first = ws.active_view_id.unwrap();
+        let second = ws.split_active_pane(SplitAxis::Vertical).unwrap();
+        let third = ws.split_active_pane(SplitAxis::Horizontal).unwrap();
+
+        assert_eq!(ws.active_view_id, Some(third));
+        assert_eq!(ws.focus_next_pane(), Some(first));
+        assert_eq!(ws.focus_next_pane(), Some(second));
+        assert_eq!(ws.focus_previous_pane(), Some(first));
+        assert_eq!(ws.focus_previous_pane(), Some(third));
     }
 }

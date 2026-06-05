@@ -41,6 +41,18 @@ impl View {
         }
     }
 
+    pub fn duplicate_for_split(&self) -> Self {
+        Self {
+            id: ViewId::next(),
+            buffer_id: self.buffer_id,
+            scroll_line: self.scroll_line,
+            cursor: self.cursor,
+            selection: self.selection,
+            col_memory: self.col_memory,
+            page_height: self.page_height,
+        }
+    }
+
     /// Ensure the cursor is visible within `visible_lines` lines.
     pub fn scroll_to_cursor(&mut self, visible_lines: usize) {
         if self.cursor.line < self.scroll_line {
