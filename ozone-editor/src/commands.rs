@@ -226,4 +226,137 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
             let _ = buf.save();
         }
     });
+
+    // --- word movement ---
+
+    reg.register("cursor.word-forward", "Move cursor to start of next word", |ctx| {
+        let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
+        let view = ctx.workspace.views.get(&ctx.view_id).unwrap();
+        let pos = word_forward(buf, view.cursor);
+        let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+        view.selection = None;
+        view.cursor = pos;
+        view.col_memory = pos.col;
+    });
+
+    reg.register("cursor.word-backward", "Move cursor to start of previous word", |ctx| {
+        let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
+        let view = ctx.workspace.views.get(&ctx.view_id).unwrap();
+        let pos = word_backward(buf, view.cursor);
+        let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+        view.selection = None;
+        view.cursor = pos;
+        view.col_memory = pos.col;
+    });
+
+    // --- page movement ---
+
+    reg.register("view.page-down", "Scroll down one page", |ctx| {
+        let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
+        let line_count = buf.line_count();
+        let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+        let page = view.page_height.max(1);
+        view.cursor.line = (view.cursor.line + page).min(line_count.saturating_sub(1));
+        view.cursor.col = view.cursor.col.min(buf.line_len(view.cursor.line));
+        view.col_memory = view.cursor.col;
+        view.scroll_line = (view.scroll_line + page).min(line_count.saturating_sub(1));
+    });
+
+    reg.register("view.page-up", "Scroll up one page", |ctx| {
+        let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
+        let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+        let page = view.page_height.max(1);
+        view.cursor.line = view.cursor.line.saturating_sub(page);
+        view.cursor.col = view.cursor.col.min(buf.line_len(view.cursor.line));
+        view.col_memory = view.cursor.col;
+        view.scroll_line = view.scroll_line.saturating_sub(page);
+    });
+
+    // --- view scroll (without cursor move) ---
+
+    reg.register("view.scroll-down", "Scroll view down one line", |ctx| {
+        let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
+        let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+        let max = buf.line_count().saturating_sub(1);
+        view.scroll_line = (view.scroll_line + 1).min(max);
+    });
+
+    reg.register("view.scroll-up", "Scroll view up one line", |ctx| {
+        let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+        view.scroll_line = view.scroll_line.saturating_sub(1);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Word-movement helpers
+// ---------------------------------------------------------------------------
+
+fn is_word_char(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || c == b'_'
+}
+
+fn word_forward(buf: &ozone_buffer::Buffer, pos: Pos) -> Pos {
+    let line_count = buf.line_count();
+    let mut line = pos.line;
+    let mut col = pos.col;
+
+    loop {
+        let line_text = match buf.line(line) {
+            Some(t) => t,
+            None => return Pos::new(line_count.saturating_sub(1), 0),
+        };
+        let bytes = line_text.as_bytes();
+
+        // Skip current word chars
+        while col < bytes.len() && is_word_char(bytes[col]) {
+            col += 1;
+        }
+        // Skip non-word chars
+        while col < bytes.len() && !is_word_char(bytes[col]) {
+            col += 1;
+        }
+
+        if col < bytes.len() {
+            return Pos::new(line, col);
+        }
+
+        // Move to next line
+        if line + 1 < line_count {
+            line += 1;
+            col = 0;
+        } else {
+            return Pos::new(line, bytes.len());
+        }
+    }
+}
+
+fn word_backward(buf: &ozone_buffer::Buffer, pos: Pos) -> Pos {
+    let mut line = pos.line;
+    let mut col = pos.col;
+
+    loop {
+        let line_text = match buf.line(line) {
+            Some(t) => t,
+            None => return Pos::zero(),
+        };
+        let bytes = line_text.as_bytes();
+
+        if col == 0 {
+            if line == 0 { return Pos::zero(); }
+            line -= 1;
+            col = buf.line_len(line);
+            continue;
+        }
+
+        col -= 1;
+        // Skip non-word chars going left
+        while col > 0 && !is_word_char(bytes[col]) {
+            col -= 1;
+        }
+        // Skip word chars going left to find start
+        while col > 0 && is_word_char(bytes[col - 1]) {
+            col -= 1;
+        }
+        return Pos::new(line, col);
+    }
 }

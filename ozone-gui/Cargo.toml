@@ -6,4 +6,5 @@ edition = "2024"
 [dependencies]
 ozone-editor = { workspace = true }
 ozone-buffer = { workspace = true }
+ozone-syntax = { workspace = true }
 aurea        = { workspace = true }

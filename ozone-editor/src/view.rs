@@ -24,6 +24,8 @@ pub struct View {
     pub selection: Option<Span>,
     /// Column memory for up/down movement across short lines.
     pub col_memory: usize,
+    /// Visible line count — set by ozone-gui each frame so page commands work.
+    pub page_height: usize,
 }
 
 impl View {
@@ -35,6 +37,7 @@ impl View {
             cursor: Pos::zero(),
             selection: None,
             col_memory: 0,
+            page_height: 40,
         }
     }
 
