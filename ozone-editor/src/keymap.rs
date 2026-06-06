@@ -339,6 +339,7 @@ impl Keymap {
             ("ctrl+n", "cursor.move-down"),
             ("meta+f", "search.start"), // M-f opens in-buffer find
             ("meta+h", "search.replace"), // M-h opens find with a replace box
+            ("meta+g", "edit.goto-line"),       // Emacs M-g — prompt for a line
             ("ctrl+home", "cursor.file-start"),
             ("ctrl+end", "cursor.file-end"),
             ("ctrl+left", "cursor.word-backward"),

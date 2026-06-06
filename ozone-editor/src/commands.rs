@@ -14,13 +14,21 @@ pub struct CommandContext<'a> {
     pub view_id: ViewId,
     pub buffer_id: BufferId,
     pub workspace: &'a mut Workspace,
+    /// Optional string argument (e.g. text submitted to a prompting command).
+    pub arg: Option<String>,
 }
 
 impl<'a> CommandContext<'a> {
     pub fn new(workspace: &'a mut Workspace) -> Option<Self> {
         let view_id = workspace.active_view_id?;
         let buffer_id = workspace.views.get(&view_id)?.buffer_id;
-        Some(Self { view_id, buffer_id, workspace })
+        Some(Self { view_id, buffer_id, workspace, arg: None })
+    }
+
+    /// Set the command argument (consumed by commands that take input).
+    pub fn with_arg(mut self, arg: Option<String>) -> Self {
+        self.arg = arg;
+        self
     }
 }
 
@@ -202,6 +210,27 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
 
     reg.register("view.jump-forward", "Jump to the next cursor location", |ctx| {
         ctx.workspace.jump_forward();
+    });
+
+    reg.register("edit.goto-line", "Go to a line number", |ctx| {
+        // No argument yet: prompt for one (re-invokes this command with the text).
+        let Some(arg) = ctx.arg.clone() else {
+            ctx.workspace.request_ui(UiIntent::Input {
+                prompt: "go to line:".to_string(),
+                command: "edit.goto-line".to_string(),
+            });
+            return;
+        };
+        let Ok(n) = arg.trim().parse::<usize>() else { return };
+        let last = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap().line_count().saturating_sub(1);
+        let line = n.saturating_sub(1).min(last); // 1-based input
+        ctx.workspace.push_jump();
+        let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+        let old = view.cursor;
+        view.selection = None;
+        view.cursor = Pos::new(line, 0);
+        view.col_memory = 0;
+        emit_cursor_moved(ctx, old);
     });
 
     // --- editing ---
@@ -674,6 +703,24 @@ mod tests {
         let files = collect_workspace_files(&base, 3);
         assert!(files.len() <= 3);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn goto_line_jumps_to_argument() {
+        use super::{CommandContext, CommandRegistry, register_defaults};
+        use crate::workspace::Workspace;
+        let mut ws = Workspace::new();
+        ws.active_buffer_mut().unwrap().set_text("a\nb\nc\nd\ne");
+        let mut reg = CommandRegistry::new();
+        register_defaults(&mut reg);
+        // 1-based line 3 -> index 2.
+        let mut ctx = CommandContext::new(&mut ws).unwrap().with_arg(Some("3".to_string()));
+        assert!(reg.execute("edit.goto-line", &mut ctx));
+        assert_eq!(ws.active_view().unwrap().cursor.line, 2);
+        // Out-of-range clamps to last line.
+        let mut ctx = CommandContext::new(&mut ws).unwrap().with_arg(Some("999".to_string()));
+        reg.execute("edit.goto-line", &mut ctx);
+        assert_eq!(ws.active_view().unwrap().cursor.line, 4);
     }
 
     #[test]

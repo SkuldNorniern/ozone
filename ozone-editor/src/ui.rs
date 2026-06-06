@@ -23,4 +23,8 @@ pub enum UiIntent {
     SearchStart,
     /// Start in-buffer search with the replace field shown.
     SearchReplace,
+    /// Prompt for a line of text in the minibuffer, then run `command` with the
+    /// typed text as its argument. The vim.ui.input / Emacs minibuffer pattern;
+    /// lets commands (and plugins) take free-form input without a bespoke UI.
+    Input { prompt: String, command: String },
 }
