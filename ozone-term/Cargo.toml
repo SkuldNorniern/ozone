@@ -2,4 +2,14 @@
 name = "ozone-term"
 version = "0.1.0"
 edition = "2024"
-description = "Process-backed terminal core for Ozone (std-only; PTY/VT upgrade later)"
+description = "PTY-backed terminal core for Ozone (ConPTY/forkpty via portable-pty)"
+
+[dependencies]
+portable-pty = { version = "0.8", optional = true }
+
+[features]
+default = ["portable"]
+# Cross-platform PTY via the portable-pty crate (ConPTY / forkpty).
+portable = ["dep:portable-pty"]
+# In-house PTY backend (direct ConPTY / forkpty FFI) — scaffold, WIP.
+inhouse = []

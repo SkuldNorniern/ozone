@@ -4,10 +4,39 @@ use std::sync::{Arc, Mutex};
 
 use ozone_term::Terminal;
 
-/// A live terminal: the shell process plus the locally-echoed input line.
-struct TermSession {
-    term: Terminal,
-    input: String,
+/// Map a key + modifiers to the bytes a PTY shell expects, or `None` to let the
+/// key fall through to the editor keymap (so Ctrl+Tab, M-x, pane focus still work
+/// while a terminal is focused). The shell's line discipline handles echo/editing.
+fn terminal_key_bytes(key: aurea::KeyCode, mods: aurea::Modifiers) -> Option<&'static str> {
+    use aurea::KeyCode::*;
+    if mods.alt {
+        return None; // leave Alt (M-x etc.) to the editor
+    }
+    if mods.ctrl {
+        // Only the common control codes go to the shell; other Ctrl combos
+        // (Ctrl+Tab, Ctrl+P, …) fall through to the editor.
+        return match key {
+            C => Some("\u{3}"),  // SIGINT
+            D => Some("\u{4}"),  // EOF
+            Z => Some("\u{1a}"), // SIGTSTP
+            L => Some("\u{c}"),  // clear
+            _ => None,
+        };
+    }
+    match key {
+        Enter => Some("\r"),
+        Backspace => Some("\u{7f}"),
+        Tab => Some("\t"),
+        Escape => Some("\u{1b}"),
+        Up => Some("\u{1b}[A"),
+        Down => Some("\u{1b}[B"),
+        Right => Some("\u{1b}[C"),
+        Left => Some("\u{1b}[D"),
+        Home => Some("\u{1b}[H"),
+        End => Some("\u{1b}[F"),
+        Delete => Some("\u{1b}[3~"),
+        _ => None, // printable chars arrive via TextInput
+    }
 }
 
 use aurea::render::{Canvas, Color, DrawingContext, Font, Paint, PaintStyle, Point, Rect, RendererBackend};
@@ -427,7 +456,7 @@ impl OzoneGui {
         // Pending chord prefix carried across key events (e.g. after `ctrl+k`).
         let mut chord_pending: Vec<KeyStroke> = Vec::new();
         // Live terminal sessions, keyed by their Terminal buffer.
-        let mut terminals: HashMap<BufferId, TermSession> = HashMap::new();
+        let mut terminals: HashMap<BufferId, Terminal> = HashMap::new();
         let mut failed_terminals: std::collections::HashSet<BufferId> = std::collections::HashSet::new();
 
         // --------------- event loop ---------------
@@ -469,25 +498,17 @@ impl OzoneGui {
                             if handle_search_key(key, &mut srch, &mut ws) {
                                 needs_redraw = true;
                             }
-                        } else if let Some(term_id) = active_terminal(&self.workspace.lock().unwrap())
-                            .filter(|id| terminals.contains_key(id))
+                        } else if let Some((term_id, bytes)) =
+                            active_terminal(&self.workspace.lock().unwrap())
+                                .filter(|id| terminals.contains_key(id))
+                                .and_then(|id| terminal_key_bytes(key, modifiers).map(|b| (id, b)))
                         {
-                            // Active buffer is a live terminal: Enter sends the
-                            // line, Backspace edits it; typed chars come via TextInput.
-                            use aurea::KeyCode::*;
-                            let sess = terminals.get_mut(&term_id).unwrap();
-                            match key {
-                                Enter => {
-                                    let line = std::mem::take(&mut sess.input);
-                                    sess.term.write_line(&line);
-                                    needs_redraw = true;
-                                }
-                                Backspace => {
-                                    sess.input.pop();
-                                    needs_redraw = true;
-                                }
-                                _ => {}
-                            }
+                            // Active buffer is a live terminal and this key maps to
+                            // PTY bytes (Enter/Backspace/arrows/Ctrl-C…). Printable
+                            // chars come through TextInput; unmapped keys fall to
+                            // the editor below.
+                            terminals.get(&term_id).unwrap().write_str(bytes);
+                            needs_redraw = true;
                         } else {
                             let r = handle_key(
                                 key,
@@ -548,10 +569,10 @@ impl OzoneGui {
                                 let mut ws = self.workspace.lock().unwrap();
                                 let term_id = active_terminal(&ws).filter(|id| terminals.contains_key(id));
                                 if let Some(term_id) = term_id {
-                                    // Echo typed chars into the terminal's input line.
-                                    let sess = terminals.get_mut(&term_id).unwrap();
-                                    for c in text.chars().filter(|c| !c.is_control()) {
-                                        sess.input.push(c);
+                                    // Send typed text straight to the PTY; the shell echoes it back.
+                                    let printable: String = text.chars().filter(|c| !c.is_control()).collect();
+                                    if !printable.is_empty() {
+                                        terminals.get(&term_id).unwrap().write_str(&printable);
                                         needs_redraw = true;
                                     }
                                 } else if insert_text_raw(&text, &mut ws) {
@@ -607,7 +628,13 @@ impl OzoneGui {
                     }
                     match Terminal::spawn() {
                         Ok(term) => {
-                            terminals.insert(*id, TermSession { term, input: String::new() });
+                            // Size the PTY to the (approx) visible character grid.
+                            let cw = (self.config.editor.font_size * 0.6).max(1.0);
+                            let lh = (self.config.editor.font_size * self.config.editor.line_height).max(1.0);
+                            let cols = (((W as f32) - 60.0) / cw).clamp(20.0, 500.0) as u16;
+                            let rows = (((H as f32) - STATUS_H - EDITOR_TOP_PAD) / lh).clamp(5.0, 300.0) as u16;
+                            term.resize(cols, rows);
+                            terminals.insert(*id, term);
                         }
                         Err(e) => {
                             failed_terminals.insert(*id);
@@ -622,12 +649,10 @@ impl OzoneGui {
                 terminals.retain(|id, _| ws.buffers.contains_key(id));
 
                 let active_term = active_terminal(&ws);
-                for (id, sess) in terminals.iter_mut() {
+                for (id, term) in terminals.iter() {
                     let is_active = active_term == Some(*id);
-                    let mut text = sess.term.output_snapshot();
-                    if is_active {
-                        text.push_str(&sess.input);
-                    }
+                    // The PTY shell echoes input itself, so the buffer is just output.
+                    let text = term.output_snapshot();
                     let changed = ws.buffers.get(id).map(|b| b.text() != text).unwrap_or(false);
                     if changed {
                         if let Some(buf) = ws.buffers.get_mut(id) {
