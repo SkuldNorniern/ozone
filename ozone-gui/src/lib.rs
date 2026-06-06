@@ -77,10 +77,12 @@ fn terminal_key_bytes(key: aurea::KeyCode, mods: aurea::Modifiers) -> Option<&'s
 use aurea::render::{Canvas, DrawingContext, Font, Image, Point, Rect, RendererBackend};
 use aurea::{AureaResult, Element, Window, WindowEvent};
 
+mod minibuffer;
 mod picker;
 mod popup;
 mod search;
 mod theme;
+use minibuffer::*;
 use picker::*;
 use popup::*;
 use search::*;
@@ -181,12 +183,14 @@ impl OzoneGui {
         // Overlay states shared with the draw callback.
         let palette: Arc<Mutex<Option<PickerState>>> = Arc::new(Mutex::new(None));
         let search: Arc<Mutex<Option<SearchState>>> = Arc::new(Mutex::new(None));
+        let minibuffer: Arc<Mutex<Option<Minibuffer>>> = Arc::new(Mutex::new(None));
 
         let raw_canvas = Canvas::new(W, H, RendererBackend::Cpu)?;
         let workspace_for_draw = self.workspace.clone();
         let config_for_draw = self.config.clone();
         let palette_for_draw = palette.clone();
         let search_for_draw = search.clone();
+        let minibuffer_for_draw = minibuffer.clone();
 
         raw_canvas.set_draw_callback(move |ctx| {
             {
@@ -199,6 +203,11 @@ impl OzoneGui {
             }
             if let Some(p) = palette_for_draw.lock().unwrap().as_ref() {
                 draw_palette(ctx, p, &config_for_draw)?;
+            }
+            if let Some(m) = minibuffer_for_draw.lock().unwrap().as_ref() {
+                let f = editor_font(&config_for_draw);
+                let (cw, ch) = (ctx.width() as f32, ctx.height() as f32);
+                draw_minibuffer(ctx, m, &f, cw, ch, STATUS_H)?;
             }
             Ok(())
         })?;
@@ -304,14 +313,24 @@ impl OzoneGui {
                         }
                         let mut pal = palette.lock().unwrap();
                         let mut srch = search.lock().unwrap();
-                        if pal.is_some() {
+                        let mut mb = minibuffer.lock().unwrap();
+                        if mb.is_some() {
+                            let mut ws = self.workspace.lock().unwrap();
+                            if handle_minibuffer_key(key, &mut mb, &mut ws, &self.commands, &self.autocmds) {
+                                needs_redraw = true;
+                            }
+                            // Submitting may queue another intent (e.g. re-prompt).
+                            if apply_ui_intents(&mut ws, &self.commands, &mut pal, &mut srch, &mut mb, &buffer_mru) {
+                                needs_redraw = true;
+                            }
+                        } else if pal.is_some() {
                             let mut ws = self.workspace.lock().unwrap();
                             if handle_palette_key(key, &mut pal, &mut ws, &self.commands, &self.autocmds) {
                                 needs_redraw = true;
                             }
                             // A palette selection may itself request an overlay
                             // (e.g. running search.start from the palette).
-                            if apply_ui_intents(&mut ws, &self.commands, &mut pal, &mut srch, &buffer_mru) {
+                            if apply_ui_intents(&mut ws, &self.commands, &mut pal, &mut srch, &mut mb, &buffer_mru) {
                                 needs_redraw = true;
                             }
                         } else if srch.is_some() {
@@ -343,15 +362,16 @@ impl OzoneGui {
                                 &mut chord_pending,
                                 &mut pal,
                                 &mut srch,
+                                &mut mb,
                                 &buffer_mru,
                             );
                             if r {
                                 needs_redraw = true;
                             }
-                            // If a key just opened the palette or search, the
-                            // trigger char (M-x's `x`, M-f's `f`) also arrives as
-                            // TextInput on Windows; drop it so the query starts empty.
-                            if pal.is_some() || srch.is_some() {
+                            // If a key just opened an overlay, the trigger char
+                            // (M-x's `x`, M-g's `g`) also arrives as TextInput on
+                            // Windows; drop it so the input starts empty.
+                            if pal.is_some() || srch.is_some() || mb.is_some() {
                                 swallow_text = true;
                             }
                         }
@@ -364,6 +384,15 @@ impl OzoneGui {
                             swallow_text = false; // drop the palette trigger char
                             continue;
                         }
+                        let mut mb = minibuffer.lock().unwrap();
+                        if let Some(m) = mb.as_mut() {
+                            for c in text.chars().filter(|c| !c.is_control()) {
+                                m.input.push(c);
+                                needs_redraw = true;
+                            }
+                            continue;
+                        }
+                        drop(mb);
                         let mut pal = palette.lock().unwrap();
                         if let Some(p) = pal.as_mut() {
                             for c in text.chars().filter(|c| !c.is_control()) {
@@ -582,11 +611,17 @@ impl OzoneGui {
                 let config = self.config.clone();
                 let pal = palette.lock().unwrap();
                 let srch = search.lock().unwrap();
+                let mb = minibuffer.lock().unwrap();
                 let active_mods = ActiveMods::from_physical(live_mods, &self.modmap);
                 canvas.draw(|ctx| {
                     draw_editor(ctx, &mut ws, &config, srch.as_ref(), &term_cells, &images, active_mods, &mut measured_char_w)?;
                     if let Some(p) = pal.as_ref() {
                         draw_palette(ctx, p, &config)?;
+                    }
+                    if let Some(m) = mb.as_ref() {
+                        let f = editor_font(&config);
+                        let (cw, ch) = (ctx.width() as f32, ctx.height() as f32);
+                        draw_minibuffer(ctx, m, &f, cw, ch, STATUS_H)?;
                     }
                     Ok(())
                 })?;
@@ -638,6 +673,7 @@ fn handle_key(
     pending: &mut Vec<KeyStroke>,
     palette: &mut Option<PickerState>,
     search: &mut Option<SearchState>,
+    minibuffer: &mut Option<Minibuffer>,
     mru: &[BufferId],
 ) -> bool {
     use aurea::KeyCode::*;
@@ -674,7 +710,7 @@ fn handle_key(
                 // Everything is a command: run it, then perform any frontend
                 // action it requested (open palette / picker / search overlay).
                 run_cmd(&cmd, ws, reg, autocmds);
-                apply_ui_intents(ws, reg, palette, search, mru);
+                apply_ui_intents(ws, reg, palette, search, minibuffer, mru);
                 return true;
             }
             KeymapOutcome::Pending => {
@@ -798,11 +834,13 @@ fn keycode_key(key: aurea::KeyCode) -> Option<Key> {
 /// the search bar). Returns whether anything was applied. This is the single
 /// place the frontend reacts to command-driven overlay requests, so the editor
 /// commands stay GUI-agnostic and plugins can trigger the same overlays.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_ui_intents(
     ws: &mut Workspace,
     reg: &CommandRegistry,
     palette: &mut Option<PickerState>,
     search: &mut Option<SearchState>,
+    minibuffer: &mut Option<Minibuffer>,
     mru: &[BufferId],
 ) -> bool {
     let intents = ws.drain_ui_intents();
@@ -821,6 +859,9 @@ pub(crate) fn apply_ui_intents(
             }
             UiIntent::SearchStart => open_search(ws, search, false),
             UiIntent::SearchReplace => open_search(ws, search, true),
+            UiIntent::Input { prompt, command } => {
+                *minibuffer = Some(Minibuffer::new(prompt, command));
+            }
         }
     }
     applied
@@ -862,12 +903,60 @@ pub(crate) fn run_cmd(name: &str, ws: &mut Workspace, reg: &CommandRegistry, aut
 }
 
 fn execute_command(name: &str, ws: &mut Workspace, reg: &CommandRegistry) {
-    if let Some(mut ctx) = CommandContext::new(ws) {
+    execute_command_arg(name, None, ws, reg);
+}
+
+fn execute_command_arg(name: &str, arg: Option<String>, ws: &mut Workspace, reg: &CommandRegistry) {
+    if let Some(ctx) = CommandContext::new(ws) {
+        let mut ctx = ctx.with_arg(arg);
         reg.execute(name, &mut ctx);
     }
     if let Some(view) = ws.active_view_mut() {
         view.scroll_to_cursor(view.page_height.max(1));
     }
+}
+
+/// Handle a key while the minibuffer prompt is open. Letters arrive via
+/// TextInput; this covers submit/cancel/erase. Returns whether to redraw.
+fn handle_minibuffer_key(
+    key: aurea::KeyCode,
+    minibuffer: &mut Option<Minibuffer>,
+    ws: &mut Workspace,
+    reg: &CommandRegistry,
+    autocmds: &AutocommandRegistry,
+) -> bool {
+    use aurea::KeyCode::*;
+    let Some(mb) = minibuffer.as_mut() else { return false };
+    match key {
+        Escape => {
+            *minibuffer = None;
+            true
+        }
+        Enter => {
+            let (cmd, input) = (mb.command.clone(), mb.input.clone());
+            *minibuffer = None;
+            run_cmd_with_arg(&cmd, input, ws, reg, autocmds);
+            true
+        }
+        Backspace => {
+            mb.input.pop();
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Run a command with a string argument (minibuffer submit), then dispatch
+/// autocommands. Mirrors `run_cmd` but passes `arg` to the command.
+pub(crate) fn run_cmd_with_arg(
+    name: &str,
+    arg: String,
+    ws: &mut Workspace,
+    reg: &CommandRegistry,
+    autocmds: &AutocommandRegistry,
+) {
+    execute_command_arg(name, Some(arg), ws, reg);
+    dispatch_autocmds(ws, reg, autocmds);
 }
 
 fn run_pre_save_autocmds(
