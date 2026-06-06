@@ -91,11 +91,14 @@ impl Drop for Terminal {
 
 fn default_shell() -> (String, Vec<String>) {
     if cfg!(windows) {
-        // /Q disables command echo so we can echo input locally without doubling.
-        ("cmd.exe".to_string(), vec!["/Q".to_string()])
+        // Leave echo ON so cmd prints each command it runs from the pipe — the
+        // transcript then shows commands, not just their output.
+        ("cmd.exe".to_string(), Vec::new())
     } else {
+        // No `-i`: interactive mode needs a TTY (which a pipe isn't) and hangs /
+        // warns about job control. A plain shell reads commands from the pipe.
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-        (shell, vec!["-i".to_string()])
+        (shell, Vec::new())
     }
 }
 

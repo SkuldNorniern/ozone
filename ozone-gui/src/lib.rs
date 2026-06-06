@@ -1224,9 +1224,15 @@ fn draw_view(
         _ => Filetype::Plain,
     };
 
+    // Virtual surfaces (terminal, pickers, references) have no line numbers.
+    let line_numbers = match buf.kind {
+        BufferKind::Terminal | BufferKind::Search | BufferKind::References => LineNumbers::Off,
+        _ => config.editor.line_numbers,
+    };
+
     let scroll      = view.scroll_line;
     let visible     = visible + 1;
-    let gutter_w    = gutter_width(line_count, metrics.char_w, config.editor.line_numbers);
+    let gutter_w    = gutter_width(line_count, metrics.char_w, line_numbers);
     let text_x      = rect.x + gutter_w + PAD;
 
     // Matching-bracket pair for the active cursor (highlighted behind the glyphs).
@@ -1304,7 +1310,7 @@ fn draw_view(
         }
 
         // Gutter line number (absolute / relative / off per config)
-        let gutter_label = match config.editor.line_numbers {
+        let gutter_label = match line_numbers {
             LineNumbers::Off => None,
             LineNumbers::Absolute => Some(format!("{:>4}", line_idx + 1)),
             LineNumbers::Relative => {
