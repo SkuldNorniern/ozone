@@ -158,7 +158,7 @@ pub(crate) fn buffer_picker_items(ws: &Workspace, mru: &[BufferId]) -> Vec<Picke
         }
         let Some(buf) = ws.buffers.get(&id) else { return };
         let (name, detail) = match &buf.kind {
-            BufferKind::File(p) => {
+            BufferKind::File(p) | BufferKind::Image(p) => {
                 let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("?").to_string();
                 (name, p.to_string_lossy().to_string())
             }

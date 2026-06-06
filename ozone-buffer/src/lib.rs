@@ -66,6 +66,8 @@ pub enum BufferKind {
     Search,
     References,
     Terminal,
+    /// A raster image file (PNG/JPEG) shown in the pane, not edited as text.
+    Image(PathBuf),
 }
 
 /// A text buffer backed by an in-house piece table with undo/redo.
@@ -99,6 +101,12 @@ impl Buffer {
             BufferKind::File(path),
             PieceTable::new(&content),
         ))
+    }
+
+    /// An image buffer: the file is rendered, not loaded as text. Holds no
+    /// piece-table content; the GUI decodes the path on demand.
+    pub fn open_image(path: PathBuf) -> Self {
+        Self::init(BufferId::next(), BufferKind::Image(path), PieceTable::new(""))
     }
 
     fn init(id: BufferId, kind: BufferKind, table: PieceTable) -> Self {

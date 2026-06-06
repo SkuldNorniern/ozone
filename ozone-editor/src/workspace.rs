@@ -88,10 +88,16 @@ impl Workspace {
         // Opening a file is a jump: record where we were so Ctrl+- returns.
         self.push_jump();
         let path = std::fs::canonicalize(&path).unwrap_or(path);
-        let buf = Buffer::open(path)?;
+        // Images render in the pane instead of loading as (binary) text.
+        let buf = if is_image_path(&path) {
+            Buffer::open_image(path.clone())
+        } else {
+            Buffer::open(path)?
+        };
         let buf_id = buf.id;
         let path = match &buf.kind {
             ozone_buffer::BufferKind::File(path) => path.clone(),
+            ozone_buffer::BufferKind::Image(path) => path.clone(),
             _ => PathBuf::new(),
         };
         self.buffers.insert(buf_id, buf);
@@ -434,6 +440,14 @@ impl Default for Workspace {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Whether a path is a renderable raster image (by extension).
+pub fn is_image_path(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(),
+        Some("png" | "jpg" | "jpeg")
+    )
 }
 
 fn filetype_name(path: &std::path::Path) -> String {

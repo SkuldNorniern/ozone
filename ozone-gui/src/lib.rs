@@ -7,6 +7,16 @@ use ozone_term::Terminal;
 /// Coloured terminal grids by buffer, captured each frame for the renderer.
 type TermCells = HashMap<BufferId, Vec<Vec<ozone_term::Cell>>>;
 
+/// Decoded images by buffer. `None` = decode failed (shown as an error label).
+type ImageCache = HashMap<BufferId, Option<Image>>;
+
+/// Decode a PNG/JPEG file into an RGBA8 `Image` for the renderer.
+fn decode_image(path: &std::path::Path) -> Option<Image> {
+    let rgba = image::open(path).ok()?.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    Some(Image::new(w, h, rgba.into_raw()))
+}
+
 /// Map a key + modifiers to the bytes a PTY shell expects, or `None` to let the
 /// key fall through to the editor keymap (so Ctrl+Tab, M-x, pane focus still work
 /// while a terminal is focused). The shell's line discipline handles echo/editing.
@@ -42,7 +52,7 @@ fn terminal_key_bytes(key: aurea::KeyCode, mods: aurea::Modifiers) -> Option<&'s
     }
 }
 
-use aurea::render::{Canvas, Color, DrawingContext, Font, Point, Rect, RendererBackend};
+use aurea::render::{Canvas, Color, DrawingContext, Font, Image, Point, Rect, RendererBackend};
 use aurea::{AureaResult, Element, Window, WindowEvent};
 
 mod picker;
@@ -161,7 +171,7 @@ impl OzoneGui {
                 // Repaint callback: terminal colour grids + PTY sizing are driven
                 // by the explicit redraw in the run loop, so none here.
                 let mut scratch_char_w = 0.0;
-                draw_editor(ctx, &mut ws, &config_for_draw, srch.as_ref(), &TermCells::new(), &mut scratch_char_w)?;
+                draw_editor(ctx, &mut ws, &config_for_draw, srch.as_ref(), &TermCells::new(), &ImageCache::new(), "", &mut scratch_char_w)?;
             }
             if let Some(p) = palette_for_draw.lock().unwrap().as_ref() {
                 draw_palette(ctx, p, &config_for_draw)?;
@@ -182,7 +192,7 @@ impl OzoneGui {
             let mut ws = self.workspace.lock().unwrap();
             let config = self.config.clone();
             let mut scratch_char_w = 0.0;
-            canvas.draw(|ctx| draw_editor(ctx, &mut ws, &config, None, &TermCells::new(), &mut scratch_char_w))?;
+            canvas.draw(|ctx| draw_editor(ctx, &mut ws, &config, None, &TermCells::new(), &ImageCache::new(), "", &mut scratch_char_w))?;
             canvas.invalidate_all();
         }
 
@@ -204,6 +214,8 @@ impl OzoneGui {
         let mut measured_char_w = (self.config.editor.font_size * 0.6).max(1.0);
         // Most-recently-used buffer order (front = current), for the buffer picker.
         let mut buffer_mru: Vec<BufferId> = Vec::new();
+        // Decoded images by buffer (decoded once, on first sight).
+        let mut images: ImageCache = ImageCache::new();
 
         // --------------- event loop ---------------
         loop {
@@ -470,6 +482,20 @@ impl OzoneGui {
                 }
             }
 
+            // --- image sync: decode any new image buffer once ---
+            {
+                let ws = self.workspace.lock().unwrap();
+                for (id, buf) in ws.buffers.iter() {
+                    if let BufferKind::Image(path) = &buf.kind {
+                        if !images.contains_key(id) {
+                            images.insert(*id, decode_image(path));
+                            needs_redraw = true;
+                        }
+                    }
+                }
+                images.retain(|id, _| ws.buffers.contains_key(id));
+            }
+
             // Update window title when active file changes
             {
                 let ws = self.workspace.lock().unwrap();
@@ -486,8 +512,9 @@ impl OzoneGui {
                 let config = self.config.clone();
                 let pal = palette.lock().unwrap();
                 let srch = search.lock().unwrap();
+                let pending_chord = format_pending_chord(&chord_pending);
                 canvas.draw(|ctx| {
-                    draw_editor(ctx, &mut ws, &config, srch.as_ref(), &term_cells, &mut measured_char_w)?;
+                    draw_editor(ctx, &mut ws, &config, srch.as_ref(), &term_cells, &images, &pending_chord, &mut measured_char_w)?;
                     if let Some(p) = pal.as_ref() {
                         draw_palette(ctx, p, &config)?;
                     }
@@ -510,7 +537,7 @@ fn window_title(ws: &Workspace) -> String {
         Some(buf) => {
             let dirty = if buf.is_dirty() { "*" } else { "" };
             match &buf.kind {
-                BufferKind::File(p) => {
+                BufferKind::File(p) | BufferKind::Image(p) => {
                     let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("?");
                     format!("Ozone - {}{}", dirty, name)
                 }
@@ -786,7 +813,7 @@ fn insert_text_raw(text: &str, ws: &mut Workspace) -> bool {
     // Virtual/read-only surfaces (pickers, terminal placeholder) reject edits.
     if matches!(
         ws.buffers.get(&buf_id).map(|b| &b.kind),
-        Some(BufferKind::Search | BufferKind::References | BufferKind::Terminal)
+        Some(BufferKind::Search | BufferKind::References | BufferKind::Terminal | BufferKind::Image(_))
     ) {
         return false;
     }
@@ -862,6 +889,8 @@ fn draw_editor(
     config: &Config,
     search: Option<&SearchState>,
     term_cells: &TermCells,
+    images: &ImageCache,
+    pending_chord: &str,
     char_w_out: &mut f32,
 ) -> AureaResult<()> {
     let width  = ctx.width()  as f32;
@@ -882,17 +911,35 @@ fn draw_editor(
 
     if let Some(panes) = &ws.panes {
         let panes = panes.clone();
-        draw_pane_tree(ctx, ws, config, &panes, editor_rect, &font, metrics, search, term_cells)?;
+        draw_pane_tree(ctx, ws, config, &panes, editor_rect, &font, metrics, search, term_cells, images)?;
     } else if let Some(view_id) = ws.active_view().map(|view| view.id) {
-        draw_view(ctx, ws, config, view_id, editor_rect, &font, metrics, search, term_cells)?;
+        draw_view(ctx, ws, config, view_id, editor_rect, &font, metrics, search, term_cells, images)?;
     }
 
     if let Some(s) = search {
         draw_search_bar(ctx, s, &font, width)?;
     }
 
-    draw_status_bar(ctx, width, height, &font, ws)?;
+    draw_status_bar(ctx, width, height, &font, ws, pending_chord)?;
     Ok(())
+}
+
+/// Render a pending chord prefix Emacs-style: `C-x`, `M-x`, `C-S-p`, joined by
+/// spaces for multi-stroke prefixes (`C-k C-`). Empty if nothing is pending.
+fn format_pending_chord(pending: &[KeyStroke]) -> String {
+    fn one(s: &KeyStroke) -> String {
+        let mut out = String::new();
+        if s.control { out.push_str("C-"); }
+        if s.meta { out.push_str("M-"); }
+        if s.super_ { out.push_str("s-"); }
+        if s.shift { out.push_str("S-"); }
+        match s.key {
+            Key::Char(c) => out.push(c),
+            _ => out.push_str(&s.key.label()),
+        }
+        out
+    }
+    pending.iter().map(one).collect::<Vec<_>>().join(" ")
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -913,13 +960,14 @@ fn draw_pane_tree(
     metrics: TextMetrics,
     search: Option<&SearchState>,
     term_cells: &TermCells,
+    images: &ImageCache,
 ) -> AureaResult<()> {
     match tree {
-        PaneTree::Leaf { view_id } => draw_view(ctx, ws, config, *view_id, rect, font, metrics, search, term_cells),
+        PaneTree::Leaf { view_id } => draw_view(ctx, ws, config, *view_id, rect, font, metrics, search, term_cells, images),
         PaneTree::Split { axis, ratio, first, second } => {
             let (first_rect, second_rect, divider) = split_rect(rect, *axis, *ratio);
-            draw_pane_tree(ctx, ws, config, first, first_rect, font, metrics, search, term_cells)?;
-            draw_pane_tree(ctx, ws, config, second, second_rect, font, metrics, search, term_cells)?;
+            draw_pane_tree(ctx, ws, config, first, first_rect, font, metrics, search, term_cells, images)?;
+            draw_pane_tree(ctx, ws, config, second, second_rect, font, metrics, search, term_cells, images)?;
             ctx.draw_rect(divider, &solid(BORDER))?;
             Ok(())
         }
@@ -937,6 +985,7 @@ fn draw_view(
     metrics: TextMetrics,
     search: Option<&SearchState>,
     term_cells: &TermCells,
+    images: &ImageCache,
 ) -> AureaResult<()> {
     let Some(buffer_id) = ws.views.get(&view_id).map(|view| view.buffer_id) else {
         return Ok(());
@@ -946,6 +995,17 @@ fn draw_view(
     };
 
     let is_active_pane = ws.active_view_id == Some(view_id);
+
+    // Image buffers render the picture, not text — handle and return early.
+    if matches!(ws.buffers.get(&buffer_id).map(|b| &b.kind), Some(BufferKind::Image(_))) {
+        ctx.draw_rect(rect, &solid(BG))?;
+        let img = images.get(&buffer_id).and_then(|o| o.as_ref());
+        draw_image_pane(ctx, rect, img, font, metrics)?;
+        if is_active_pane {
+            ctx.draw_rect(Rect::new(rect.x, rect.y, rect.width, 2.0), &solid(ACTIVE_PANE_BORDER))?;
+        }
+        return Ok(());
+    }
     let line_h = font.size * config.editor.line_height;
     let content_top = rect.y + EDITOR_TOP_PAD;
     let content_h = (rect.height - EDITOR_TOP_PAD).max(0.0);
@@ -973,7 +1033,7 @@ fn draw_view(
 
     // Virtual surfaces (terminal, pickers, references) have no line numbers.
     let line_numbers = match buf.kind {
-        BufferKind::Terminal | BufferKind::Search | BufferKind::References => LineNumbers::Off,
+        BufferKind::Terminal | BufferKind::Search | BufferKind::References | BufferKind::Image(_) => LineNumbers::Off,
         _ => config.editor.line_numbers,
     };
 
@@ -1238,6 +1298,48 @@ fn draw_term_row(
     Ok(())
 }
 
+/// Draw an image centered in `rect`, scaled to fit while preserving aspect
+/// ratio (never upscaling past 1:1). Shows a label if the image failed to load.
+fn draw_image_pane(
+    ctx: &mut dyn DrawingContext,
+    rect: Rect,
+    image: Option<&Image>,
+    font: &Font,
+    metrics: TextMetrics,
+) -> AureaResult<()> {
+    let Some(img) = image else {
+        // Decode failed or not ready: centered dim label.
+        let msg = "cannot display image";
+        let w = ctx.measure_text(msg, font).map(|m| m.advance).unwrap_or(msg.len() as f32 * metrics.char_w);
+        let bl = rect.y + rect.height / 2.0;
+        ctx.draw_text_with_font(msg, Point::new(rect.x + (rect.width - w) / 2.0, bl), font, &solid(PALETTE_DESC))?;
+        return Ok(());
+    };
+    if img.width == 0 || img.height == 0 {
+        return Ok(());
+    }
+
+    let pad = 12.0;
+    let avail_w = (rect.width - pad * 2.0).max(1.0);
+    let avail_h = (rect.height - pad * 2.0).max(1.0);
+    let iw = img.width as f32;
+    let ih = img.height as f32;
+    // Fit; don't upscale beyond native size.
+    let scale = (avail_w / iw).min(avail_h / ih).min(1.0);
+    let dw = iw * scale;
+    let dh = ih * scale;
+    let dx = rect.x + (rect.width - dw) / 2.0;
+    let dy = rect.y + (rect.height - dh) / 2.0;
+    ctx.draw_image_rect(img, Rect::new(dx, dy, dw, dh))?;
+
+    // Dimensions label, bottom-centered.
+    let label = format!("{}×{}", img.width, img.height);
+    let lw = ctx.measure_text(&label, font).map(|m| m.advance).unwrap_or(0.0);
+    let ly = (rect.y + rect.height - 6.0).min(rect.y + rect.height);
+    ctx.draw_text_with_font(&label, Point::new(rect.x + (rect.width - lw) / 2.0, ly), font, &solid(PALETTE_DESC))?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // draw_status_bar
 // ---------------------------------------------------------------------------
@@ -1248,6 +1350,7 @@ fn draw_status_bar(
     height: f32,
     font: &Font,
     ws: &Workspace,
+    pending: &str,
 ) -> AureaResult<()> {
     let bar_top = height - STATUS_H;
     ctx.draw_rect(Rect::new(0.0, bar_top, width, STATUS_H), &solid(STATUSBAR_BG))?;
@@ -1260,7 +1363,9 @@ fn draw_status_bar(
         ws.active_view(), ws.active_buffer(),
     ) {
         let file_name = match &buf.kind {
-            BufferKind::File(p) => p.file_name().and_then(|n| n.to_str()).unwrap_or("?").to_string(),
+            BufferKind::File(p) | BufferKind::Image(p) => {
+                p.file_name().and_then(|n| n.to_str()).unwrap_or("?").to_string()
+            }
             BufferKind::Scratch => "*scratch*".to_string(),
             BufferKind::Search => "*files*".to_string(),
             BufferKind::References => "*references*".to_string(),
@@ -1273,6 +1378,7 @@ fn draw_status_bar(
             BufferKind::Search => "Files",
             BufferKind::References => "Refs",
             BufferKind::Terminal => "Term",
+            BufferKind::Image(_) => "Image",
             BufferKind::Scratch => "Text",
         };
         let pane_info = pane_status(ws, view.id);
@@ -1301,6 +1407,17 @@ fn draw_status_bar(
 
     let left = format!("  {}{}    {}", file_name, dirty, cursor_info);
     ctx.draw_text_with_font(&left, Point::new(16.0 + mode_w, baseline), font, &solid(STATUSBAR_FG))?;
+
+    // Pending chord prefix (which-key style): e.g. "C-x" waiting for the next key.
+    if !pending.is_empty() {
+        let left_w = ctx.measure_text(&left, font).map(|m| m.advance).unwrap_or(0.0);
+        let txt = format!("{pending}-");
+        let cw = ctx.measure_text(&txt, font).map(|m| m.advance).unwrap_or(txt.len() as f32 * font.size * 0.6);
+        let bx = 16.0 + mode_w + left_w + 16.0;
+        // Accent pill so the prefix stands out from the modeline text.
+        fill_round_rect(ctx, Rect::new(bx - 6.0, bar_top + 4.0, cw + 12.0, STATUS_H - 8.0), 5.0, STATUS_MODE_BG)?;
+        ctx.draw_text_with_font(&txt, Point::new(bx, baseline), font, &solid(PALETTE_PROMPT))?;
+    }
 
     let right = if pane_info.is_empty() {
         "UTF-8".to_string()
