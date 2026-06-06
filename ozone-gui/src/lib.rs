@@ -10,6 +10,28 @@ type TermCells = HashMap<BufferId, Vec<Vec<ozone_term::Cell>>>;
 /// Decoded images by buffer. `None` = decode failed (shown as an error label).
 type ImageCache = HashMap<BufferId, Option<Image>>;
 
+/// Live *logical* modifier state for the status-bar indicator, resolved from the
+/// physical keys through the `ModifierMap` (so it matches how bindings read).
+#[derive(Clone, Copy, Default)]
+struct ActiveMods {
+    control: bool,
+    meta: bool,
+    super_: bool,
+    shift: bool,
+}
+
+impl ActiveMods {
+    fn from_physical(m: aurea::Modifiers, map: &ModifierMap) -> Self {
+        // Reuse the keymap's physical→logical resolution.
+        let phys = PhysicalMods::new(m.ctrl, m.alt, m.shift, m.meta);
+        let ks = KeyStroke::from_physical(phys, Key::Space, map);
+        Self { control: ks.control, meta: ks.meta, super_: ks.super_, shift: ks.shift }
+    }
+    fn any(&self) -> bool {
+        self.control || self.meta || self.super_ || self.shift
+    }
+}
+
 /// Decode a PNG/JPEG file into an RGBA8 `Image` for the renderer.
 fn decode_image(path: &std::path::Path) -> Option<Image> {
     let rgba = image::open(path).ok()?.to_rgba8();
@@ -171,7 +193,7 @@ impl OzoneGui {
                 // Repaint callback: terminal colour grids + PTY sizing are driven
                 // by the explicit redraw in the run loop, so none here.
                 let mut scratch_char_w = 0.0;
-                draw_editor(ctx, &mut ws, &config_for_draw, srch.as_ref(), &TermCells::new(), &ImageCache::new(), "", &mut scratch_char_w)?;
+                draw_editor(ctx, &mut ws, &config_for_draw, srch.as_ref(), &TermCells::new(), &ImageCache::new(), ActiveMods::default(), &mut scratch_char_w)?;
             }
             if let Some(p) = palette_for_draw.lock().unwrap().as_ref() {
                 draw_palette(ctx, p, &config_for_draw)?;
@@ -192,7 +214,7 @@ impl OzoneGui {
             let mut ws = self.workspace.lock().unwrap();
             let config = self.config.clone();
             let mut scratch_char_w = 0.0;
-            canvas.draw(|ctx| draw_editor(ctx, &mut ws, &config, None, &TermCells::new(), &ImageCache::new(), "", &mut scratch_char_w))?;
+            canvas.draw(|ctx| draw_editor(ctx, &mut ws, &config, None, &TermCells::new(), &ImageCache::new(), ActiveMods::default(), &mut scratch_char_w))?;
             canvas.invalidate_all();
         }
 
@@ -216,6 +238,9 @@ impl OzoneGui {
         let mut buffer_mru: Vec<BufferId> = Vec::new();
         // Decoded images by buffer (decoded once, on first sight).
         let mut images: ImageCache = ImageCache::new();
+        // Live physical modifier state, updated on every key press/release, for
+        // the status-bar modifier indicator.
+        let mut live_mods = aurea::Modifiers::default();
 
         // --------------- event loop ---------------
         loop {
@@ -256,7 +281,23 @@ impl OzoneGui {
                         needs_redraw = true;
                     }
 
+                    // Modifier release: refresh the live modifier indicator. The
+                    // native modifier snapshot is unreliable for a modifier's own
+                    // release (GetKeyState quirk), so derive the bit from the key.
+                    WindowEvent::KeyInput { key, pressed: false, modifiers } => {
+                        let m = corrected_mods(modifiers, key, false);
+                        if live_mods != m {
+                            live_mods = m;
+                            needs_redraw = true;
+                        }
+                    }
+
                     WindowEvent::KeyInput { key, pressed: true, modifiers } => {
+                        let m = corrected_mods(modifiers, key, true);
+                        if live_mods != m {
+                            live_mods = m;
+                            needs_redraw = true;
+                        }
                         let mut pal = palette.lock().unwrap();
                         let mut srch = search.lock().unwrap();
                         if pal.is_some() {
@@ -512,9 +553,9 @@ impl OzoneGui {
                 let config = self.config.clone();
                 let pal = palette.lock().unwrap();
                 let srch = search.lock().unwrap();
-                let pending_chord = format_pending_chord(&chord_pending);
+                let active_mods = ActiveMods::from_physical(live_mods, &self.modmap);
                 canvas.draw(|ctx| {
-                    draw_editor(ctx, &mut ws, &config, srch.as_ref(), &term_cells, &images, &pending_chord, &mut measured_char_w)?;
+                    draw_editor(ctx, &mut ws, &config, srch.as_ref(), &term_cells, &images, active_mods, &mut measured_char_w)?;
                     if let Some(p) = pal.as_ref() {
                         draw_palette(ctx, p, &config)?;
                     }
@@ -890,7 +931,7 @@ fn draw_editor(
     search: Option<&SearchState>,
     term_cells: &TermCells,
     images: &ImageCache,
-    pending_chord: &str,
+    mods: ActiveMods,
     char_w_out: &mut f32,
 ) -> AureaResult<()> {
     let width  = ctx.width()  as f32;
@@ -920,26 +961,24 @@ fn draw_editor(
         draw_search_bar(ctx, s, &font, width)?;
     }
 
-    draw_status_bar(ctx, width, height, &font, ws, pending_chord)?;
+    draw_status_bar(ctx, width, height, &font, ws, mods)?;
     Ok(())
 }
 
-/// Render a pending chord prefix Emacs-style: `C-x`, `M-x`, `C-S-p`, joined by
-/// spaces for multi-stroke prefixes (`C-k C-`). Empty if nothing is pending.
-fn format_pending_chord(pending: &[KeyStroke]) -> String {
-    fn one(s: &KeyStroke) -> String {
-        let mut out = String::new();
-        if s.control { out.push_str("C-"); }
-        if s.meta { out.push_str("M-"); }
-        if s.super_ { out.push_str("s-"); }
-        if s.shift { out.push_str("S-"); }
-        match s.key {
-            Key::Char(c) => out.push(c),
-            _ => out.push_str(&s.key.label()),
-        }
-        out
+/// Native modifier snapshots are unreliable for a modifier key's *own* press or
+/// release (the OS key-state query lags the event), which left the indicator
+/// stuck "on". When the event key is itself a modifier, force that bit to match
+/// `pressed`; otherwise trust the snapshot.
+fn corrected_mods(mut m: aurea::Modifiers, key: aurea::KeyCode, pressed: bool) -> aurea::Modifiers {
+    use aurea::KeyCode::*;
+    match key {
+        Control => m.ctrl = pressed,
+        Alt => m.alt = pressed,
+        Shift => m.shift = pressed,
+        Meta => m.meta = pressed,
+        _ => {}
     }
-    pending.iter().map(one).collect::<Vec<_>>().join(" ")
+    m
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1350,7 +1389,7 @@ fn draw_status_bar(
     height: f32,
     font: &Font,
     ws: &Workspace,
-    pending: &str,
+    mods: ActiveMods,
 ) -> AureaResult<()> {
     let bar_top = height - STATUS_H;
     ctx.draw_rect(Rect::new(0.0, bar_top, width, STATUS_H), &solid(STATUSBAR_BG))?;
@@ -1408,17 +1447,28 @@ fn draw_status_bar(
     let left = format!("  {}{}    {}", file_name, dirty, cursor_info);
     ctx.draw_text_with_font(&left, Point::new(16.0 + mode_w, baseline), font, &solid(STATUSBAR_FG))?;
 
-    // Pending chord prefix (which-key style): e.g. "C-x" waiting for the next key.
-    if !pending.is_empty() {
-        let left_w = ctx.measure_text(&left, font).map(|m| m.advance).unwrap_or(0.0);
-        let txt = format!("{pending}-");
-        let cw = ctx.measure_text(&txt, font).map(|m| m.advance).unwrap_or(txt.len() as f32 * font.size * 0.6);
-        let bx = 16.0 + mode_w + left_w + 16.0;
-        // Accent pill so the prefix stands out from the modeline text.
-        fill_round_rect(ctx, Rect::new(bx - 6.0, bar_top + 4.0, cw + 12.0, STATUS_H - 8.0), 5.0, STATUS_MODE_BG)?;
-        ctx.draw_text_with_font(&txt, Point::new(bx, baseline), font, &solid(PALETTE_PROMPT))?;
+    // Live modifier indicator, far right: a lit pill per *held* logical modifier.
+    let mut x = width - 12.0;
+    if mods.any() {
+        let labels = [
+            ("Shift", mods.shift),
+            ("Super", mods.super_),
+            ("Meta", mods.meta),
+            ("Ctrl", mods.control),
+        ];
+        for (label, active) in labels {
+            if !active {
+                continue;
+            }
+            let w = ctx.measure_text(label, font).map(|m| m.advance).unwrap_or(label.len() as f32 * font.size * 0.6);
+            x -= w + 12.0;
+            fill_round_rect(ctx, Rect::new(x, bar_top + 4.0, w + 12.0, STATUS_H - 8.0), 5.0, STATUS_MODE_BG)?;
+            ctx.draw_text_with_font(label, Point::new(x + 6.0, baseline), font, &solid(PALETTE_PROMPT))?;
+            x -= 6.0; // gap between pills
+        }
     }
 
+    // Encoding / pane info, left of the modifier indicator.
     let right = if pane_info.is_empty() {
         "UTF-8".to_string()
     } else {
@@ -1428,7 +1478,7 @@ fn draw_status_bar(
         .measure_text(&right, font)
         .map(|m| m.advance)
         .unwrap_or(right.len() as f32 * font.size * 0.6);
-    let right_x = (width - right_w - 12.0).max(16.0 + mode_w);
+    let right_x = (x - right_w - 12.0).max(16.0 + mode_w);
     ctx.draw_text_with_font(&right, Point::new(right_x, baseline), font, &solid(STATUSBAR_DIM))?;
 
     Ok(())
