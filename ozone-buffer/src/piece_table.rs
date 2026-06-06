@@ -1,5 +1,5 @@
-/// In-house piece table: two-buffer (original + add), vec-of-pieces.
-/// All coordinates are byte offsets; callers convert to/from (line, col).
+//! In-house piece table: two-buffer (original + add), vec-of-pieces.
+//! All coordinates are byte offsets; callers convert to/from (line, col).
 
 use std::cell::{Ref, RefCell};
 

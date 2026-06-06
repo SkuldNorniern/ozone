@@ -179,23 +179,24 @@ fn scan_rust(line: &str, mut state: ScanState) -> (Vec<TokenSpan>, ScanState) {
         }
 
         // --- attribute ---
-        if b[i] == b'#' {
-            if i + 1 < n && (b[i + 1] == b'[' || (b[i + 1] == b'!' && i + 2 < n && b[i + 2] == b'[')) {
-                let start = i;
-                let mut depth = 0usize;
-                while i < n {
-                    if b[i] == b'[' { depth += 1; }
-                    else if b[i] == b']' {
-                        depth -= 1;
-                        i += 1;
-                        if depth == 0 { break; }
-                        continue;
-                    }
+        if b[i] == b'#'
+            && i + 1 < n
+            && (b[i + 1] == b'[' || (b[i + 1] == b'!' && i + 2 < n && b[i + 2] == b'['))
+        {
+            let start = i;
+            let mut depth = 0usize;
+            while i < n {
+                if b[i] == b'[' { depth += 1; }
+                else if b[i] == b']' {
+                    depth -= 1;
                     i += 1;
+                    if depth == 0 { break; }
+                    continue;
                 }
-                push!(start, i, TokenKind::Attribute);
-                continue;
+                i += 1;
             }
+            push!(start, i, TokenKind::Attribute);
+            continue;
         }
 
         // --- string literal (double-quoted) ---
@@ -436,13 +437,14 @@ fn scan_toml(line: &str) -> Vec<TokenSpan> {
 
         let val = &line[val_start..val_end].trim_end();
 
+        let is_number = *val == "true"
+            || *val == "false"
+            || val.chars().next().map(|c| c.is_ascii_digit() || c == '-').unwrap_or(false);
         let kind = if val.starts_with('"') || val.starts_with('\'') {
             TokenKind::String
         } else if val.starts_with('[') || val.starts_with('{') {
             TokenKind::Punctuation
-        } else if *val == "true" || *val == "false" {
-            TokenKind::Number
-        } else if val.chars().next().map(|c| c.is_ascii_digit() || c == '-').unwrap_or(false) {
+        } else if is_number {
             TokenKind::Number
         } else {
             TokenKind::Variable

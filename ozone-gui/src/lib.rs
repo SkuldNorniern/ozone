@@ -253,11 +253,11 @@ impl OzoneGui {
             // front. Drop ids whose buffer was closed.
             {
                 let ws = self.workspace.lock().unwrap();
-                if let Some(active) = ws.active_view().map(|v| v.buffer_id) {
-                    if buffer_mru.first() != Some(&active) {
-                        buffer_mru.retain(|id| *id != active);
-                        buffer_mru.insert(0, active);
-                    }
+                if let Some(active) = ws.active_view().map(|v| v.buffer_id)
+                    && buffer_mru.first() != Some(&active)
+                {
+                    buffer_mru.retain(|id| *id != active);
+                    buffer_mru.insert(0, active);
                 }
                 buffer_mru.retain(|id| ws.buffers.contains_key(id));
             }
@@ -307,7 +307,7 @@ impl OzoneGui {
                             }
                         } else if srch.is_some() {
                             let mut ws = self.workspace.lock().unwrap();
-                            if handle_search_key(key, &mut srch, &mut ws) {
+                            if handle_search_key(key, modifiers, &mut srch, &mut ws) {
                                 needs_redraw = true;
                             }
                         } else if let Some((term_id, bytes)) =
@@ -366,15 +366,12 @@ impl OzoneGui {
                             let mut srch = search.lock().unwrap();
                             if let Some(s) = srch.as_mut() {
                                 let mut ws = self.workspace.lock().unwrap();
-                                let mut changed = false;
-                                for c in text.chars().filter(|c| !c.is_control()) {
-                                    s.query.push(c);
-                                    changed = true;
-                                }
-                                if changed {
-                                    search_recompute(s, &ws);
-                                    search_select_from_cursor(s, &ws);
-                                    search_jump(s, &mut ws);
+                                // Typed text edits the query or the replacement,
+                                // depending on focus; query edits re-search + jump.
+                                if search_input_text(s, &text, &ws) {
+                                    if !s.focus_replace {
+                                        search_jump(s, &mut ws);
+                                    }
                                     needs_redraw = true;
                                 }
                             } else {
@@ -470,10 +467,10 @@ impl OzoneGui {
                 let mut want: Vec<(BufferId, Rect)> = Vec::new();
                 if let Some(panes) = &ws.panes {
                     collect_term_rects(&ws, panes, editor_rect, &mut want);
-                } else if let Some(bid) = ws.active_view().map(|v| v.buffer_id) {
-                    if terminals.contains_key(&bid) {
-                        want.push((bid, editor_rect));
-                    }
+                } else if let Some(bid) = ws.active_view().map(|v| v.buffer_id)
+                    && terminals.contains_key(&bid)
+                {
+                    want.push((bid, editor_rect));
                 }
                 for (bid, rect) in want {
                     let size = rect_to_grid(rect, &self.config, measured_char_w);
@@ -527,11 +524,11 @@ impl OzoneGui {
             {
                 let ws = self.workspace.lock().unwrap();
                 for (id, buf) in ws.buffers.iter() {
-                    if let BufferKind::Image(path) = &buf.kind {
-                        if !images.contains_key(id) {
-                            images.insert(*id, decode_image(path));
-                            needs_redraw = true;
-                        }
+                    if let BufferKind::Image(path) = &buf.kind
+                        && !images.contains_key(id)
+                    {
+                        images.insert(*id, decode_image(path));
+                        needs_redraw = true;
                     }
                 }
                 images.retain(|id, _| ws.buffers.contains_key(id));
@@ -650,13 +647,23 @@ fn handle_key(
                 } else if cmd == "buffer.picker" {
                     let items = buffer_picker_items(ws, mru);
                     *palette = Some(PickerState::new("buffer:", items));
-                } else if cmd == "search.start" {
-                    // Record the pre-search position so Ctrl+- returns to it.
-                    ws.push_jump();
-                    let mut s = SearchState::new(false);
-                    search_recompute(&mut s, ws);
-                    search_select_from_cursor(&mut s, ws);
-                    *search = Some(s);
+                } else if cmd == "search.start" || cmd == "search.replace" {
+                    // Reuse an open search (just turn on replace); else open fresh.
+                    if let Some(s) = search.as_mut() {
+                        if cmd == "search.replace" {
+                            s.enable_replace();
+                        }
+                    } else {
+                        // Record the pre-search position so Ctrl+- returns to it.
+                        ws.push_jump();
+                        let mut s = SearchState::new(false);
+                        if cmd == "search.replace" {
+                            s.enable_replace();
+                        }
+                        search_recompute(&mut s, ws);
+                        search_select_from_cursor(&mut s, ws);
+                        *search = Some(s);
+                    }
                 } else {
                     run_cmd(&cmd, ws, reg, autocmds);
                 }
@@ -924,6 +931,7 @@ pub(crate) fn editor_font(config: &Config) -> Font {
 // draw_editor
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn draw_editor(
     ctx: &mut dyn DrawingContext,
     ws: &mut Workspace,
@@ -1178,13 +1186,13 @@ fn draw_view(
         if let Some(num) = gutter_label {
             let ng = if is_cursor { GUTTER_ACT } else { GUTTER_FG };
             let num_x = (rect.x + gutter_w - PAD - num.len() as f32 * metrics.char_w).max(rect.x + 4.0);
-            ctx.draw_text_with_font(&num, Point::new(num_x, baseline), &font, &solid(ng))?;
+            ctx.draw_text_with_font(&num, Point::new(num_x, baseline), font, &solid(ng))?;
         }
 
         // Line content: terminal colour grid, or syntax-highlighted buffer text.
         if let Some(grid) = term_grid {
             if let Some(row) = grid.get(line_idx) {
-                draw_term_row(ctx, row, text_x, line_top, baseline, line_h, metrics.char_w, &font)?;
+                draw_term_row(ctx, row, text_x, line_top, baseline, line_h, metrics.char_w, font)?;
             }
         } else if let Some(line_text) = buf.line(line_idx) {
             let (spans, new_state) = scan_line(ft, &line_text, scan_state);
@@ -1194,11 +1202,11 @@ fn draw_view(
                 ctx.draw_text_with_font(
                     &line_text,
                     Point::new(text_x, baseline),
-                    &font,
+                    font,
                     &solid(token_color(TokenKind::Default)),
                 )?;
             } else {
-                draw_highlighted(ctx, &line_text, &spans, text_x, baseline, metrics.char_w, &font)?;
+                draw_highlighted(ctx, &line_text, &spans, text_x, baseline, metrics.char_w, font)?;
             }
         }
 
@@ -1284,6 +1292,7 @@ fn draw_highlighted(
 /// Draw one row of terminal cells: per-cell background fills, then runs of
 /// glyphs batched by identical pen (foreground colour + bold) into single text
 /// draws. Honours reverse-video by swapping fg/bg.
+#[allow(clippy::too_many_arguments)]
 fn draw_term_row(
     ctx: &mut dyn DrawingContext,
     row: &[ozone_term::Cell],
@@ -1525,10 +1534,10 @@ fn collect_term_rects(
 ) {
     match tree {
         PaneTree::Leaf { view_id } => {
-            if let Some(bid) = ws.views.get(view_id).map(|v| v.buffer_id) {
-                if matches!(ws.buffers.get(&bid).map(|b| &b.kind), Some(BufferKind::Terminal)) {
-                    out.push((bid, rect));
-                }
+            if let Some(bid) = ws.views.get(view_id).map(|v| v.buffer_id)
+                && matches!(ws.buffers.get(&bid).map(|b| &b.kind), Some(BufferKind::Terminal))
+            {
+                out.push((bid, rect));
             }
         }
         PaneTree::Split { axis, ratio, first, second } => {

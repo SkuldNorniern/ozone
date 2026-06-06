@@ -364,10 +364,10 @@ impl Workspace {
             return true;
         }
 
-        if let Some(panes) = self.panes.as_mut() {
-            if panes.remove_leaf(view_id).is_none() {
-                return false;
-            }
+        if let Some(panes) = self.panes.as_mut()
+            && panes.remove_leaf(view_id).is_none()
+        {
+            return false;
         }
         if let Some(removed) = self.views.remove(&view_id) {
             self.remove_unreferenced_virtual_buffer(removed.buffer_id);

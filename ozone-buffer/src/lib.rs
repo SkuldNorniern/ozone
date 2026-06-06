@@ -86,7 +86,7 @@ impl Buffer {
         Self::init(BufferId::next(), BufferKind::Scratch, PieceTable::new(""))
     }
 
-    pub fn from_str(content: &str) -> Self {
+    pub fn from_text(content: &str) -> Self {
         Self::init(BufferId::next(), BufferKind::Scratch, PieceTable::new(content))
     }
 

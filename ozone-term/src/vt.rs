@@ -304,13 +304,14 @@ impl Vt {
         let row = &mut self.screen[self.cy];
         match mode {
             0 => {
-                for c in self.cx..self.cols {
-                    row[c] = blank;
+                for cell in &mut row[self.cx..self.cols] {
+                    *cell = blank;
                 }
             }
             1 => {
-                for c in 0..=self.cx.min(self.cols - 1) {
-                    row[c] = blank;
+                let end = self.cx.min(self.cols - 1);
+                for cell in &mut row[0..=end] {
+                    *cell = blank;
                 }
             }
             _ => {
@@ -361,10 +362,9 @@ impl Vt {
             return;
         }
         let mut next = vec![vec![Cell::blank(); cols]; rows];
-        for r in 0..rows.min(self.rows) {
-            for c in 0..cols.min(self.cols) {
-                next[r][c] = self.screen[r][c];
-            }
+        let copy_cols = cols.min(self.cols);
+        for (dst_row, src_row) in next.iter_mut().zip(self.screen.iter()).take(rows.min(self.rows)) {
+            dst_row[..copy_cols].copy_from_slice(&src_row[..copy_cols]);
         }
         self.screen = next;
         self.cols = cols;

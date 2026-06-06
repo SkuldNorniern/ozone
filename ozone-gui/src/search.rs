@@ -1,15 +1,16 @@
-//! In-buffer search (Meta+F): incremental literal search with match highlighting.
+//! In-buffer search (Meta+F) and replace (Ctrl+H): incremental literal search
+//! with match highlighting, plus optional replace of the current / all matches.
 //!
 //! `SearchState` holds the query and the byte-offset matches in the active
 //! buffer; the renderer ([`crate::draw_view`]) highlights them and this module
-//! draws the top-right find bar. Matching itself is `ozone-editor`'s
-//! `find_matches` (no regex).
+//! draws the top-right find/replace bar. Matching is `ozone-editor`'s
+//! `find_matches` (literal, no regex).
 
 use aurea::AureaResult;
 use aurea::render::{DrawingContext, Font, Point, Rect};
 use ozone_editor::Workspace;
 
-use crate::theme::{PALETTE_BG, PALETTE_BORDER, PALETTE_DESC, PALETTE_FG, solid};
+use crate::theme::{PALETTE_BG, PALETTE_BORDER, PALETTE_DESC, PALETTE_FG, PALETTE_PROMPT, solid};
 use crate::{baseline_in_rect, fill_round_rect};
 
 pub(crate) struct SearchState {
@@ -18,12 +19,32 @@ pub(crate) struct SearchState {
     pub(crate) matches: Vec<usize>,
     pub(crate) current: usize,
     case_sensitive: bool,
+    /// Replacement text when in replace mode; `None` = find-only.
+    pub(crate) replace: Option<String>,
+    /// In replace mode, whether typed text edits the replacement (vs the query).
+    pub(crate) focus_replace: bool,
 }
 
 impl SearchState {
     pub(crate) fn new(case_sensitive: bool) -> Self {
-        Self { query: String::new(), matches: Vec::new(), current: 0, case_sensitive }
+        Self {
+            query: String::new(),
+            matches: Vec::new(),
+            current: 0,
+            case_sensitive,
+            replace: None,
+            focus_replace: false,
+        }
     }
+
+    /// Turn on replace mode (keeps the existing query). Typing stays on the
+    /// query field; Tab switches to the replacement (VS Code-style).
+    pub(crate) fn enable_replace(&mut self) {
+        if self.replace.is_none() {
+            self.replace = Some(String::new());
+        }
+    }
+
     fn current_offset(&self) -> Option<usize> {
         self.matches.get(self.current).copied()
     }
@@ -70,17 +91,74 @@ pub(crate) fn search_jump(s: &SearchState, ws: &mut Workspace) {
     }
 }
 
+/// Replace the `qbytes`-long match at byte offset `off` with `repl` in the
+/// active buffer. (Literal matches keep the query's byte length.)
+fn replace_at(ws: &mut Workspace, off: usize, qbytes: usize, repl: &str) {
+    let Some(buf) = ws.active_buffer_mut() else { return };
+    if qbytes > 0 {
+        let _ = buf.delete_at(off, qbytes);
+    }
+    if !repl.is_empty() {
+        let pos = buf.offset_to_pos(off);
+        buf.insert(pos, repl);
+    }
+}
+
+/// Replace the current match, then recompute and move to the next.
+pub(crate) fn search_replace_current(s: &mut SearchState, ws: &mut Workspace) {
+    let Some(off) = s.current_offset() else { return };
+    let qbytes = s.query.len();
+    if qbytes == 0 {
+        return;
+    }
+    let repl = s.replace.clone().unwrap_or_default();
+    replace_at(ws, off, qbytes, &repl);
+    search_recompute(s, ws);
+    if s.current >= s.matches.len() {
+        s.current = 0;
+    }
+    search_jump(s, ws);
+}
+
+/// Replace every match in the buffer (from the end so offsets stay valid).
+pub(crate) fn search_replace_all(s: &mut SearchState, ws: &mut Workspace) {
+    let qbytes = s.query.len();
+    if qbytes == 0 || s.matches.is_empty() {
+        return;
+    }
+    let repl = s.replace.clone().unwrap_or_default();
+    let offsets = s.matches.clone();
+    for &off in offsets.iter().rev() {
+        replace_at(ws, off, qbytes, &repl);
+    }
+    search_recompute(s, ws);
+    s.current = 0;
+    search_jump(s, ws);
+}
+
 /// Handle a key while search is active. Returns whether a redraw is needed.
 pub(crate) fn handle_search_key(
     key: aurea::KeyCode,
+    mods: aurea::Modifiers,
     search: &mut Option<SearchState>,
     ws: &mut Workspace,
 ) -> bool {
     use aurea::KeyCode::*;
     let Some(s) = search.as_mut() else { return false };
+    let in_replace = s.replace.is_some();
     match key {
         Escape => {
             *search = None;
+            true
+        }
+        // Ctrl+Enter (or Alt+Enter) replaces all; plain Enter in replace mode
+        // replaces the current match; otherwise Enter just steps to the next.
+        Enter if in_replace && (mods.ctrl || mods.alt) => {
+            search_replace_all(s, ws);
+            true
+        }
+        Enter if in_replace => {
+            search_replace_current(s, ws);
             true
         }
         Enter | Down => {
@@ -93,18 +171,54 @@ pub(crate) fn handle_search_key(
             search_jump(s, ws);
             true
         }
+        // Tab switches the typed-text focus between query and replacement.
+        Tab if in_replace => {
+            s.focus_replace = !s.focus_replace;
+            true
+        }
         Backspace => {
-            s.query.pop();
-            search_recompute(s, ws);
-            search_select_from_cursor(s, ws);
-            search_jump(s, ws);
+            if in_replace && s.focus_replace {
+                if let Some(r) = s.replace.as_mut() {
+                    r.pop();
+                }
+            } else {
+                s.query.pop();
+                search_recompute(s, ws);
+                search_select_from_cursor(s, ws);
+                search_jump(s, ws);
+            }
             true
         }
         _ => false,
     }
 }
 
-/// Top-right find bar: `find: <query>   (i/n)`.
+/// Append typed text to the focused input (query or replacement). Returns
+/// whether anything changed (caller recomputes/redraws).
+pub(crate) fn search_input_text(s: &mut SearchState, text: &str, ws: &Workspace) -> bool {
+    let mut changed = false;
+    if s.replace.is_some() && s.focus_replace {
+        if let Some(r) = s.replace.as_mut() {
+            for c in text.chars().filter(|c| !c.is_control()) {
+                r.push(c);
+                changed = true;
+            }
+        }
+    } else {
+        for c in text.chars().filter(|c| !c.is_control()) {
+            s.query.push(c);
+            changed = true;
+        }
+        if changed {
+            search_recompute(s, ws);
+            search_select_from_cursor(s, ws);
+        }
+    }
+    changed
+}
+
+/// Top-right find bar: `find: <query>   (i/n)`, with a second `replace:` line
+/// when in replace mode. The focused input is marked.
 pub(crate) fn draw_search_bar(
     ctx: &mut dyn DrawingContext,
     s: &SearchState,
@@ -121,20 +235,96 @@ pub(crate) fn draw_search_bar(
     } else {
         format!("  ({}/{})", s.current + 1, s.matches.len())
     };
-    let text = format!("find: {}{}", s.query, count);
-    let text_w = ctx.measure_text(&text, font).map(|m| m.advance).unwrap_or(text.len() as f32 * font.size * 0.6);
+    let find_text = format!("find: {}{}", s.query, count);
+    let replace_text = s.replace.as_ref().map(|r| format!("replace: {r}"));
+
+    let measure = |ctx: &mut dyn DrawingContext, t: &str| {
+        ctx.measure_text(t, font).map(|m| m.advance).unwrap_or(t.len() as f32 * font.size * 0.6)
+    };
+    let find_w = measure(ctx, &find_text);
+    let repl_w = replace_text.as_ref().map(|t| measure(ctx, t)).unwrap_or(0.0);
+    let hint_w = if s.replace.is_some() { measure(ctx, "Tab switch · Enter one · ^Enter all") } else { 0.0 };
+    let content_w = find_w.max(repl_w).max(hint_w);
 
     let pad = 10.0;
-    let bw = (text_w + pad * 2.0 + 16.0).min(width - 24.0);
+    let rows = if s.replace.is_some() { 3.0 } else { 1.0 };
+    let bw = (content_w + pad * 2.0 + 16.0).min(width - 24.0);
+    let bh = line_h * rows + 6.0;
     let bx = width - bw - 12.0;
     let by = 10.0;
-    fill_round_rect(ctx, Rect::new(bx - 1.0, by - 1.0, bw + 2.0, line_h + 2.0), 9.0, PALETTE_BORDER)?;
-    fill_round_rect(ctx, Rect::new(bx, by, bw, line_h), 8.0, PALETTE_BG)?;
+    fill_round_rect(ctx, Rect::new(bx - 1.0, by - 1.0, bw + 2.0, bh + 2.0), 9.0, PALETTE_BORDER)?;
+    fill_round_rect(ctx, Rect::new(bx, by, bw, bh), 8.0, PALETTE_BG)?;
 
-    let bl = baseline_in_rect(by, line_h, ascent, descent);
-    let prompt_w = ctx.measure_text("find: ", font).map(|m| m.advance).unwrap_or(0.0);
-    ctx.draw_text_with_font("find: ", Point::new(bx + pad, bl), font, &solid(PALETTE_DESC))?;
+    // Find line.
+    let bl = baseline_in_rect(by + 3.0, line_h, ascent, descent);
+    let prompt_w = measure(ctx, "find: ");
+    let find_label_color = if s.focus_replace { PALETTE_DESC } else { PALETTE_PROMPT };
+    ctx.draw_text_with_font("find: ", Point::new(bx + pad, bl), font, &solid(find_label_color))?;
     let rest = format!("{}{}", s.query, count);
     ctx.draw_text_with_font(&rest, Point::new(bx + pad + prompt_w, bl), font, &solid(PALETTE_FG))?;
+
+    // Replace line + hint.
+    if let Some(replace_text) = replace_text {
+        let bl2 = baseline_in_rect(by + 3.0 + line_h, line_h, ascent, descent);
+        let rprompt_w = measure(ctx, "replace: ");
+        let repl_label_color = if s.focus_replace { PALETTE_PROMPT } else { PALETTE_DESC };
+        ctx.draw_text_with_font("replace: ", Point::new(bx + pad, bl2), font, &solid(repl_label_color))?;
+        let rval = s.replace.clone().unwrap_or_default();
+        let _ = replace_text;
+        ctx.draw_text_with_font(&rval, Point::new(bx + pad + rprompt_w, bl2), font, &solid(PALETTE_FG))?;
+
+        let bl3 = baseline_in_rect(by + 3.0 + line_h * 2.0, line_h, ascent, descent);
+        ctx.draw_text_with_font("Tab switch · Enter one · ^Enter all", Point::new(bx + pad, bl3), font, &solid(PALETTE_DESC))?;
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ozone_editor::Workspace;
+
+    fn ws_with(text: &str) -> Workspace {
+        let mut ws = Workspace::new();
+        ws.active_buffer_mut().unwrap().set_text(text);
+        ws
+    }
+
+    #[test]
+    fn replace_all_replaces_every_match() {
+        let mut ws = ws_with("foo bar foo baz foo");
+        let mut s = SearchState::new(false);
+        s.query = "foo".into();
+        s.replace = Some("X".into());
+        search_recompute(&mut s, &ws);
+        assert_eq!(s.matches.len(), 3);
+        search_replace_all(&mut s, &mut ws);
+        assert_eq!(ws.active_buffer().unwrap().text(), "X bar X baz X");
+        assert!(s.matches.is_empty());
+    }
+
+    #[test]
+    fn replace_current_replaces_one_then_recomputes() {
+        let mut ws = ws_with("aa aa aa");
+        let mut s = SearchState::new(false);
+        s.query = "aa".into();
+        s.replace = Some("b".into());
+        search_recompute(&mut s, &ws);
+        s.current = 0;
+        search_replace_current(&mut s, &mut ws);
+        assert_eq!(ws.active_buffer().unwrap().text(), "b aa aa");
+        assert_eq!(s.matches.len(), 2);
+    }
+
+    #[test]
+    fn case_insensitive_replace_keeps_text_length_invariant() {
+        let mut ws = ws_with("Foo FOO foo");
+        let mut s = SearchState::new(false); // case-insensitive
+        s.query = "foo".into();
+        s.replace = Some("ba".into());
+        search_recompute(&mut s, &ws);
+        assert_eq!(s.matches.len(), 3);
+        search_replace_all(&mut s, &mut ws);
+        assert_eq!(ws.active_buffer().unwrap().text(), "ba ba ba");
+    }
 }

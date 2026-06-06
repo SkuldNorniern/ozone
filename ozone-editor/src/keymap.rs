@@ -159,10 +159,10 @@ impl Key {
             "right" => Key::Right,
             _ => {
                 // F-key, e.g. "f5"
-                if let Some(num) = t.strip_prefix('f').and_then(|n| n.parse::<u8>().ok()) {
-                    if (1..=12).contains(&num) {
-                        return Some(Key::F(num));
-                    }
+                if let Some(num) = t.strip_prefix('f').and_then(|n| n.parse::<u8>().ok())
+                    && (1..=12).contains(&num)
+                {
+                    return Some(Key::F(num));
                 }
                 // Single printable char.
                 let mut chars = t.chars();
@@ -338,6 +338,7 @@ impl Keymap {
             ("ctrl+f", "cursor.move-right"),
             ("ctrl+n", "cursor.move-down"),
             ("meta+f", "search.start"), // M-f opens in-buffer find
+            ("meta+h", "search.replace"), // M-h opens find with a replace box
             ("ctrl+home", "cursor.file-start"),
             ("ctrl+end", "cursor.file-end"),
             ("ctrl+left", "cursor.word-backward"),

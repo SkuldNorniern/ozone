@@ -79,7 +79,7 @@ mod tests {
     use super::*;
 
     fn buf(content: &str) -> Buffer {
-        Buffer::from_str(content)
+        Buffer::from_text(content)
     }
 
     #[test]

@@ -174,20 +174,20 @@ impl Config {
 
         if let Some(editor) = table.get("editor").and_then(|v| v.as_table()) {
             let e = &mut config.editor;
-            if let Some(v) = editor.get("font").and_then(|v| v.as_str()) {
-                if !v.trim().is_empty() {
-                    e.font = v.to_string();
-                }
+            if let Some(v) = editor.get("font").and_then(|v| v.as_str())
+                && !v.trim().is_empty()
+            {
+                e.font = v.to_string();
             }
-            if let Some(v) = as_f32(editor.get("font_size")) {
-                if v > 0.0 {
-                    e.font_size = v;
-                }
+            if let Some(v) = as_f32(editor.get("font_size"))
+                && v > 0.0
+            {
+                e.font_size = v;
             }
-            if let Some(v) = as_f32(editor.get("line_height")) {
-                if v > 0.0 {
-                    e.line_height = v;
-                }
+            if let Some(v) = as_f32(editor.get("line_height"))
+                && v > 0.0
+            {
+                e.line_height = v;
             }
             if let Some(v) = as_usize(editor.get("tab_width")) {
                 e.tab_width = v.max(1);
@@ -237,10 +237,9 @@ impl Config {
             .and_then(|v| v.as_table())
             .and_then(|t| t.get("name"))
             .and_then(|v| v.as_str())
+            && !name.trim().is_empty()
         {
-            if !name.trim().is_empty() {
-                config.theme = name.to_string();
-            }
+            config.theme = name.to_string();
         }
 
         config.keymaps = parse_keymaps(&table);

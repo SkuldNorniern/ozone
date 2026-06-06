@@ -25,6 +25,8 @@ pub trait Pty: Send {
 }
 
 /// Spawn the default shell on a PTY using the compiled-in backend.
+// Returns are required to keep the cfg-gated branches mutually exclusive.
+#[allow(clippy::needless_return)]
 pub fn spawn_default() -> io::Result<Box<dyn Pty>> {
     #[cfg(feature = "inhouse")]
     {
