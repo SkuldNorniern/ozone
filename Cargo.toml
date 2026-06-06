@@ -10,6 +10,7 @@ members = [
     "ozone-gui",
     "ozone-syntax",
     "ozone-config",
+    "ozone-term",
 ]
 resolver = "2"
 
@@ -21,6 +22,7 @@ ozone-editor = { path = "ozone-editor" }
 ozone-gui    = { path = "ozone-gui" }
 ozone-syntax = { path = "ozone-syntax" }
 ozone-config = { path = "ozone-config" }
+ozone-term   = { path = "ozone-term" }
 
 [dependencies]
 ozone-editor = { workspace = true }

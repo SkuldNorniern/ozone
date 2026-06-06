@@ -130,6 +130,14 @@ impl Buffer {
         self.table.text()
     }
 
+    /// Replace the entire buffer contents (used for streamed/generated buffers
+    /// like the terminal). Clears undo history; does not mark the buffer dirty.
+    pub fn set_text(&mut self, content: &str) {
+        self.table = PieceTable::new(content);
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+    }
+
     pub fn line_count(&self) -> usize {
         self.table.line_count()
     }

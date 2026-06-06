@@ -1,0 +1,5 @@
+[package]
+name = "ozone-term"
+version = "0.1.0"
+edition = "2024"
+description = "Process-backed terminal core for Ozone (std-only; PTY/VT upgrade later)"

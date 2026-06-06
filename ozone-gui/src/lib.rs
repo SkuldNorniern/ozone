@@ -1,5 +1,14 @@
+use std::collections::HashMap;
 use std::os::raw::c_void;
 use std::sync::{Arc, Mutex};
+
+use ozone_term::Terminal;
+
+/// A live terminal: the shell process plus the locally-echoed input line.
+struct TermSession {
+    term: Terminal,
+    input: String,
+}
 
 use aurea::render::{Canvas, Color, DrawingContext, Font, Paint, PaintStyle, Point, Rect, RendererBackend};
 use aurea::{AureaResult, Element, Window, WindowEvent};
@@ -417,6 +426,9 @@ impl OzoneGui {
         let mut last_title = String::new();
         // Pending chord prefix carried across key events (e.g. after `ctrl+k`).
         let mut chord_pending: Vec<KeyStroke> = Vec::new();
+        // Live terminal sessions, keyed by their Terminal buffer.
+        let mut terminals: HashMap<BufferId, TermSession> = HashMap::new();
+        let mut failed_terminals: std::collections::HashSet<BufferId> = std::collections::HashSet::new();
 
         // --------------- event loop ---------------
         loop {
@@ -456,6 +468,25 @@ impl OzoneGui {
                             let mut ws = self.workspace.lock().unwrap();
                             if handle_search_key(key, &mut srch, &mut ws) {
                                 needs_redraw = true;
+                            }
+                        } else if let Some(term_id) = active_terminal(&self.workspace.lock().unwrap())
+                            .filter(|id| terminals.contains_key(id))
+                        {
+                            // Active buffer is a live terminal: Enter sends the
+                            // line, Backspace edits it; typed chars come via TextInput.
+                            use aurea::KeyCode::*;
+                            let sess = terminals.get_mut(&term_id).unwrap();
+                            match key {
+                                Enter => {
+                                    let line = std::mem::take(&mut sess.input);
+                                    sess.term.write_line(&line);
+                                    needs_redraw = true;
+                                }
+                                Backspace => {
+                                    sess.input.pop();
+                                    needs_redraw = true;
+                                }
+                                _ => {}
                             }
                         } else {
                             let r = handle_key(
@@ -515,7 +546,15 @@ impl OzoneGui {
                             } else {
                                 drop(srch);
                                 let mut ws = self.workspace.lock().unwrap();
-                                if insert_text_raw(&text, &mut ws) {
+                                let term_id = active_terminal(&ws).filter(|id| terminals.contains_key(id));
+                                if let Some(term_id) = term_id {
+                                    // Echo typed chars into the terminal's input line.
+                                    let sess = terminals.get_mut(&term_id).unwrap();
+                                    for c in text.chars().filter(|c| !c.is_control()) {
+                                        sess.input.push(c);
+                                        needs_redraw = true;
+                                    }
+                                } else if insert_text_raw(&text, &mut ws) {
                                     dispatch_autocmds(&mut ws, &self.commands, &self.autocmds);
                                     needs_redraw = true;
                                 }
@@ -551,6 +590,62 @@ impl OzoneGui {
             }
 
             if should_close { break; }
+
+            // --- terminal sync: spawn, stream output into the buffer, scroll ---
+            {
+                let mut ws = self.workspace.lock().unwrap();
+                let term_bufs: Vec<BufferId> = ws
+                    .buffers
+                    .iter()
+                    .filter(|(_, b)| matches!(b.kind, BufferKind::Terminal))
+                    .map(|(id, _)| *id)
+                    .collect();
+                // Attach a shell to any Terminal buffer that lacks one.
+                for id in &term_bufs {
+                    if terminals.contains_key(id) || failed_terminals.contains(id) {
+                        continue;
+                    }
+                    match Terminal::spawn() {
+                        Ok(term) => {
+                            terminals.insert(*id, TermSession { term, input: String::new() });
+                        }
+                        Err(e) => {
+                            failed_terminals.insert(*id);
+                            if let Some(buf) = ws.buffers.get_mut(id) {
+                                buf.set_text(&format!("could not start terminal: {e}\n"));
+                            }
+                            needs_redraw = true;
+                        }
+                    }
+                }
+                // Forget sessions whose buffer was closed.
+                terminals.retain(|id, _| ws.buffers.contains_key(id));
+
+                let active_term = active_terminal(&ws);
+                for (id, sess) in terminals.iter_mut() {
+                    let is_active = active_term == Some(*id);
+                    let mut text = sess.term.output_snapshot();
+                    if is_active {
+                        text.push_str(&sess.input);
+                    }
+                    let changed = ws.buffers.get(id).map(|b| b.text() != text).unwrap_or(false);
+                    if changed {
+                        if let Some(buf) = ws.buffers.get_mut(id) {
+                            buf.set_text(&text);
+                        }
+                        if is_active {
+                            // Pin the cursor to the end so the view follows output.
+                            let last = ws.buffers.get(id).map(|b| b.line_count().saturating_sub(1)).unwrap_or(0);
+                            let col = ws.buffers.get(id).map(|b| b.line_len(last)).unwrap_or(0);
+                            if let Some(view) = ws.active_view_mut() {
+                                view.cursor = ozone_buffer::Pos::new(last, col);
+                                view.scroll_line = usize::MAX; // clamped to bottom in draw_view
+                            }
+                        }
+                        needs_redraw = true;
+                    }
+                }
+            }
 
             // Update window title when active file changes
             {
@@ -699,6 +794,15 @@ fn handle_key(
     }
 
     false
+}
+
+/// The active buffer's id if it is a live terminal surface.
+fn active_terminal(ws: &Workspace) -> Option<BufferId> {
+    let view = ws.active_view()?;
+    match ws.buffers.get(&view.buffer_id)?.kind {
+        BufferKind::Terminal => Some(view.buffer_id),
+        _ => None,
+    }
 }
 
 /// Filetype token for the active buffer (for filetype-scoped keymaps).
