@@ -1,11 +1,26 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use ozone_buffer::{Buffer, BufferId, BufferKind};
+use ozone_buffer::{Buffer, BufferId, BufferKind, Pos};
 
 use crate::events::EditorEvent;
 use crate::pane::{FocusDirection, PaneTree, SplitAxis};
 use crate::view::{View, ViewId};
+
+/// A point in the jump list: which buffer and where in it.
+type Loc = (BufferId, Pos);
+
+/// Maximum remembered jump origins (per direction).
+const JUMP_CAP: usize = 100;
+
+/// Browser-style back/forward history of cursor jump origins. `push` records a
+/// place you are leaving (clearing the forward stack); `back`/`forward` move
+/// between recorded locations.
+#[derive(Default)]
+struct JumpList {
+    back: Vec<Loc>,
+    fwd: Vec<Loc>,
+}
 
 /// Indentation settings used by editing commands (smart indent, soft tabs).
 #[derive(Debug, Clone, Copy)]
@@ -39,6 +54,7 @@ pub struct Workspace {
     pub panes: Option<PaneTree>,
     pub indent: IndentConfig,
     events: Vec<EditorEvent>,
+    jumps: JumpList,
 }
 
 impl Workspace {
@@ -50,6 +66,7 @@ impl Workspace {
             panes: None,
             indent: IndentConfig::default(),
             events: Vec::new(),
+            jumps: JumpList::default(),
         };
         // Always have a *scratch* buffer open.
         ws.open_scratch();
@@ -68,6 +85,8 @@ impl Workspace {
     }
 
     pub fn open_file(&mut self, path: PathBuf) -> std::io::Result<(BufferId, ViewId)> {
+        // Opening a file is a jump: record where we were so Ctrl+- returns.
+        self.push_jump();
         let path = std::fs::canonicalize(&path).unwrap_or(path);
         let buf = Buffer::open(path)?;
         let buf_id = buf.id;
@@ -242,6 +261,84 @@ impl Workspace {
             self.emit(EditorEvent::CursorMoved { view_id: id, pos });
         }
         true
+    }
+
+    /// The active view's current location, if any.
+    fn current_loc(&self) -> Option<Loc> {
+        let view = self.active_view()?;
+        Some((view.buffer_id, view.cursor))
+    }
+
+    /// Record the active location as a jump origin (clears the forward stack).
+    /// Call before a navigation that should be reachable with `jump_back`.
+    pub fn push_jump(&mut self) {
+        if let Some(loc) = self.current_loc() {
+            if self.jumps.back.last() != Some(&loc) {
+                self.jumps.back.push(loc);
+                if self.jumps.back.len() > JUMP_CAP {
+                    self.jumps.back.remove(0);
+                }
+            }
+            self.jumps.fwd.clear();
+        }
+    }
+
+    /// Jump to the most recent recorded origin (Ctrl+-). Returns false if there
+    /// is nowhere to go back to (skipping origins whose buffer was closed).
+    pub fn jump_back(&mut self) -> bool {
+        let Some(cur) = self.current_loc() else { return false };
+        while let Some(target) = self.jumps.back.pop() {
+            if self.buffers.contains_key(&target.0) {
+                self.jumps.fwd.push(cur);
+                return self.apply_loc(target.0, target.1);
+            }
+        }
+        false
+    }
+
+    /// Re-do a jump undone by `jump_back`. Returns false if there is none.
+    pub fn jump_forward(&mut self) -> bool {
+        let Some(cur) = self.current_loc() else { return false };
+        while let Some(target) = self.jumps.fwd.pop() {
+            if self.buffers.contains_key(&target.0) {
+                self.jumps.back.push(cur);
+                return self.apply_loc(target.0, target.1);
+            }
+        }
+        false
+    }
+
+    /// Point the active view at `buffer_id`, placing the cursor at `pos`
+    /// (clamped) and scrolling it into view. Returns false if the buffer is gone.
+    fn apply_loc(&mut self, buffer_id: BufferId, pos: Pos) -> bool {
+        let Some(buf) = self.buffers.get(&buffer_id) else { return false };
+        let last_line = buf.line_count().saturating_sub(1);
+        let line = pos.line.min(last_line);
+        let col = pos.col.min(buf.line_len(line));
+        let Some(view_id) = self.active_view_id else { return false };
+        let Some(view) = self.views.get_mut(&view_id) else { return false };
+        view.buffer_id = buffer_id;
+        view.cursor = Pos::new(line, col);
+        view.col_memory = col;
+        view.selection = None;
+        view.scroll_to_cursor(view.page_height.max(1));
+        let (id, cursor) = (view.id, view.cursor);
+        self.emit(EditorEvent::CursorMoved { view_id: id, pos: cursor });
+        true
+    }
+
+    /// Switch the active pane to a specific open buffer (used by the buffer
+    /// picker). Records a jump so Ctrl+- returns to the previous buffer.
+    pub fn switch_active_buffer(&mut self, target: BufferId) -> bool {
+        if !self.buffers.contains_key(&target) {
+            return false;
+        }
+        if self.current_loc().map(|l| l.0) == Some(target) {
+            return false; // already here
+        }
+        self.push_jump();
+        // Land at the top of the target buffer.
+        self.apply_loc(target, Pos::zero())
     }
 
     pub fn close_view(&mut self, view_id: ViewId) -> bool {
@@ -457,6 +554,57 @@ mod tests {
     fn cycle_buffer_noop_with_single_buffer() {
         let mut ws = Workspace::new();
         assert!(!ws.cycle_buffer(true));
+    }
+
+    #[test]
+    fn switch_active_buffer_records_jump_and_back_returns() {
+        let mut ws = Workspace::new();
+        let scratch = ws.active_buffer().unwrap().id;
+
+        let tmp = std::env::temp_dir().join(format!("ozone_jump_{}.txt", std::process::id()));
+        std::fs::write(&tmp, "alpha\nbeta\n").unwrap();
+        // open_file records a jump (scratch) and switches to the file buffer.
+        let (file_buf, _) = ws.open_file(tmp.clone()).unwrap();
+        assert_eq!(ws.active_buffer().unwrap().id, file_buf);
+
+        // Jump back lands on the scratch buffer again.
+        assert!(ws.jump_back());
+        assert_eq!(ws.active_buffer().unwrap().id, scratch);
+
+        // Forward returns to the file buffer.
+        assert!(ws.jump_forward());
+        assert_eq!(ws.active_buffer().unwrap().id, file_buf);
+
+        // No further forward target.
+        assert!(!ws.jump_forward());
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn switch_active_buffer_changes_buffer_and_is_reversible() {
+        let mut ws = Workspace::new();
+        let scratch = ws.active_buffer().unwrap().id;
+        let tmp = std::env::temp_dir().join(format!("ozone_switch_{}.txt", std::process::id()));
+        std::fs::write(&tmp, "x\n").unwrap();
+        let (file_buf, _) = ws.open_file(tmp.clone()).unwrap();
+
+        assert!(ws.switch_active_buffer(scratch));
+        assert_eq!(ws.active_buffer().unwrap().id, scratch);
+        // Switching to the already-active buffer is a no-op.
+        assert!(!ws.switch_active_buffer(scratch));
+        // The switch recorded a jump back to the file buffer.
+        assert!(ws.jump_back());
+        assert_eq!(ws.active_buffer().unwrap().id, file_buf);
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn jump_back_noop_when_empty() {
+        let mut ws = Workspace::new();
+        assert!(!ws.jump_back());
+        assert!(!ws.jump_forward());
     }
 
     #[test]

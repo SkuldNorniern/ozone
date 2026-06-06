@@ -158,9 +158,10 @@ impl OzoneGui {
             {
                 let mut ws = workspace_for_draw.lock().unwrap();
                 let srch = search_for_draw.lock().unwrap();
-                // Repaint callback: terminal colour grids are supplied by the
-                // explicit redraw in the run loop, so none here.
-                draw_editor(ctx, &mut ws, &config_for_draw, srch.as_ref(), &TermCells::new())?;
+                // Repaint callback: terminal colour grids + PTY sizing are driven
+                // by the explicit redraw in the run loop, so none here.
+                let mut scratch_char_w = 0.0;
+                draw_editor(ctx, &mut ws, &config_for_draw, srch.as_ref(), &TermCells::new(), &mut scratch_char_w)?;
             }
             if let Some(p) = palette_for_draw.lock().unwrap().as_ref() {
                 draw_palette(ctx, p, &config_for_draw)?;
@@ -180,7 +181,8 @@ impl OzoneGui {
             let mut canvas = canvas_arc.lock().unwrap();
             let mut ws = self.workspace.lock().unwrap();
             let config = self.config.clone();
-            canvas.draw(|ctx| draw_editor(ctx, &mut ws, &config, None, &TermCells::new()))?;
+            let mut scratch_char_w = 0.0;
+            canvas.draw(|ctx| draw_editor(ctx, &mut ws, &config, None, &TermCells::new(), &mut scratch_char_w))?;
             canvas.invalidate_all();
         }
 
@@ -195,6 +197,13 @@ impl OzoneGui {
         let mut term_cells: TermCells = TermCells::new();
         // Last grid size pushed to each terminal's PTY, to avoid redundant resizes.
         let mut term_sizes: HashMap<BufferId, (u16, u16)> = HashMap::new();
+        // Last output version seen per terminal; skip re-rendering when unchanged.
+        let mut term_versions: HashMap<BufferId, u64> = HashMap::new();
+        // Renderer's measured monospace cell width, updated each draw; used to
+        // size terminal PTYs so TUIs fill the pane exactly.
+        let mut measured_char_w = (self.config.editor.font_size * 0.6).max(1.0);
+        // Most-recently-used buffer order (front = current), for the buffer picker.
+        let mut buffer_mru: Vec<BufferId> = Vec::new();
 
         // --------------- event loop ---------------
         loop {
@@ -202,6 +211,19 @@ impl OzoneGui {
             // before we drain it.  Ensures key presses are processed in the
             // same 8 ms frame they arrive, not the next one.
             unsafe { aurea::ffi::ng_platform_poll_events() };
+
+            // Keep the MRU list current: whichever buffer is active moves to the
+            // front. Drop ids whose buffer was closed.
+            {
+                let ws = self.workspace.lock().unwrap();
+                if let Some(active) = ws.active_view().map(|v| v.buffer_id) {
+                    if buffer_mru.first() != Some(&active) {
+                        buffer_mru.retain(|id| *id != active);
+                        buffer_mru.insert(0, active);
+                    }
+                }
+                buffer_mru.retain(|id| ws.buffers.contains_key(id));
+            }
 
             let events = window.poll_events();
             let mut should_close = false;
@@ -259,6 +281,7 @@ impl OzoneGui {
                                 &mut chord_pending,
                                 &mut pal,
                                 &mut srch,
+                                &buffer_mru,
                             );
                             if r {
                                 needs_redraw = true;
@@ -400,20 +423,29 @@ impl OzoneGui {
                     }
                 }
                 for (bid, rect) in want {
-                    let size = rect_to_grid(rect, &self.config);
+                    let size = rect_to_grid(rect, &self.config, measured_char_w);
                     if terminals.contains_key(&bid) && term_sizes.get(&bid) != Some(&size) {
                         terminals[&bid].resize(size.0, size.1);
                         term_sizes.insert(bid, size);
                     }
                 }
 
+                term_versions.retain(|id, _| terminals.contains_key(id));
                 let active_term = active_terminal(&ws);
                 for (id, term) in terminals.iter() {
                     let is_active = active_term == Some(*id);
+                    // Skip entirely unless the reader thread saw new output (or a
+                    // resize bumped the version) — avoids rendering the whole grid
+                    // to a string every frame, which TUIs make costly.
+                    let version = term.version();
+                    if term_versions.get(id) == Some(&version) {
+                        continue;
+                    }
+                    term_versions.insert(*id, version);
+
                     // The PTY shell echoes input itself, so the buffer is just output.
                     let text = term.output_snapshot();
-                    let changed = ws.buffers.get(id).map(|b| b.text() != text).unwrap_or(false);
-                    if changed {
+                    {
                         // Refresh the colour grid alongside the text (same cadence).
                         term_cells.insert(*id, term.cell_snapshot());
                         if let Some(buf) = ws.buffers.get_mut(id) {
@@ -455,7 +487,7 @@ impl OzoneGui {
                 let pal = palette.lock().unwrap();
                 let srch = search.lock().unwrap();
                 canvas.draw(|ctx| {
-                    draw_editor(ctx, &mut ws, &config, srch.as_ref(), &term_cells)?;
+                    draw_editor(ctx, &mut ws, &config, srch.as_ref(), &term_cells, &mut measured_char_w)?;
                     if let Some(p) = pal.as_ref() {
                         draw_palette(ctx, p, &config)?;
                     }
@@ -509,6 +541,7 @@ fn handle_key(
     pending: &mut Vec<KeyStroke>,
     palette: &mut Option<PickerState>,
     search: &mut Option<SearchState>,
+    mru: &[BufferId],
 ) -> bool {
     use aurea::KeyCode::*;
 
@@ -546,7 +579,12 @@ fn handle_key(
                     *palette = Some(PickerState::new("M-x", command_picker_items(reg)));
                 } else if cmd == "file.picker" {
                     *palette = Some(PickerState::new("find file:", file_picker_items()));
+                } else if cmd == "buffer.picker" {
+                    let items = buffer_picker_items(ws, mru);
+                    *palette = Some(PickerState::new("buffer:", items));
                 } else if cmd == "search.start" {
+                    // Record the pre-search position so Ctrl+- returns to it.
+                    ws.push_jump();
                     let mut s = SearchState::new(false);
                     search_recompute(&mut s, ws);
                     search_select_from_cursor(&mut s, ws);
@@ -646,6 +684,12 @@ fn keycode_key(key: aurea::KeyCode) -> Option<Key> {
         F1 => Key::F(1), F2 => Key::F(2), F3 => Key::F(3), F4 => Key::F(4),
         F5 => Key::F(5), F6 => Key::F(6), F7 => Key::F(7), F8 => Key::F(8),
         F9 => Key::F(9), F10 => Key::F(10), F11 => Key::F(11), F12 => Key::F(12),
+        // Punctuation / OEM keys, by unshifted character (Shift is a separate modifier).
+        Minus => Key::Char('-'), Equals => Key::Char('='),
+        LeftBracket => Key::Char('['), RightBracket => Key::Char(']'),
+        Backslash => Key::Char('\\'), Semicolon => Key::Char(';'),
+        Apostrophe => Key::Char('\''), Grave => Key::Char('`'),
+        Comma => Key::Char(','), Period => Key::Char('.'), Slash => Key::Char('/'),
         Shift | Control | Alt | Meta | Unknown(_) => return None,
     })
 }
@@ -818,6 +862,7 @@ fn draw_editor(
     config: &Config,
     search: Option<&SearchState>,
     term_cells: &TermCells,
+    char_w_out: &mut f32,
 ) -> AureaResult<()> {
     let width  = ctx.width()  as f32;
     let height = ctx.height() as f32;
@@ -829,6 +874,8 @@ fn draw_editor(
     let char_w = metrics.as_ref().map(|m| m.advance).unwrap_or(font.size * 0.6);
     let text_ascent = metrics.as_ref().map(|m| m.ascent).unwrap_or(font.size * 0.8);
     let text_descent = metrics.as_ref().map(|m| m.descent).unwrap_or(font.size * 0.2);
+    // Report the real measured cell width so the PTY can be sized to match.
+    *char_w_out = char_w;
 
     let editor_rect = Rect::new(0.0, 0.0, width, (height - STATUS_H).max(0.0));
     let metrics = TextMetrics { char_w, text_ascent, text_descent };
@@ -1326,9 +1373,10 @@ fn collect_term_rects(
 }
 
 /// Convert a pane rect to a terminal cell grid `(cols, rows)`, matching the
-/// renderer's text origin (left `PAD`, right scrollbar, `EDITOR_TOP_PAD`).
-fn rect_to_grid(rect: Rect, config: &Config) -> (u16, u16) {
-    let cw = (config.editor.font_size * 0.6).max(1.0);
+/// renderer's text origin (left `PAD`, right scrollbar, `EDITOR_TOP_PAD`) and
+/// its real measured cell width `char_w`.
+fn rect_to_grid(rect: Rect, config: &Config, char_w: f32) -> (u16, u16) {
+    let cw = char_w.max(1.0);
     let lh = (config.editor.font_size * config.editor.line_height).max(1.0);
     let usable_w = (rect.width - PAD - 6.0).max(0.0);
     let usable_h = (rect.height - EDITOR_TOP_PAD).max(0.0);

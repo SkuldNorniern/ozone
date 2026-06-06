@@ -317,6 +317,11 @@ impl Keymap {
             ("ctrl+shift+p", "command.palette"),
             ("ctrl+tab", "buffer.next"),
             ("ctrl+shift+tab", "buffer.previous"),
+            ("ctrl+x b", "buffer.picker"),      // Emacs switch-buffer
+            ("meta+left", "view.jump-back"),    // jump list back  (VS Code Alt+Left)
+            ("meta+right", "view.jump-forward"),// jump list forward (Alt+Right)
+            ("ctrl+-", "view.jump-back"),       // plan binding (now that '-' is a keycode)
+            ("ctrl+=", "view.jump-forward"),
             ("ctrl+k ctrl+s", "file.save-all"), // chord showcase
             // Panes
             ("ctrl+shift+right", "pane.split-right"),

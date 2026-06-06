@@ -173,6 +173,7 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
     });
 
     reg.register("cursor.file-start", "Move cursor to file start", |ctx| {
+        ctx.workspace.push_jump();
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
         let old = view.cursor;
         view.selection = None;
@@ -183,6 +184,7 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
     });
 
     reg.register("cursor.file-end", "Move cursor to file end", |ctx| {
+        ctx.workspace.push_jump();
         let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
         let old = view.cursor;
@@ -191,6 +193,14 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
         view.cursor = Pos::new(last_line, buf.line_len(last_line));
         view.col_memory = view.cursor.col;
         emit_cursor_moved(ctx, old);
+    });
+
+    reg.register("view.jump-back", "Jump to the previous cursor location", |ctx| {
+        ctx.workspace.jump_back();
+    });
+
+    reg.register("view.jump-forward", "Jump to the next cursor location", |ctx| {
+        ctx.workspace.jump_forward();
     });
 
     // --- editing ---

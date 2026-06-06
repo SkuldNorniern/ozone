@@ -13,6 +13,7 @@ pub mod pty;
 pub mod vt;
 
 use std::io::Read;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -27,6 +28,9 @@ const INIT_ROWS: u16 = 40;
 pub struct Terminal {
     pty: Box<dyn pty::Pty>,
     vt: Arc<Mutex<Vt>>,
+    /// Bumped by the reader thread on every processed chunk; lets callers skip
+    /// re-rendering the whole grid when nothing new has arrived.
+    version: Arc<AtomicU64>,
 }
 
 impl Terminal {
@@ -39,8 +43,15 @@ impl Terminal {
         pty.resize(INIT_COLS, INIT_ROWS);
 
         let vt = Arc::new(Mutex::new(Vt::new(INIT_COLS as usize, INIT_ROWS as usize)));
-        spawn_reader(reader, vt.clone());
-        Ok(Self { pty, vt })
+        let version = Arc::new(AtomicU64::new(0));
+        spawn_reader(reader, vt.clone(), version.clone());
+        Ok(Self { pty, vt, version })
+    }
+
+    /// A monotonically increasing counter of processed output chunks. Unchanged
+    /// since a previous read means there is nothing new to render.
+    pub fn version(&self) -> u64 {
+        self.version.load(Ordering::Acquire)
     }
 
     /// Write raw bytes to the PTY input (the shell's line discipline echoes them).
@@ -56,6 +67,8 @@ impl Terminal {
             v.resize(cols as usize, rows as usize);
         }
         self.pty.resize(cols, rows);
+        // Force the next snapshot: the grid reflowed even if no new bytes arrived.
+        self.version.fetch_add(1, Ordering::Release);
     }
 
     /// The current screen (scrollback + grid) rendered as text.
@@ -79,7 +92,7 @@ impl Terminal {
     }
 }
 
-fn spawn_reader<R: Read + Send + 'static>(mut reader: R, vt: Arc<Mutex<Vt>>) {
+fn spawn_reader<R: Read + Send + 'static>(mut reader: R, vt: Arc<Mutex<Vt>>, version: Arc<AtomicU64>) {
     thread::spawn(move || {
         let mut buf = [0u8; 4096];
         loop {
@@ -90,6 +103,7 @@ fn spawn_reader<R: Read + Send + 'static>(mut reader: R, vt: Arc<Mutex<Vt>>) {
                     if let Ok(mut v) = vt.lock() {
                         v.process(&text);
                     }
+                    version.fetch_add(1, Ordering::Release);
                 }
             }
         }

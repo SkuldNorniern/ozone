@@ -4,6 +4,7 @@
 
 use aurea::AureaResult;
 use aurea::render::{DrawingContext, Point, Rect};
+use ozone_buffer::{BufferId, BufferKind};
 use ozone_config::Config;
 use ozone_editor::{AutocommandRegistry, CommandRegistry, Workspace};
 
@@ -17,6 +18,7 @@ use crate::{baseline_in_rect, dispatch_autocmds, editor_font, fill_round_rect, r
 pub(crate) enum PickerAction {
     RunCommand(String),
     OpenFile(std::path::PathBuf),
+    SwitchBuffer(BufferId),
 }
 
 /// One selectable row in the picker.
@@ -144,6 +146,47 @@ pub(crate) fn file_picker_items() -> Vec<PickerItem> {
         .collect()
 }
 
+/// Open buffers as picker items, in most-recently-used order (`mru` lists the
+/// most recent first). Skips transient picker/reference surfaces. The active
+/// buffer is excluded so the picker switches *away* from it.
+pub(crate) fn buffer_picker_items(ws: &Workspace, mru: &[BufferId]) -> Vec<PickerItem> {
+    let active = ws.active_view().map(|v| v.buffer_id);
+    let mut items = Vec::new();
+    let push = |id: BufferId, ws: &Workspace, items: &mut Vec<PickerItem>| {
+        if Some(id) == active {
+            return;
+        }
+        let Some(buf) = ws.buffers.get(&id) else { return };
+        let (name, detail) = match &buf.kind {
+            BufferKind::File(p) => {
+                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("?").to_string();
+                (name, p.to_string_lossy().to_string())
+            }
+            BufferKind::Scratch => ("*scratch*".to_string(), String::new()),
+            BufferKind::Terminal => ("*terminal*".to_string(), String::new()),
+            // Transient surfaces are not useful to switch to.
+            BufferKind::Search | BufferKind::References => return,
+        };
+        let dirty = if buf.is_dirty() { " ●" } else { "" };
+        let display = format!("{name}{dirty}");
+        let haystack = format!("{display} {detail}").to_lowercase();
+        items.push(PickerItem { display, detail, haystack, action: PickerAction::SwitchBuffer(id) });
+    };
+
+    // MRU order first (most recent that isn't the active buffer), then any
+    // remaining open buffers not yet listed.
+    for id in mru {
+        push(*id, ws, &mut items);
+    }
+    let listed: std::collections::HashSet<BufferId> = mru.iter().copied().collect();
+    let mut rest: Vec<BufferId> = ws.buffers.keys().copied().filter(|id| !listed.contains(id)).collect();
+    rest.sort_by_key(|id| id.raw());
+    for id in rest {
+        push(id, ws, &mut items);
+    }
+    items
+}
+
 /// Handle a key while the picker is open. Letters arrive via TextInput;
 /// this covers navigation/commit/cancel. Returns whether a redraw is needed.
 pub(crate) fn handle_palette_key(
@@ -165,12 +208,17 @@ pub(crate) fn handle_palette_key(
             let action = p.selected_item().map(|item| match &item.action {
                 PickerAction::RunCommand(c) => PickerAction::RunCommand(c.clone()),
                 PickerAction::OpenFile(path) => PickerAction::OpenFile(path.clone()),
+                PickerAction::SwitchBuffer(id) => PickerAction::SwitchBuffer(*id),
             });
             *palette = None;
             match action {
                 Some(PickerAction::RunCommand(cmd)) => run_cmd(&cmd, ws, reg, autocmds),
                 Some(PickerAction::OpenFile(path)) => {
                     let _ = ws.open_file(path);
+                    dispatch_autocmds(ws, reg, autocmds);
+                }
+                Some(PickerAction::SwitchBuffer(id)) => {
+                    ws.switch_active_buffer(id);
                     dispatch_autocmds(ws, reg, autocmds);
                 }
                 None => {}
