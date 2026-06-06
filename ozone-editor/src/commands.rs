@@ -529,7 +529,7 @@ fn is_ignored_name(name: &str) -> bool {
 
 /// Recursively collect file paths under `base`, relative and `/`-separated,
 /// skipping VCS/build/hidden entries. Bounded by `cap`. No external crates.
-fn collect_workspace_files(base: &std::path::Path, cap: usize) -> Vec<String> {
+pub fn collect_workspace_files(base: &std::path::Path, cap: usize) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut stack = vec![base.to_path_buf()];
     while let Some(dir) = stack.pop() {

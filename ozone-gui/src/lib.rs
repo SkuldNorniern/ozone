@@ -40,47 +40,57 @@ impl Element for SharedCanvas {
 }
 
 // ---------------------------------------------------------------------------
-// Command palette (M-x) overlay state
+// Fuzzy picker overlay (shared by M-x command palette and Ctrl+P file picker)
 // ---------------------------------------------------------------------------
 
-/// One selectable command in the palette.
-struct PaletteItem {
-    /// Command id used for execution, e.g. `file.save`.
-    id: String,
-    /// Human-friendly name shown in the list, e.g. `File: Save`.
-    display: String,
-    /// One-line description.
-    desc: String,
+/// What committing a picker item does.
+enum PickerAction {
+    RunCommand(String),
+    OpenFile(std::path::PathBuf),
 }
 
-/// Runtime state for the floating command palette.
-struct PaletteState {
+/// One selectable row in the picker.
+struct PickerItem {
+    /// Primary text shown in the list.
+    display: String,
+    /// Secondary text (right-aligned, dim); empty to omit.
+    detail: String,
+    /// Lowercase text the query is fuzzy-matched against.
+    haystack: String,
+    action: PickerAction,
+}
+
+/// Runtime state for the floating fuzzy picker.
+struct PickerState {
+    /// Prompt shown before the query (e.g. `M-x`, `find file:`).
+    prompt: String,
     query: String,
-    /// All commands, sorted by display name.
-    all: Vec<PaletteItem>,
+    all: Vec<PickerItem>,
     /// Indices into `all` matching the current query.
     filtered: Vec<usize>,
     selected: usize,
 }
 
-impl PaletteState {
-    fn new(all: Vec<PaletteItem>) -> Self {
-        let mut s = Self { query: String::new(), all, filtered: Vec::new(), selected: 0 };
+impl PickerState {
+    fn new(prompt: impl Into<String>, all: Vec<PickerItem>) -> Self {
+        let mut s = Self {
+            prompt: prompt.into(),
+            query: String::new(),
+            all,
+            filtered: Vec::new(),
+            selected: 0,
+        };
         s.refilter();
         s
     }
 
     fn refilter(&mut self) {
         let q = self.query.to_lowercase();
-        // Match against the display name and the raw id, so both work.
         self.filtered = self
             .all
             .iter()
             .enumerate()
-            .filter(|(_, item)| {
-                subsequence_match(&item.display.to_lowercase(), &q)
-                    || subsequence_match(&item.id.to_lowercase(), &q)
-            })
+            .filter(|(_, item)| subsequence_match(&item.haystack, &q))
             .map(|(i, _)| i)
             .collect();
         if self.selected >= self.filtered.len() {
@@ -107,8 +117,8 @@ impl PaletteState {
         self.selected = next as usize;
     }
 
-    fn selected_command(&self) -> Option<String> {
-        self.filtered.get(self.selected).map(|&i| self.all[i].id.clone())
+    fn selected_item(&self) -> Option<&PickerItem> {
+        self.filtered.get(self.selected).map(|&i| &self.all[i])
     }
 }
 
@@ -133,15 +143,24 @@ fn subsequence_match(haystack: &str, needle: &str) -> bool {
 mod palette_tests {
     use super::*;
 
-    fn items() -> Vec<PaletteItem> {
+    fn items() -> Vec<PickerItem> {
         ["buffer.next", "pane.close", "pane.split-right", "file.save"]
             .iter()
-            .map(|n| PaletteItem {
-                id: n.to_string(),
+            .map(|n| PickerItem {
                 display: ozone_editor::commands::pretty_command_name(n),
-                desc: String::new(),
+                detail: String::new(),
+                haystack: format!("{} {}", ozone_editor::commands::pretty_command_name(n), n)
+                    .to_lowercase(),
+                action: PickerAction::RunCommand(n.to_string()),
             })
             .collect()
+    }
+
+    fn selected_cmd(p: &PickerState) -> Option<String> {
+        match p.selected_item().map(|i| &i.action) {
+            Some(PickerAction::RunCommand(c)) => Some(c.clone()),
+            _ => None,
+        }
     }
 
     #[test]
@@ -154,14 +173,14 @@ mod palette_tests {
     }
 
     #[test]
-    fn palette_filters_and_wraps_selection() {
-        let mut p = PaletteState::new(items());
+    fn picker_filters_and_wraps_selection() {
+        let mut p = PickerState::new("M-x", items());
         assert_eq!(p.filtered.len(), 4);
         p.push('p');
         p.push('a');
         // "pa" matches the two pane.* commands
         assert_eq!(p.filtered.len(), 2);
-        assert!(p.selected_command().unwrap().starts_with("pane."));
+        assert!(selected_cmd(&p).unwrap().starts_with("pane."));
         p.move_sel(1);
         assert_eq!(p.selected, 1);
         p.move_sel(1); // wraps back to 0 (2 items)
@@ -172,18 +191,40 @@ mod palette_tests {
     }
 }
 
-/// Snapshot all registered commands as palette items, sorted by display name.
-fn command_snapshot(reg: &CommandRegistry) -> Vec<PaletteItem> {
-    let mut v: Vec<PaletteItem> = reg
+/// All registered commands as picker items (sorted by display name).
+fn command_picker_items(reg: &CommandRegistry) -> Vec<PickerItem> {
+    let mut v: Vec<PickerItem> = reg
         .names()
-        .map(|n| PaletteItem {
-            id: n.to_string(),
-            display: reg.display_name(n),
-            desc: reg.description(n).unwrap_or("").to_string(),
+        .map(|n| {
+            let display = reg.display_name(n);
+            // Match against display name and raw id.
+            let haystack = format!("{} {}", display, n).to_lowercase();
+            PickerItem {
+                display,
+                detail: reg.description(n).unwrap_or("").to_string(),
+                haystack,
+                action: PickerAction::RunCommand(n.to_string()),
+            }
         })
         .collect();
     v.sort_by(|a, b| a.display.cmp(&b.display));
     v
+}
+
+/// Workspace files as picker items (relative paths, opened on commit).
+fn file_picker_items() -> Vec<PickerItem> {
+    let Ok(base) = std::env::current_dir() else {
+        return Vec::new();
+    };
+    ozone_editor::commands::collect_workspace_files(&base, 5000)
+        .into_iter()
+        .map(|rel| PickerItem {
+            haystack: rel.to_lowercase(),
+            display: rel.clone(),
+            detail: String::new(),
+            action: PickerAction::OpenFile(base.join(&rel)),
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -336,7 +377,7 @@ impl OzoneGui {
         let mut window = Window::new("Ozone", W as i32, H as i32)?;
 
         // Overlay states shared with the draw callback.
-        let palette: Arc<Mutex<Option<PaletteState>>> = Arc::new(Mutex::new(None));
+        let palette: Arc<Mutex<Option<PickerState>>> = Arc::new(Mutex::new(None));
         let search: Arc<Mutex<Option<SearchState>>> = Arc::new(Mutex::new(None));
 
         let raw_canvas = Canvas::new(W, H, RendererBackend::Cpu)?;
@@ -580,7 +621,7 @@ fn handle_key(
     keymap: &Keymap,
     modmap: &ModifierMap,
     pending: &mut Vec<KeyStroke>,
-    palette: &mut Option<PaletteState>,
+    palette: &mut Option<PickerState>,
     search: &mut Option<SearchState>,
 ) -> bool {
     use aurea::KeyCode::*;
@@ -616,7 +657,9 @@ fn handle_key(
                 pending.clear();
                 if cmd == "command.palette" {
                     // GUI-level command: open the overlay instead of dispatching.
-                    *palette = Some(PaletteState::new(command_snapshot(reg)));
+                    *palette = Some(PickerState::new("M-x", command_picker_items(reg)));
+                } else if cmd == "file.picker" {
+                    *palette = Some(PickerState::new("find file:", file_picker_items()));
                 } else if cmd == "search.start" {
                     let mut s = SearchState::new(false);
                     search_recompute(&mut s, ws);
@@ -712,11 +755,11 @@ fn keycode_key(key: aurea::KeyCode) -> Option<Key> {
     })
 }
 
-/// Handle a key while the command palette is open. Letters arrive via TextInput;
+/// Handle a key while the picker is open. Letters arrive via TextInput;
 /// this covers navigation/commit/cancel. Returns whether a redraw is needed.
 fn handle_palette_key(
     key: aurea::KeyCode,
-    palette: &mut Option<PaletteState>,
+    palette: &mut Option<PickerState>,
     ws: &mut Workspace,
     reg: &CommandRegistry,
     autocmds: &AutocommandRegistry,
@@ -729,10 +772,19 @@ fn handle_palette_key(
             true
         }
         Enter => {
-            let cmd = p.selected_command();
+            // Clone the chosen action, then close before performing it.
+            let action = p.selected_item().map(|item| match &item.action {
+                PickerAction::RunCommand(c) => PickerAction::RunCommand(c.clone()),
+                PickerAction::OpenFile(path) => PickerAction::OpenFile(path.clone()),
+            });
             *palette = None;
-            if let Some(cmd) = cmd {
-                run_cmd(&cmd, ws, reg, autocmds);
+            match action {
+                Some(PickerAction::RunCommand(cmd)) => run_cmd(&cmd, ws, reg, autocmds),
+                Some(PickerAction::OpenFile(path)) => {
+                    let _ = ws.open_file(path);
+                    dispatch_autocmds(ws, reg, autocmds);
+                }
+                None => {}
             }
             true
         }
@@ -1342,10 +1394,10 @@ fn draw_status_bar(
 }
 
 // ---------------------------------------------------------------------------
-// Command palette overlay rendering
+// Fuzzy picker overlay rendering
 // ---------------------------------------------------------------------------
 
-fn draw_palette(ctx: &mut dyn DrawingContext, p: &PaletteState, config: &Config) -> AureaResult<()> {
+fn draw_palette(ctx: &mut dyn DrawingContext, p: &PickerState, config: &Config) -> AureaResult<()> {
     let w = ctx.width() as f32;
     let h = ctx.height() as f32;
     let font = editor_font(config);
@@ -1379,22 +1431,22 @@ fn draw_palette(ctx: &mut dyn DrawingContext, p: &PaletteState, config: &Config)
     fill_round_rect(ctx, Rect::new(px - 1.0, py - 1.0, pw + 2.0, ph + 2.0), radius + 1.0, PALETTE_BORDER)?;
     fill_round_rect(ctx, Rect::new(px, py, pw, ph), radius, PALETTE_BG)?;
 
-    // Input box: "M-x <query>" with a caret.
+    // Input box: "<prompt> <query>" with a caret.
     let input_rect = Rect::new(px + pad, py + pad, pw - 2.0 * pad, line_h);
     fill_round_rect(ctx, input_rect, 6.0, PALETTE_INPUT_BG)?;
     let in_baseline = baseline_in_rect(input_rect.y, input_rect.height, ascent, descent);
-    ctx.draw_text_with_font("M-x", Point::new(input_rect.x + 8.0, in_baseline), &font, &solid(PALETTE_PROMPT))?;
-    let prompt_w = measure(ctx, "M-x ");
+    ctx.draw_text_with_font(&p.prompt, Point::new(input_rect.x + 8.0, in_baseline), &font, &solid(PALETTE_PROMPT))?;
+    let prompt_w = measure(ctx, &format!("{} ", p.prompt));
     let query_x = input_rect.x + 8.0 + prompt_w;
     ctx.draw_text_with_font(&p.query, Point::new(query_x, in_baseline), &font, &solid(PALETTE_FG))?;
     let caret_x = query_x + measure(ctx, &p.query) + 1.0;
     ctx.draw_rect(Rect::new(caret_x, input_rect.y + 4.0, 2.0, line_h - 8.0), &solid(PALETTE_FG))?;
 
-    // Command list.
+    // Result list.
     let list_top = py + header_h;
     if shown.is_empty() {
         let bl = baseline_in_rect(list_top, line_h, ascent, descent);
-        ctx.draw_text_with_font("no matching commands", Point::new(px + pad + 8.0, bl), &font, &solid(PALETTE_DESC))?;
+        ctx.draw_text_with_font("no matches", Point::new(px + pad + 8.0, bl), &font, &solid(PALETTE_DESC))?;
         return Ok(());
     }
     for (row, &idx) in shown.iter().enumerate() {
@@ -1405,14 +1457,14 @@ fn draw_palette(ctx: &mut dyn DrawingContext, p: &PaletteState, config: &Config)
             fill_round_rect(ctx, Rect::new(px + pad, y, pw - 2.0 * pad, line_h), 6.0, PALETTE_SEL)?;
         }
         let bl = baseline_in_rect(y, line_h, ascent, descent);
-        // Display name (primary). Fall back to the description on the right.
+        // Primary display text; secondary detail right-aligned (dim).
         ctx.draw_text_with_font(&item.display, Point::new(px + pad + 8.0, bl), &font, &solid(PALETTE_FG))?;
-        if !item.desc.is_empty() {
-            let dw = measure(ctx, &item.desc);
+        if !item.detail.is_empty() {
+            let dw = measure(ctx, &item.detail);
             let name_w = measure(ctx, &item.display);
             let dx = px + pw - pad - 8.0 - dw;
             if dx > px + pad + 8.0 + name_w + 16.0 {
-                ctx.draw_text_with_font(&item.desc, Point::new(dx, bl), &font, &solid(PALETTE_DESC))?;
+                ctx.draw_text_with_font(&item.detail, Point::new(dx, bl), &font, &solid(PALETTE_DESC))?;
             }
         }
     }
