@@ -74,20 +74,22 @@ fn terminal_key_bytes(key: aurea::KeyCode, mods: aurea::Modifiers) -> Option<&'s
     }
 }
 
-use aurea::render::{Canvas, Color, DrawingContext, Font, Image, Point, Rect, RendererBackend};
+use aurea::render::{Canvas, DrawingContext, Font, Image, Point, Rect, RendererBackend};
 use aurea::{AureaResult, Element, Window, WindowEvent};
 
 mod picker;
+mod popup;
 mod search;
 mod theme;
 use picker::*;
+use popup::*;
 use search::*;
 use theme::*;
 use ozone_buffer::{BufferId, BufferKind};
-use ozone_editor::{AutocommandRegistry, CommandContext, CommandRegistry, EditorEvent, IndentConfig, Key, KeyStroke, Keymap, KeymapOutcome, ModifierMap, PhysicalMods, PaneTree, SplitAxis, ViewId, Workspace, matching_bracket};
+use ozone_editor::{AutocommandRegistry, CommandContext, CommandRegistry, EditorEvent, IndentConfig, Key, KeyStroke, Keymap, KeymapOutcome, ModifierMap, PhysicalMods, PaneTree, SplitAxis, UiIntent, ViewId, Workspace, matching_bracket};
 use ozone_editor::commands::register_defaults;
 use ozone_syntax::{Filetype, ScanState, TokenKind, scan_line};
-use ozone_config::{Config, CursorStyle, LineNumbers};
+use ozone_config::{Config, CursorStyle, FiletypeConfig, LineNumbers};
 
 // ---------------------------------------------------------------------------
 // SendableCanvas + SharedCanvas wrappers
@@ -238,6 +240,8 @@ impl OzoneGui {
         let mut buffer_mru: Vec<BufferId> = Vec::new();
         // Decoded images by buffer (decoded once, on first sight).
         let mut images: ImageCache = ImageCache::new();
+        // Buffers whose `[[filetype]]` config has already been applied.
+        let mut ft_applied: std::collections::HashSet<BufferId> = std::collections::HashSet::new();
         // Live physical modifier state, updated on every key press/release, for
         // the status-bar modifier indicator.
         let mut live_mods = aurea::Modifiers::default();
@@ -303,6 +307,11 @@ impl OzoneGui {
                         if pal.is_some() {
                             let mut ws = self.workspace.lock().unwrap();
                             if handle_palette_key(key, &mut pal, &mut ws, &self.commands, &self.autocmds) {
+                                needs_redraw = true;
+                            }
+                            // A palette selection may itself request an overlay
+                            // (e.g. running search.start from the palette).
+                            if apply_ui_intents(&mut ws, &self.commands, &mut pal, &mut srch, &buffer_mru) {
                                 needs_redraw = true;
                             }
                         } else if srch.is_some() {
@@ -534,6 +543,29 @@ impl OzoneGui {
                 images.retain(|id, _| ws.buffers.contains_key(id));
             }
 
+            // --- filetype-local settings: apply [[filetype]] config once per file ---
+            if !self.config.filetypes.is_empty() {
+                let mut ws = self.workspace.lock().unwrap();
+                let pending: Vec<(BufferId, String)> = ws
+                    .buffers
+                    .iter()
+                    .filter(|(id, _)| !ft_applied.contains(id))
+                    .filter_map(|(id, b)| match &b.kind {
+                        BufferKind::File(p) => {
+                            Some((*id, filetype_config_name(Filetype::from_path(&p.to_string_lossy()))))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                for (id, ftname) in pending {
+                    ft_applied.insert(id);
+                    if let Some(fc) = self.config.filetypes.iter().find(|f| f.name == ftname) {
+                        apply_filetype_config(&mut ws, id, fc);
+                    }
+                }
+                ft_applied.retain(|id| ws.buffers.contains_key(id));
+            }
+
             // Update window title when active file changes
             {
                 let ws = self.workspace.lock().unwrap();
@@ -639,34 +671,10 @@ fn handle_key(
         match keymap.resolve(pending, &stroke, filetype.as_deref()) {
             KeymapOutcome::Execute(cmd) => {
                 pending.clear();
-                if cmd == "command.palette" {
-                    // GUI-level command: open the overlay instead of dispatching.
-                    *palette = Some(PickerState::new("M-x", command_picker_items(reg)));
-                } else if cmd == "file.picker" {
-                    *palette = Some(PickerState::new("find file:", file_picker_items()));
-                } else if cmd == "buffer.picker" {
-                    let items = buffer_picker_items(ws, mru);
-                    *palette = Some(PickerState::new("buffer:", items));
-                } else if cmd == "search.start" || cmd == "search.replace" {
-                    // Reuse an open search (just turn on replace); else open fresh.
-                    if let Some(s) = search.as_mut() {
-                        if cmd == "search.replace" {
-                            s.enable_replace();
-                        }
-                    } else {
-                        // Record the pre-search position so Ctrl+- returns to it.
-                        ws.push_jump();
-                        let mut s = SearchState::new(false);
-                        if cmd == "search.replace" {
-                            s.enable_replace();
-                        }
-                        search_recompute(&mut s, ws);
-                        search_select_from_cursor(&mut s, ws);
-                        *search = Some(s);
-                    }
-                } else {
-                    run_cmd(&cmd, ws, reg, autocmds);
-                }
+                // Everything is a command: run it, then perform any frontend
+                // action it requested (open palette / picker / search overlay).
+                run_cmd(&cmd, ws, reg, autocmds);
+                apply_ui_intents(ws, reg, palette, search, mru);
                 return true;
             }
             KeymapOutcome::Pending => {
@@ -688,7 +696,7 @@ fn handle_key(
     // Fallbacks for keys that are not bound commands.
     if !mods.ctrl && !mods.alt {
         if key == Tab {
-            let unit = ws.indent.unit(); // soft tab / tab per config
+            let unit = ws.active_indent().unit(); // soft tab / tab (buffer-local aware)
             return insert_text_raw(&unit, ws);
         }
         if allow_text_fallback && let Some(ch) = keycode_to_char(key, mods.shift) {
@@ -714,6 +722,23 @@ fn active_filetype_name(ws: &Workspace) -> Option<String> {
     match &ws.active_buffer()?.kind {
         BufferKind::File(p) => Some(filetype_config_name(Filetype::from_path(&p.to_string_lossy()))),
         _ => None,
+    }
+}
+
+/// Copy a `[[filetype]]` block's set options into a buffer's local overrides.
+fn apply_filetype_config(ws: &mut Workspace, id: BufferId, fc: &FiletypeConfig) {
+    let local = ws.buffer_local_mut(id);
+    if let Some(w) = fc.tab_width {
+        local.tab_width = Some(w);
+    }
+    if let Some(s) = fc.soft_tabs {
+        local.soft_tabs = Some(s);
+    }
+    if let Some(w) = fc.word_wrap {
+        local.word_wrap = Some(w);
+    }
+    if let Some(ln) = fc.line_numbers {
+        local.line_numbers = Some(ln);
     }
 }
 
@@ -767,6 +792,57 @@ fn keycode_key(key: aurea::KeyCode) -> Option<Key> {
         Comma => Key::Char(','), Period => Key::Char('.'), Slash => Key::Char('/'),
         Shift | Control | Alt | Meta | Unknown(_) => return None,
     })
+}
+
+/// Perform any [`UiIntent`]s a command queued (open the palette, a picker, or
+/// the search bar). Returns whether anything was applied. This is the single
+/// place the frontend reacts to command-driven overlay requests, so the editor
+/// commands stay GUI-agnostic and plugins can trigger the same overlays.
+pub(crate) fn apply_ui_intents(
+    ws: &mut Workspace,
+    reg: &CommandRegistry,
+    palette: &mut Option<PickerState>,
+    search: &mut Option<SearchState>,
+    mru: &[BufferId],
+) -> bool {
+    let intents = ws.drain_ui_intents();
+    let applied = !intents.is_empty();
+    for intent in intents {
+        match intent {
+            UiIntent::CommandPalette => {
+                *palette = Some(PickerState::new("M-x", command_picker_items(reg)));
+            }
+            UiIntent::FilePicker => {
+                *palette = Some(PickerState::new("find file:", file_picker_items()));
+            }
+            UiIntent::BufferPicker => {
+                let items = buffer_picker_items(ws, mru);
+                *palette = Some(PickerState::new("buffer:", items));
+            }
+            UiIntent::SearchStart => open_search(ws, search, false),
+            UiIntent::SearchReplace => open_search(ws, search, true),
+        }
+    }
+    applied
+}
+
+/// Open the search overlay (or reveal the replace field on an open one).
+fn open_search(ws: &mut Workspace, search: &mut Option<SearchState>, replace: bool) {
+    if let Some(s) = search.as_mut() {
+        if replace {
+            s.enable_replace();
+        }
+        return;
+    }
+    // Record the pre-search position so the jump list can return to it.
+    ws.push_jump();
+    let mut s = SearchState::new(false);
+    if replace {
+        s.enable_replace();
+    }
+    search_recompute(&mut s, ws);
+    search_select_from_cursor(&mut s, ws);
+    *search = Some(s);
 }
 
 pub(crate) fn run_cmd(name: &str, ws: &mut Workspace, reg: &CommandRegistry, autocmds: &AutocommandRegistry) {
@@ -1078,10 +1154,14 @@ fn draw_view(
         _ => Filetype::Plain,
     };
 
-    // Virtual surfaces (terminal, pickers, references) have no line numbers.
+    // Virtual surfaces (terminal, pickers, references) have no line numbers;
+    // real buffers use their buffer-local override, else the global default.
     let line_numbers = match buf.kind {
         BufferKind::Terminal | BufferKind::Search | BufferKind::References | BufferKind::Image(_) => LineNumbers::Off,
-        _ => config.editor.line_numbers,
+        _ => ws
+            .buffer_local(buffer_id)
+            .and_then(|l| l.line_numbers)
+            .unwrap_or(config.editor.line_numbers),
     };
 
     let scroll      = view.scroll_line;
@@ -1490,21 +1570,6 @@ fn draw_status_bar(
     let right_x = (x - right_w - 12.0).max(16.0 + mode_w);
     ctx.draw_text_with_font(&right, Point::new(right_x, baseline), font, &solid(STATUSBAR_DIM))?;
 
-    Ok(())
-}
-
-/// Fill a rounded rectangle using a cross of rects plus four corner circles.
-pub(crate) fn fill_round_rect(ctx: &mut dyn DrawingContext, rect: Rect, r: f32, color: Color) -> AureaResult<()> {
-    let r = r.min(rect.width / 2.0).min(rect.height / 2.0).max(0.0);
-    if r <= 0.5 {
-        return ctx.draw_rect(rect, &solid(color));
-    }
-    ctx.draw_rect(Rect::new(rect.x, rect.y + r, rect.width, rect.height - 2.0 * r), &solid(color))?;
-    ctx.draw_rect(Rect::new(rect.x + r, rect.y, rect.width - 2.0 * r, rect.height), &solid(color))?;
-    ctx.draw_circle(Point::new(rect.x + r, rect.y + r), r, &solid(color))?;
-    ctx.draw_circle(Point::new(rect.x + rect.width - r, rect.y + r), r, &solid(color))?;
-    ctx.draw_circle(Point::new(rect.x + r, rect.y + rect.height - r), r, &solid(color))?;
-    ctx.draw_circle(Point::new(rect.x + rect.width - r, rect.y + rect.height - r), r, &solid(color))?;
     Ok(())
 }
 

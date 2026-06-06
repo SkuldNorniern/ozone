@@ -8,11 +8,11 @@ use ozone_buffer::{BufferId, BufferKind};
 use ozone_config::Config;
 use ozone_editor::{AutocommandRegistry, CommandRegistry, Workspace};
 
+use crate::popup::{centered_rect, draw_panel, draw_scrim, fill_round_rect};
 use crate::theme::{
-    PALETTE_BG, PALETTE_BORDER, PALETTE_DESC, PALETTE_FG, PALETTE_INPUT_BG, PALETTE_PROMPT,
-    PALETTE_SCRIM, PALETTE_SEL, solid,
+    PALETTE_DESC, PALETTE_FG, PALETTE_INPUT_BG, PALETTE_PROMPT, PALETTE_SEL, solid,
 };
-use crate::{baseline_in_rect, dispatch_autocmds, editor_font, fill_round_rect, run_cmd};
+use crate::{baseline_in_rect, dispatch_autocmds, editor_font, run_cmd};
 
 /// What committing a picker item does.
 pub(crate) enum PickerAction {
@@ -262,7 +262,7 @@ pub(crate) fn draw_palette(
     };
 
     // Dim the editor behind the panel.
-    ctx.draw_rect(Rect::new(0.0, 0.0, w, h), &solid(PALETTE_SCRIM))?;
+    draw_scrim(ctx, w, h)?;
 
     // Window the visible rows around the selection.
     let max_rows = 12usize;
@@ -273,12 +273,11 @@ pub(crate) fn draw_palette(
     let header_h = line_h + pad * 2.0;
     let body_rows = shown.len().max(1); // reserve a row for "no matches"
     let ph = header_h + body_rows as f32 * line_h + pad;
-    let px = (w - pw) / 2.0;
-    let py = ((h - ph) / 2.0).max(20.0);
+    let panel = centered_rect(w, h, pw, ph, 20.0);
+    let (px, py) = (panel.x, panel.y);
 
-    // Rounded panel with a 1px border.
-    fill_round_rect(ctx, Rect::new(px - 1.0, py - 1.0, pw + 2.0, ph + 2.0), radius + 1.0, PALETTE_BORDER)?;
-    fill_round_rect(ctx, Rect::new(px, py, pw, ph), radius, PALETTE_BG)?;
+    // Rounded bordered panel.
+    draw_panel(ctx, panel, radius)?;
 
     // Input box: "<prompt> <query>" with a caret.
     let input_rect = Rect::new(px + pad, py + pad, pw - 2.0 * pad, line_h);

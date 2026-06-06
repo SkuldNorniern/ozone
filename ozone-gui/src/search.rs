@@ -7,11 +7,12 @@
 //! `find_matches` (literal, no regex).
 
 use aurea::AureaResult;
-use aurea::render::{DrawingContext, Font, Point, Rect};
+use aurea::render::{DrawingContext, Font, Point};
 use ozone_editor::Workspace;
 
-use crate::theme::{PALETTE_BG, PALETTE_BORDER, PALETTE_DESC, PALETTE_FG, PALETTE_PROMPT, solid};
-use crate::{baseline_in_rect, fill_round_rect};
+use crate::popup::{draw_panel, top_right_rect};
+use crate::theme::{PALETTE_DESC, PALETTE_FG, PALETTE_PROMPT, solid};
+use crate::baseline_in_rect;
 
 pub(crate) struct SearchState {
     pub(crate) query: String,
@@ -250,10 +251,9 @@ pub(crate) fn draw_search_bar(
     let rows = if s.replace.is_some() { 3.0 } else { 1.0 };
     let bw = (content_w + pad * 2.0 + 16.0).min(width - 24.0);
     let bh = line_h * rows + 6.0;
-    let bx = width - bw - 12.0;
-    let by = 10.0;
-    fill_round_rect(ctx, Rect::new(bx - 1.0, by - 1.0, bw + 2.0, bh + 2.0), 9.0, PALETTE_BORDER)?;
-    fill_round_rect(ctx, Rect::new(bx, by, bw, bh), 8.0, PALETTE_BG)?;
+    let panel = top_right_rect(width, bw, bh, 11.0);
+    let (bx, by) = (panel.x, panel.y);
+    draw_panel(ctx, panel, 8.0)?;
 
     // Find line.
     let bl = baseline_in_rect(by + 3.0, line_h, ascent, descent);
