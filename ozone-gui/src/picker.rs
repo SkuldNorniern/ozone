@@ -1,0 +1,323 @@
+//! Fuzzy picker overlay, shared by the M-x command palette and the Ctrl+P file
+//! picker. `PickerState` holds the query + filtered items; each item carries a
+//! `PickerAction` performed on commit (run a command, or open a file).
+
+use aurea::AureaResult;
+use aurea::render::{DrawingContext, Point, Rect};
+use ozone_config::Config;
+use ozone_editor::{AutocommandRegistry, CommandRegistry, Workspace};
+
+use crate::theme::{
+    PALETTE_BG, PALETTE_BORDER, PALETTE_DESC, PALETTE_FG, PALETTE_INPUT_BG, PALETTE_PROMPT,
+    PALETTE_SCRIM, PALETTE_SEL, solid,
+};
+use crate::{baseline_in_rect, dispatch_autocmds, editor_font, fill_round_rect, run_cmd};
+
+/// What committing a picker item does.
+pub(crate) enum PickerAction {
+    RunCommand(String),
+    OpenFile(std::path::PathBuf),
+}
+
+/// One selectable row in the picker.
+pub(crate) struct PickerItem {
+    /// Primary text shown in the list.
+    pub(crate) display: String,
+    /// Secondary text (right-aligned, dim); empty to omit.
+    pub(crate) detail: String,
+    /// Lowercase text the query is fuzzy-matched against.
+    pub(crate) haystack: String,
+    pub(crate) action: PickerAction,
+}
+
+/// Runtime state for the floating fuzzy picker.
+pub(crate) struct PickerState {
+    /// Prompt shown before the query (e.g. `M-x`, `find file:`).
+    prompt: String,
+    query: String,
+    all: Vec<PickerItem>,
+    /// Indices into `all` matching the current query.
+    filtered: Vec<usize>,
+    selected: usize,
+}
+
+impl PickerState {
+    pub(crate) fn new(prompt: impl Into<String>, all: Vec<PickerItem>) -> Self {
+        let mut s = Self {
+            prompt: prompt.into(),
+            query: String::new(),
+            all,
+            filtered: Vec::new(),
+            selected: 0,
+        };
+        s.refilter();
+        s
+    }
+
+    fn refilter(&mut self) {
+        let q = self.query.to_lowercase();
+        self.filtered = self
+            .all
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| subsequence_match(&item.haystack, &q))
+            .map(|(i, _)| i)
+            .collect();
+        if self.selected >= self.filtered.len() {
+            self.selected = self.filtered.len().saturating_sub(1);
+        }
+    }
+
+    pub(crate) fn push(&mut self, c: char) {
+        self.query.push(c);
+        self.refilter();
+    }
+
+    pub(crate) fn backspace(&mut self) {
+        self.query.pop();
+        self.refilter();
+    }
+
+    pub(crate) fn move_sel(&mut self, delta: isize) {
+        if self.filtered.is_empty() {
+            return;
+        }
+        let len = self.filtered.len() as isize;
+        let next = (self.selected as isize + delta).rem_euclid(len);
+        self.selected = next as usize;
+    }
+
+    fn selected_item(&self) -> Option<&PickerItem> {
+        self.filtered.get(self.selected).map(|&i| &self.all[i])
+    }
+}
+
+/// fzf-style subsequence match: every char of `needle` appears in `haystack` in order.
+fn subsequence_match(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let mut chars = haystack.chars();
+    'outer: for nc in needle.chars() {
+        for hc in chars.by_ref() {
+            if hc == nc {
+                continue 'outer;
+            }
+        }
+        return false;
+    }
+    true
+}
+
+/// All registered commands as picker items (sorted by display name).
+pub(crate) fn command_picker_items(reg: &CommandRegistry) -> Vec<PickerItem> {
+    let mut v: Vec<PickerItem> = reg
+        .names()
+        .map(|n| {
+            let display = reg.display_name(n);
+            let haystack = format!("{} {}", display, n).to_lowercase();
+            PickerItem {
+                display,
+                detail: reg.description(n).unwrap_or("").to_string(),
+                haystack,
+                action: PickerAction::RunCommand(n.to_string()),
+            }
+        })
+        .collect();
+    v.sort_by(|a, b| a.display.cmp(&b.display));
+    v
+}
+
+/// Workspace files as picker items (relative paths, opened on commit).
+pub(crate) fn file_picker_items() -> Vec<PickerItem> {
+    let Ok(base) = std::env::current_dir() else {
+        return Vec::new();
+    };
+    ozone_editor::commands::collect_workspace_files(&base, 5000)
+        .into_iter()
+        .map(|rel| PickerItem {
+            haystack: rel.to_lowercase(),
+            display: rel.clone(),
+            detail: String::new(),
+            action: PickerAction::OpenFile(base.join(&rel)),
+        })
+        .collect()
+}
+
+/// Handle a key while the picker is open. Letters arrive via TextInput;
+/// this covers navigation/commit/cancel. Returns whether a redraw is needed.
+pub(crate) fn handle_palette_key(
+    key: aurea::KeyCode,
+    palette: &mut Option<PickerState>,
+    ws: &mut Workspace,
+    reg: &CommandRegistry,
+    autocmds: &AutocommandRegistry,
+) -> bool {
+    use aurea::KeyCode::*;
+    let Some(p) = palette.as_mut() else { return false };
+    match key {
+        Escape => {
+            *palette = None;
+            true
+        }
+        Enter => {
+            // Clone the chosen action, then close before performing it.
+            let action = p.selected_item().map(|item| match &item.action {
+                PickerAction::RunCommand(c) => PickerAction::RunCommand(c.clone()),
+                PickerAction::OpenFile(path) => PickerAction::OpenFile(path.clone()),
+            });
+            *palette = None;
+            match action {
+                Some(PickerAction::RunCommand(cmd)) => run_cmd(&cmd, ws, reg, autocmds),
+                Some(PickerAction::OpenFile(path)) => {
+                    let _ = ws.open_file(path);
+                    dispatch_autocmds(ws, reg, autocmds);
+                }
+                None => {}
+            }
+            true
+        }
+        Up => {
+            p.move_sel(-1);
+            true
+        }
+        Down => {
+            p.move_sel(1);
+            true
+        }
+        Backspace => {
+            p.backspace();
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Render the picker overlay: a centered rounded panel with prompt + result list.
+pub(crate) fn draw_palette(
+    ctx: &mut dyn DrawingContext,
+    p: &PickerState,
+    config: &Config,
+) -> AureaResult<()> {
+    let w = ctx.width() as f32;
+    let h = ctx.height() as f32;
+    let font = editor_font(config);
+    let line_h = (font.size * 1.7).max(18.0);
+    let pad = 14.0;
+    let radius = 10.0;
+
+    let m = ctx.measure_text("M", &font).ok();
+    let ascent = m.as_ref().map(|x| x.ascent).unwrap_or(font.size * 0.8);
+    let descent = m.as_ref().map(|x| x.descent).unwrap_or(font.size * 0.2);
+    let measure = |ctx: &mut dyn DrawingContext, s: &str| {
+        ctx.measure_text(s, &font).map(|m| m.advance).unwrap_or(s.len() as f32 * font.size * 0.6)
+    };
+
+    // Dim the editor behind the panel.
+    ctx.draw_rect(Rect::new(0.0, 0.0, w, h), &solid(PALETTE_SCRIM))?;
+
+    // Window the visible rows around the selection.
+    let max_rows = 12usize;
+    let start = if p.selected >= max_rows { p.selected + 1 - max_rows } else { 0 };
+    let shown: Vec<usize> = p.filtered.iter().skip(start).take(max_rows).copied().collect();
+
+    let pw = (w * 0.6).clamp(380.0, 760.0);
+    let header_h = line_h + pad * 2.0;
+    let body_rows = shown.len().max(1); // reserve a row for "no matches"
+    let ph = header_h + body_rows as f32 * line_h + pad;
+    let px = (w - pw) / 2.0;
+    let py = ((h - ph) / 2.0).max(20.0);
+
+    // Rounded panel with a 1px border.
+    fill_round_rect(ctx, Rect::new(px - 1.0, py - 1.0, pw + 2.0, ph + 2.0), radius + 1.0, PALETTE_BORDER)?;
+    fill_round_rect(ctx, Rect::new(px, py, pw, ph), radius, PALETTE_BG)?;
+
+    // Input box: "<prompt> <query>" with a caret.
+    let input_rect = Rect::new(px + pad, py + pad, pw - 2.0 * pad, line_h);
+    fill_round_rect(ctx, input_rect, 6.0, PALETTE_INPUT_BG)?;
+    let in_baseline = baseline_in_rect(input_rect.y, input_rect.height, ascent, descent);
+    ctx.draw_text_with_font(&p.prompt, Point::new(input_rect.x + 8.0, in_baseline), &font, &solid(PALETTE_PROMPT))?;
+    let prompt_w = measure(ctx, &format!("{} ", p.prompt));
+    let query_x = input_rect.x + 8.0 + prompt_w;
+    ctx.draw_text_with_font(&p.query, Point::new(query_x, in_baseline), &font, &solid(PALETTE_FG))?;
+    let caret_x = query_x + measure(ctx, &p.query) + 1.0;
+    ctx.draw_rect(Rect::new(caret_x, input_rect.y + 4.0, 2.0, line_h - 8.0), &solid(PALETTE_FG))?;
+
+    // Result list.
+    let list_top = py + header_h;
+    if shown.is_empty() {
+        let bl = baseline_in_rect(list_top, line_h, ascent, descent);
+        ctx.draw_text_with_font("no matches", Point::new(px + pad + 8.0, bl), &font, &solid(PALETTE_DESC))?;
+        return Ok(());
+    }
+    for (row, &idx) in shown.iter().enumerate() {
+        let y = list_top + row as f32 * line_h;
+        let item = &p.all[idx];
+        let selected = start + row == p.selected;
+        if selected {
+            fill_round_rect(ctx, Rect::new(px + pad, y, pw - 2.0 * pad, line_h), 6.0, PALETTE_SEL)?;
+        }
+        let bl = baseline_in_rect(y, line_h, ascent, descent);
+        ctx.draw_text_with_font(&item.display, Point::new(px + pad + 8.0, bl), &font, &solid(PALETTE_FG))?;
+        if !item.detail.is_empty() {
+            let dw = measure(ctx, &item.detail);
+            let name_w = measure(ctx, &item.display);
+            let dx = px + pw - pad - 8.0 - dw;
+            if dx > px + pad + 8.0 + name_w + 16.0 {
+                ctx.draw_text_with_font(&item.detail, Point::new(dx, bl), &font, &solid(PALETTE_DESC))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn items() -> Vec<PickerItem> {
+        ["buffer.next", "pane.close", "pane.split-right", "file.save"]
+            .iter()
+            .map(|n| PickerItem {
+                display: ozone_editor::commands::pretty_command_name(n),
+                detail: String::new(),
+                haystack: format!("{} {}", ozone_editor::commands::pretty_command_name(n), n)
+                    .to_lowercase(),
+                action: PickerAction::RunCommand(n.to_string()),
+            })
+            .collect()
+    }
+
+    fn selected_cmd(p: &PickerState) -> Option<String> {
+        match p.selected_item().map(|i| &i.action) {
+            Some(PickerAction::RunCommand(c)) => Some(c.clone()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn subsequence_matches_in_order() {
+        assert!(subsequence_match("pane.split-right", "pansplit"));
+        assert!(subsequence_match("buffer.next", "bnext"));
+        assert!(subsequence_match("anything", ""));
+        assert!(!subsequence_match("pane.close", "xyz"));
+        assert!(!subsequence_match("abc", "cba"));
+    }
+
+    #[test]
+    fn picker_filters_and_wraps_selection() {
+        let mut p = PickerState::new("M-x", items());
+        assert_eq!(p.filtered.len(), 4);
+        p.push('p');
+        p.push('a');
+        assert_eq!(p.filtered.len(), 2);
+        assert!(selected_cmd(&p).unwrap().starts_with("pane."));
+        p.move_sel(1);
+        assert_eq!(p.selected, 1);
+        p.move_sel(1);
+        assert_eq!(p.selected, 0);
+        p.backspace();
+        p.backspace();
+        assert_eq!(p.filtered.len(), 4);
+    }
+}

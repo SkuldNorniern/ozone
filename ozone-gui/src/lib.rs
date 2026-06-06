@@ -4,6 +4,9 @@ use std::sync::{Arc, Mutex};
 
 use ozone_term::Terminal;
 
+/// Coloured terminal grids by buffer, captured each frame for the renderer.
+type TermCells = HashMap<BufferId, Vec<Vec<ozone_term::Cell>>>;
+
 /// Map a key + modifiers to the bytes a PTY shell expects, or `None` to let the
 /// key fall through to the editor keymap (so Ctrl+Tab, M-x, pane focus still work
 /// while a terminal is focused). The shell's line discipline handles echo/editing.
@@ -39,8 +42,15 @@ fn terminal_key_bytes(key: aurea::KeyCode, mods: aurea::Modifiers) -> Option<&'s
     }
 }
 
-use aurea::render::{Canvas, Color, DrawingContext, Font, Paint, PaintStyle, Point, Rect, RendererBackend};
+use aurea::render::{Canvas, Color, DrawingContext, Font, Point, Rect, RendererBackend};
 use aurea::{AureaResult, Element, Window, WindowEvent};
+
+mod picker;
+mod search;
+mod theme;
+use picker::*;
+use search::*;
+use theme::*;
 use ozone_buffer::{BufferId, BufferKind};
 use ozone_editor::{AutocommandRegistry, CommandContext, CommandRegistry, EditorEvent, IndentConfig, Key, KeyStroke, Keymap, KeymapOutcome, ModifierMap, PhysicalMods, PaneTree, SplitAxis, ViewId, Workspace, matching_bracket};
 use ozone_editor::commands::register_defaults;
@@ -74,286 +84,6 @@ impl Element for SharedCanvas {
     unsafe fn invalidate_platform(&self, rect: Option<aurea::render::Rect>) {
         let g = self.0.lock().unwrap();
         unsafe { Element::invalidate_platform(&*g, rect) }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Fuzzy picker overlay (shared by M-x command palette and Ctrl+P file picker)
-// ---------------------------------------------------------------------------
-
-/// What committing a picker item does.
-enum PickerAction {
-    RunCommand(String),
-    OpenFile(std::path::PathBuf),
-}
-
-/// One selectable row in the picker.
-struct PickerItem {
-    /// Primary text shown in the list.
-    display: String,
-    /// Secondary text (right-aligned, dim); empty to omit.
-    detail: String,
-    /// Lowercase text the query is fuzzy-matched against.
-    haystack: String,
-    action: PickerAction,
-}
-
-/// Runtime state for the floating fuzzy picker.
-struct PickerState {
-    /// Prompt shown before the query (e.g. `M-x`, `find file:`).
-    prompt: String,
-    query: String,
-    all: Vec<PickerItem>,
-    /// Indices into `all` matching the current query.
-    filtered: Vec<usize>,
-    selected: usize,
-}
-
-impl PickerState {
-    fn new(prompt: impl Into<String>, all: Vec<PickerItem>) -> Self {
-        let mut s = Self {
-            prompt: prompt.into(),
-            query: String::new(),
-            all,
-            filtered: Vec::new(),
-            selected: 0,
-        };
-        s.refilter();
-        s
-    }
-
-    fn refilter(&mut self) {
-        let q = self.query.to_lowercase();
-        self.filtered = self
-            .all
-            .iter()
-            .enumerate()
-            .filter(|(_, item)| subsequence_match(&item.haystack, &q))
-            .map(|(i, _)| i)
-            .collect();
-        if self.selected >= self.filtered.len() {
-            self.selected = self.filtered.len().saturating_sub(1);
-        }
-    }
-
-    fn push(&mut self, c: char) {
-        self.query.push(c);
-        self.refilter();
-    }
-
-    fn backspace(&mut self) {
-        self.query.pop();
-        self.refilter();
-    }
-
-    fn move_sel(&mut self, delta: isize) {
-        if self.filtered.is_empty() {
-            return;
-        }
-        let len = self.filtered.len() as isize;
-        let next = (self.selected as isize + delta).rem_euclid(len);
-        self.selected = next as usize;
-    }
-
-    fn selected_item(&self) -> Option<&PickerItem> {
-        self.filtered.get(self.selected).map(|&i| &self.all[i])
-    }
-}
-
-/// fzf-style subsequence match: every char of `needle` appears in `haystack` in order.
-fn subsequence_match(haystack: &str, needle: &str) -> bool {
-    if needle.is_empty() {
-        return true;
-    }
-    let mut chars = haystack.chars();
-    'outer: for nc in needle.chars() {
-        for hc in chars.by_ref() {
-            if hc == nc {
-                continue 'outer;
-            }
-        }
-        return false;
-    }
-    true
-}
-
-#[cfg(test)]
-mod palette_tests {
-    use super::*;
-
-    fn items() -> Vec<PickerItem> {
-        ["buffer.next", "pane.close", "pane.split-right", "file.save"]
-            .iter()
-            .map(|n| PickerItem {
-                display: ozone_editor::commands::pretty_command_name(n),
-                detail: String::new(),
-                haystack: format!("{} {}", ozone_editor::commands::pretty_command_name(n), n)
-                    .to_lowercase(),
-                action: PickerAction::RunCommand(n.to_string()),
-            })
-            .collect()
-    }
-
-    fn selected_cmd(p: &PickerState) -> Option<String> {
-        match p.selected_item().map(|i| &i.action) {
-            Some(PickerAction::RunCommand(c)) => Some(c.clone()),
-            _ => None,
-        }
-    }
-
-    #[test]
-    fn subsequence_matches_in_order() {
-        assert!(subsequence_match("pane.split-right", "pansplit"));
-        assert!(subsequence_match("buffer.next", "bnext"));
-        assert!(subsequence_match("anything", "")); // empty matches all
-        assert!(!subsequence_match("pane.close", "xyz"));
-        assert!(!subsequence_match("abc", "cba")); // order matters
-    }
-
-    #[test]
-    fn picker_filters_and_wraps_selection() {
-        let mut p = PickerState::new("M-x", items());
-        assert_eq!(p.filtered.len(), 4);
-        p.push('p');
-        p.push('a');
-        // "pa" matches the two pane.* commands
-        assert_eq!(p.filtered.len(), 2);
-        assert!(selected_cmd(&p).unwrap().starts_with("pane."));
-        p.move_sel(1);
-        assert_eq!(p.selected, 1);
-        p.move_sel(1); // wraps back to 0 (2 items)
-        assert_eq!(p.selected, 0);
-        p.backspace();
-        p.backspace();
-        assert_eq!(p.filtered.len(), 4);
-    }
-}
-
-/// All registered commands as picker items (sorted by display name).
-fn command_picker_items(reg: &CommandRegistry) -> Vec<PickerItem> {
-    let mut v: Vec<PickerItem> = reg
-        .names()
-        .map(|n| {
-            let display = reg.display_name(n);
-            // Match against display name and raw id.
-            let haystack = format!("{} {}", display, n).to_lowercase();
-            PickerItem {
-                display,
-                detail: reg.description(n).unwrap_or("").to_string(),
-                haystack,
-                action: PickerAction::RunCommand(n.to_string()),
-            }
-        })
-        .collect();
-    v.sort_by(|a, b| a.display.cmp(&b.display));
-    v
-}
-
-/// Workspace files as picker items (relative paths, opened on commit).
-fn file_picker_items() -> Vec<PickerItem> {
-    let Ok(base) = std::env::current_dir() else {
-        return Vec::new();
-    };
-    ozone_editor::commands::collect_workspace_files(&base, 5000)
-        .into_iter()
-        .map(|rel| PickerItem {
-            haystack: rel.to_lowercase(),
-            display: rel.clone(),
-            detail: String::new(),
-            action: PickerAction::OpenFile(base.join(&rel)),
-        })
-        .collect()
-}
-
-// ---------------------------------------------------------------------------
-// In-buffer search (Ctrl+F) state
-// ---------------------------------------------------------------------------
-
-struct SearchState {
-    query: String,
-    /// Byte offsets of matches in the active buffer.
-    matches: Vec<usize>,
-    current: usize,
-    case_sensitive: bool,
-}
-
-impl SearchState {
-    fn new(case_sensitive: bool) -> Self {
-        Self { query: String::new(), matches: Vec::new(), current: 0, case_sensitive }
-    }
-    fn current_offset(&self) -> Option<usize> {
-        self.matches.get(self.current).copied()
-    }
-    fn next(&mut self) {
-        if !self.matches.is_empty() {
-            self.current = (self.current + 1) % self.matches.len();
-        }
-    }
-    fn prev(&mut self) {
-        if !self.matches.is_empty() {
-            self.current = (self.current + self.matches.len() - 1) % self.matches.len();
-        }
-    }
-}
-
-/// Recompute matches for the active buffer from the current query.
-fn search_recompute(s: &mut SearchState, ws: &Workspace) {
-    let text = ws.active_buffer().map(|b| b.text()).unwrap_or_default();
-    s.matches = ozone_editor::find_matches(&text, &s.query, s.case_sensitive);
-    if s.current >= s.matches.len() {
-        s.current = 0;
-    }
-}
-
-/// Point `current` at the first match at/after the cursor (wrapping).
-fn search_select_from_cursor(s: &mut SearchState, ws: &Workspace) {
-    let from = ws
-        .active_view()
-        .and_then(|v| ws.buffers.get(&v.buffer_id).map(|b| b.pos_to_offset(v.cursor)))
-        .unwrap_or(0);
-    if let Some(i) = ozone_editor::search::first_match_from(&s.matches, from) {
-        s.current = i;
-    }
-}
-
-/// Move the cursor to the current match and scroll it into view.
-fn search_jump(s: &SearchState, ws: &mut Workspace) {
-    let Some(off) = s.current_offset() else { return };
-    let pos = ws.active_buffer().map(|b| b.offset_to_pos(off));
-    if let (Some(pos), Some(view)) = (pos, ws.active_view_mut()) {
-        view.cursor = pos;
-        view.col_memory = pos.col;
-        view.scroll_to_cursor(view.page_height.max(1));
-    }
-}
-
-/// Handle a key while search is active. Returns whether a redraw is needed.
-fn handle_search_key(key: aurea::KeyCode, search: &mut Option<SearchState>, ws: &mut Workspace) -> bool {
-    use aurea::KeyCode::*;
-    let Some(s) = search.as_mut() else { return false };
-    match key {
-        Escape => {
-            *search = None;
-            true
-        }
-        Enter | Down => {
-            s.next();
-            search_jump(s, ws);
-            true
-        }
-        Up => {
-            s.prev();
-            search_jump(s, ws);
-            true
-        }
-        Backspace => {
-            s.query.pop();
-            search_recompute(s, ws);
-            search_select_from_cursor(s, ws);
-            search_jump(s, ws);
-            true
-        }
-        _ => false,
     }
 }
 
@@ -428,7 +158,9 @@ impl OzoneGui {
             {
                 let mut ws = workspace_for_draw.lock().unwrap();
                 let srch = search_for_draw.lock().unwrap();
-                draw_editor(ctx, &mut ws, &config_for_draw, srch.as_ref())?;
+                // Repaint callback: terminal colour grids are supplied by the
+                // explicit redraw in the run loop, so none here.
+                draw_editor(ctx, &mut ws, &config_for_draw, srch.as_ref(), &TermCells::new())?;
             }
             if let Some(p) = palette_for_draw.lock().unwrap().as_ref() {
                 draw_palette(ctx, p, &config_for_draw)?;
@@ -448,7 +180,7 @@ impl OzoneGui {
             let mut canvas = canvas_arc.lock().unwrap();
             let mut ws = self.workspace.lock().unwrap();
             let config = self.config.clone();
-            canvas.draw(|ctx| draw_editor(ctx, &mut ws, &config, None))?;
+            canvas.draw(|ctx| draw_editor(ctx, &mut ws, &config, None, &TermCells::new()))?;
             canvas.invalidate_all();
         }
 
@@ -458,6 +190,11 @@ impl OzoneGui {
         // Live terminal sessions, keyed by their Terminal buffer.
         let mut terminals: HashMap<BufferId, Terminal> = HashMap::new();
         let mut failed_terminals: std::collections::HashSet<BufferId> = std::collections::HashSet::new();
+        // Latest coloured grid per terminal, refreshed only when output changes
+        // (cloning the whole scrollback every frame would be far too costly).
+        let mut term_cells: TermCells = TermCells::new();
+        // Last grid size pushed to each terminal's PTY, to avoid redundant resizes.
+        let mut term_sizes: HashMap<BufferId, (u16, u16)> = HashMap::new();
 
         // --------------- event loop ---------------
         loop {
@@ -647,6 +384,28 @@ impl OzoneGui {
                 }
                 // Forget sessions whose buffer was closed.
                 terminals.retain(|id, _| ws.buffers.contains_key(id));
+                term_cells.retain(|id, _| terminals.contains_key(id));
+                term_sizes.retain(|id, _| terminals.contains_key(id));
+
+                // Resize each terminal's PTY to match its actual pane rect (a
+                // split pane is narrower than the window — otherwise the shell
+                // wraps to the full width and overflows the pane).
+                let editor_rect = Rect::new(0.0, 0.0, W as f32, (H as f32 - STATUS_H).max(0.0));
+                let mut want: Vec<(BufferId, Rect)> = Vec::new();
+                if let Some(panes) = &ws.panes {
+                    collect_term_rects(&ws, panes, editor_rect, &mut want);
+                } else if let Some(bid) = ws.active_view().map(|v| v.buffer_id) {
+                    if terminals.contains_key(&bid) {
+                        want.push((bid, editor_rect));
+                    }
+                }
+                for (bid, rect) in want {
+                    let size = rect_to_grid(rect, &self.config);
+                    if terminals.contains_key(&bid) && term_sizes.get(&bid) != Some(&size) {
+                        terminals[&bid].resize(size.0, size.1);
+                        term_sizes.insert(bid, size);
+                    }
+                }
 
                 let active_term = active_terminal(&ws);
                 for (id, term) in terminals.iter() {
@@ -655,16 +414,23 @@ impl OzoneGui {
                     let text = term.output_snapshot();
                     let changed = ws.buffers.get(id).map(|b| b.text() != text).unwrap_or(false);
                     if changed {
+                        // Refresh the colour grid alongside the text (same cadence).
+                        term_cells.insert(*id, term.cell_snapshot());
                         if let Some(buf) = ws.buffers.get_mut(id) {
                             buf.set_text(&text);
                         }
                         if is_active {
-                            // Pin the cursor to the end so the view follows output.
+                            // Follow the shell's *own* cursor (not the buffer's last
+                            // line). A fresh shell fills only the top of a tall grid,
+                            // so pinning to the last line would scroll past all the
+                            // content and show blank rows.
+                            let (cline, ccol) = term.cursor();
                             let last = ws.buffers.get(id).map(|b| b.line_count().saturating_sub(1)).unwrap_or(0);
-                            let col = ws.buffers.get(id).map(|b| b.line_len(last)).unwrap_or(0);
+                            let line = cline.min(last);
+                            let col = ws.buffers.get(id).map(|b| b.line_len(line)).unwrap_or(0).min(ccol);
                             if let Some(view) = ws.active_view_mut() {
-                                view.cursor = ozone_buffer::Pos::new(last, col);
-                                view.scroll_line = usize::MAX; // clamped to bottom in draw_view
+                                view.cursor = ozone_buffer::Pos::new(line, col);
+                                view.scroll_to_cursor(view.page_height.max(1));
                             }
                         }
                         needs_redraw = true;
@@ -689,7 +455,7 @@ impl OzoneGui {
                 let pal = palette.lock().unwrap();
                 let srch = search.lock().unwrap();
                 canvas.draw(|ctx| {
-                    draw_editor(ctx, &mut ws, &config, srch.as_ref())?;
+                    draw_editor(ctx, &mut ws, &config, srch.as_ref(), &term_cells)?;
                     if let Some(p) = pal.as_ref() {
                         draw_palette(ctx, p, &config)?;
                     }
@@ -884,57 +650,7 @@ fn keycode_key(key: aurea::KeyCode) -> Option<Key> {
     })
 }
 
-/// Handle a key while the picker is open. Letters arrive via TextInput;
-/// this covers navigation/commit/cancel. Returns whether a redraw is needed.
-fn handle_palette_key(
-    key: aurea::KeyCode,
-    palette: &mut Option<PickerState>,
-    ws: &mut Workspace,
-    reg: &CommandRegistry,
-    autocmds: &AutocommandRegistry,
-) -> bool {
-    use aurea::KeyCode::*;
-    let Some(p) = palette.as_mut() else { return false };
-    match key {
-        Escape => {
-            *palette = None;
-            true
-        }
-        Enter => {
-            // Clone the chosen action, then close before performing it.
-            let action = p.selected_item().map(|item| match &item.action {
-                PickerAction::RunCommand(c) => PickerAction::RunCommand(c.clone()),
-                PickerAction::OpenFile(path) => PickerAction::OpenFile(path.clone()),
-            });
-            *palette = None;
-            match action {
-                Some(PickerAction::RunCommand(cmd)) => run_cmd(&cmd, ws, reg, autocmds),
-                Some(PickerAction::OpenFile(path)) => {
-                    let _ = ws.open_file(path);
-                    dispatch_autocmds(ws, reg, autocmds);
-                }
-                None => {}
-            }
-            true
-        }
-        Up => {
-            p.move_sel(-1);
-            true
-        }
-        Down => {
-            p.move_sel(1);
-            true
-        }
-        Backspace => {
-            p.backspace();
-            true
-        }
-        // Modifier-only keys: ignore. Letters/symbols come through TextInput.
-        _ => false,
-    }
-}
-
-fn run_cmd(name: &str, ws: &mut Workspace, reg: &CommandRegistry, autocmds: &AutocommandRegistry) {
+pub(crate) fn run_cmd(name: &str, ws: &mut Workspace, reg: &CommandRegistry, autocmds: &AutocommandRegistry) {
     if name == "file.save" {
         if let Some(buffer_id) = ws.active_view().map(|view| view.buffer_id) {
             run_pre_save_autocmds(buffer_id, ws, reg, autocmds);
@@ -987,7 +703,7 @@ fn run_pre_save_autocmds(
     }
 }
 
-fn dispatch_autocmds(ws: &mut Workspace, reg: &CommandRegistry, autocmds: &AutocommandRegistry) {
+pub(crate) fn dispatch_autocmds(ws: &mut Workspace, reg: &CommandRegistry, autocmds: &AutocommandRegistry) {
     const MAX_AUTOCMD_ROUNDS: usize = 16;
 
     for _ in 0..MAX_AUTOCMD_ROUNDS {
@@ -1082,57 +798,13 @@ fn keycode_to_char(key: aurea::KeyCode, shift: bool) -> Option<char> {
 // Rendering constants — Catppuccin Mocha
 // ---------------------------------------------------------------------------
 
-const BG:           Color = Color::rgb(30,  30,  46);
-const GUTTER_BG:    Color = Color::rgb(24,  24,  37);
-const GUTTER_FG:    Color = Color::rgb(88,  91, 112);
-const GUTTER_ACT:   Color = Color::rgb(205, 214, 244);
-const STATUSBAR_BG: Color = Color::rgb(24,  24,  37);
-const STATUSBAR_FG: Color = Color::rgb(166, 227, 161);
-const STATUSBAR_DIM: Color = Color::rgb(137, 180, 250);
-const STATUS_MODE_BG: Color = Color::rgb(49,  50,  68);
-const BORDER:       Color = Color::rgb(49,  50,  68);
-const CURSOR_BG:    Color = Color::rgba(245, 224, 220, 220);
-const CURSOR_LINE:  Color = Color::rgba(49,  50,  68, 140);
-const ACTIVE_PANE_BORDER: Color = Color::rgb(137, 180, 250);
-const BRACKET_MATCH: Color = Color::rgba(137, 180, 250, 70);
-const PALETTE_SCRIM:  Color = Color::rgba(0, 0, 0, 110);
-const PALETTE_BG:     Color = Color::rgb(24, 24, 37);
-const PALETTE_BORDER: Color = Color::rgb(69, 71, 90);
-const PALETTE_INPUT_BG: Color = Color::rgb(17, 17, 27);
-const PALETTE_SEL:    Color = Color::rgb(49, 50, 68);
-const PALETTE_FG:     Color = Color::rgb(205, 214, 244);
-const PALETTE_DESC:   Color = Color::rgb(127, 132, 156);
-const PALETTE_PROMPT: Color = Color::rgb(203, 166, 247);
-const SCROLLBAR_THUMB: Color = Color::rgba(88, 91, 112, 180);
-const SEARCH_MATCH:   Color = Color::rgba(249, 226, 175, 70);  // yellow, all matches
-const SEARCH_CURRENT: Color = Color::rgba(250, 179, 135, 150); // peach, current match
-
-// Catppuccin Mocha syntax palette
-fn token_color(kind: TokenKind) -> Color {
-    match kind {
-        TokenKind::Keyword        => Color::rgb(203, 166, 247), // mauve
-        TokenKind::KeywordControl => Color::rgb(243, 139, 168), // red
-        TokenKind::Type           => Color::rgb(137, 180, 250), // blue
-        TokenKind::String         => Color::rgb(166, 227, 161), // green
-        TokenKind::Comment        => Color::rgb(88,  91,  112), // overlay0
-        TokenKind::Number         => Color::rgb(250, 179, 135), // peach
-        TokenKind::Macro          => Color::rgb(137, 220, 235), // sky
-        TokenKind::Attribute      => Color::rgb(245, 194, 231), // flamingo
-        TokenKind::Lifetime       => Color::rgb(245, 194, 231), // flamingo
-        TokenKind::Function       => Color::rgb(137, 180, 250), // blue
-        TokenKind::Operator       => Color::rgb(137, 220, 235), // sky
-        TokenKind::SectionHeader  => Color::rgb(203, 166, 247), // mauve
-        _                         => Color::rgb(205, 214, 244), // text
-    }
-}
-
 const GUTTER_MIN_W: f32 = 52.0;
 const PAD:      f32 = 8.0;
 const STATUS_H: f32 = 28.0;
 const EDITOR_TOP_PAD: f32 = 10.0;
 const SPLIT_GAP: f32 = 4.0;
 
-fn editor_font(config: &Config) -> Font {
+pub(crate) fn editor_font(config: &Config) -> Font {
     Font::new(&config.editor.font, config.editor.font_size)
 }
 
@@ -1145,6 +817,7 @@ fn draw_editor(
     ws: &mut Workspace,
     config: &Config,
     search: Option<&SearchState>,
+    term_cells: &TermCells,
 ) -> AureaResult<()> {
     let width  = ctx.width()  as f32;
     let height = ctx.height() as f32;
@@ -1162,9 +835,9 @@ fn draw_editor(
 
     if let Some(panes) = &ws.panes {
         let panes = panes.clone();
-        draw_pane_tree(ctx, ws, config, &panes, editor_rect, &font, metrics, search)?;
+        draw_pane_tree(ctx, ws, config, &panes, editor_rect, &font, metrics, search, term_cells)?;
     } else if let Some(view_id) = ws.active_view().map(|view| view.id) {
-        draw_view(ctx, ws, config, view_id, editor_rect, &font, metrics, search)?;
+        draw_view(ctx, ws, config, view_id, editor_rect, &font, metrics, search, term_cells)?;
     }
 
     if let Some(s) = search {
@@ -1192,13 +865,14 @@ fn draw_pane_tree(
     font: &Font,
     metrics: TextMetrics,
     search: Option<&SearchState>,
+    term_cells: &TermCells,
 ) -> AureaResult<()> {
     match tree {
-        PaneTree::Leaf { view_id } => draw_view(ctx, ws, config, *view_id, rect, font, metrics, search),
+        PaneTree::Leaf { view_id } => draw_view(ctx, ws, config, *view_id, rect, font, metrics, search, term_cells),
         PaneTree::Split { axis, ratio, first, second } => {
             let (first_rect, second_rect, divider) = split_rect(rect, *axis, *ratio);
-            draw_pane_tree(ctx, ws, config, first, first_rect, font, metrics, search)?;
-            draw_pane_tree(ctx, ws, config, second, second_rect, font, metrics, search)?;
+            draw_pane_tree(ctx, ws, config, first, first_rect, font, metrics, search, term_cells)?;
+            draw_pane_tree(ctx, ws, config, second, second_rect, font, metrics, search, term_cells)?;
             ctx.draw_rect(divider, &solid(BORDER))?;
             Ok(())
         }
@@ -1215,6 +889,7 @@ fn draw_view(
     font: &Font,
     metrics: TextMetrics,
     search: Option<&SearchState>,
+    term_cells: &TermCells,
 ) -> AureaResult<()> {
     let Some(buffer_id) = ws.views.get(&view_id).map(|view| view.buffer_id) else {
         return Ok(());
@@ -1259,6 +934,13 @@ fn draw_view(
     let visible     = visible + 1;
     let gutter_w    = gutter_width(line_count, metrics.char_w, line_numbers);
     let text_x      = rect.x + gutter_w + PAD;
+
+    // For a live terminal, render the colour grid instead of the text buffer.
+    let term_grid: Option<&[Vec<ozone_term::Cell>]> = if matches!(buf.kind, BufferKind::Terminal) {
+        term_cells.get(&buffer_id).map(|v| v.as_slice())
+    } else {
+        None
+    };
 
     // Matching-bracket pair for the active cursor (highlighted behind the glyphs).
     let bracket_pair = if is_active_pane {
@@ -1353,8 +1035,12 @@ fn draw_view(
             ctx.draw_text_with_font(&num, Point::new(num_x, baseline), &font, &solid(ng))?;
         }
 
-        // Line text with syntax
-        if let Some(line_text) = buf.line(line_idx) {
+        // Line content: terminal colour grid, or syntax-highlighted buffer text.
+        if let Some(grid) = term_grid {
+            if let Some(row) = grid.get(line_idx) {
+                draw_term_row(ctx, row, text_x, line_top, baseline, line_h, metrics.char_w, &font)?;
+            }
+        } else if let Some(line_text) = buf.line(line_idx) {
             let (spans, new_state) = scan_line(ft, &line_text, scan_state);
             scan_state = new_state;
 
@@ -1449,6 +1135,62 @@ fn draw_highlighted(
     Ok(())
 }
 
+/// Draw one row of terminal cells: per-cell background fills, then runs of
+/// glyphs batched by identical pen (foreground colour + bold) into single text
+/// draws. Honours reverse-video by swapping fg/bg.
+fn draw_term_row(
+    ctx: &mut dyn DrawingContext,
+    row: &[ozone_term::Cell],
+    x0: f32,
+    line_top: f32,
+    baseline: f32,
+    line_h: f32,
+    char_w: f32,
+    font: &Font,
+) -> AureaResult<()> {
+    use ozone_term::Color as TC;
+
+    // Resolve a cell's effective (fg, optional bg) after applying reverse-video.
+    let resolve = |c: &ozone_term::Cell| -> (aurea::render::Color, Option<aurea::render::Color>) {
+        if c.inverse {
+            // Reverse video: foreground paints the background and vice versa.
+            return (term_color(c.bg, TERM_BG), Some(term_color(c.fg, TERM_FG)));
+        }
+        let bg = match c.bg {
+            TC::Default => None,
+            other => Some(term_color(other, TERM_BG)),
+        };
+        (term_color(c.fg, TERM_FG), bg)
+    };
+
+    // Background fills first (so glyphs sit on top).
+    for (i, cell) in row.iter().enumerate() {
+        if let (_, Some(bg)) = resolve(cell) {
+            let bx = x0 + i as f32 * char_w;
+            ctx.draw_rect(Rect::new(bx, line_top + 1.0, char_w + 0.5, line_h - 1.0), &solid(bg))?;
+        }
+    }
+
+    // Glyph runs batched by foreground colour (spaces included; they draw blank).
+    let mut i = 0usize;
+    while i < row.len() {
+        let (fg, _) = resolve(&row[i]);
+        let start = i;
+        let mut text = String::new();
+        while i < row.len() && resolve(&row[i]).0 == fg {
+            text.push(row[i].ch);
+            i += 1;
+        }
+        if text.trim_end().is_empty() {
+            continue; // run of spaces: nothing to draw
+        }
+        let sx = x0 + start as f32 * char_w;
+        ctx.draw_text_with_font(&text, Point::new(sx, baseline), font, &solid(fg))?;
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // draw_status_bar
 // ---------------------------------------------------------------------------
@@ -1528,117 +1270,8 @@ fn draw_status_bar(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Fuzzy picker overlay rendering
-// ---------------------------------------------------------------------------
-
-fn draw_palette(ctx: &mut dyn DrawingContext, p: &PickerState, config: &Config) -> AureaResult<()> {
-    let w = ctx.width() as f32;
-    let h = ctx.height() as f32;
-    let font = editor_font(config);
-    let line_h = (font.size * 1.7).max(18.0);
-    let pad = 14.0;
-    let radius = 10.0;
-
-    let m = ctx.measure_text("M", &font).ok();
-    let ascent = m.as_ref().map(|x| x.ascent).unwrap_or(font.size * 0.8);
-    let descent = m.as_ref().map(|x| x.descent).unwrap_or(font.size * 0.2);
-    let measure = |ctx: &mut dyn DrawingContext, s: &str| {
-        ctx.measure_text(s, &font).map(|m| m.advance).unwrap_or(s.len() as f32 * font.size * 0.6)
-    };
-
-    // Dim the editor behind the panel.
-    ctx.draw_rect(Rect::new(0.0, 0.0, w, h), &solid(PALETTE_SCRIM))?;
-
-    // Window the visible rows around the selection.
-    let max_rows = 12usize;
-    let start = if p.selected >= max_rows { p.selected + 1 - max_rows } else { 0 };
-    let shown: Vec<usize> = p.filtered.iter().skip(start).take(max_rows).copied().collect();
-
-    let pw = (w * 0.6).clamp(380.0, 760.0);
-    let header_h = line_h + pad * 2.0;
-    let body_rows = shown.len().max(1); // reserve a row for "no matches"
-    let ph = header_h + body_rows as f32 * line_h + pad;
-    let px = (w - pw) / 2.0;
-    let py = ((h - ph) / 2.0).max(20.0);
-
-    // Rounded panel with a 1px border.
-    fill_round_rect(ctx, Rect::new(px - 1.0, py - 1.0, pw + 2.0, ph + 2.0), radius + 1.0, PALETTE_BORDER)?;
-    fill_round_rect(ctx, Rect::new(px, py, pw, ph), radius, PALETTE_BG)?;
-
-    // Input box: "<prompt> <query>" with a caret.
-    let input_rect = Rect::new(px + pad, py + pad, pw - 2.0 * pad, line_h);
-    fill_round_rect(ctx, input_rect, 6.0, PALETTE_INPUT_BG)?;
-    let in_baseline = baseline_in_rect(input_rect.y, input_rect.height, ascent, descent);
-    ctx.draw_text_with_font(&p.prompt, Point::new(input_rect.x + 8.0, in_baseline), &font, &solid(PALETTE_PROMPT))?;
-    let prompt_w = measure(ctx, &format!("{} ", p.prompt));
-    let query_x = input_rect.x + 8.0 + prompt_w;
-    ctx.draw_text_with_font(&p.query, Point::new(query_x, in_baseline), &font, &solid(PALETTE_FG))?;
-    let caret_x = query_x + measure(ctx, &p.query) + 1.0;
-    ctx.draw_rect(Rect::new(caret_x, input_rect.y + 4.0, 2.0, line_h - 8.0), &solid(PALETTE_FG))?;
-
-    // Result list.
-    let list_top = py + header_h;
-    if shown.is_empty() {
-        let bl = baseline_in_rect(list_top, line_h, ascent, descent);
-        ctx.draw_text_with_font("no matches", Point::new(px + pad + 8.0, bl), &font, &solid(PALETTE_DESC))?;
-        return Ok(());
-    }
-    for (row, &idx) in shown.iter().enumerate() {
-        let y = list_top + row as f32 * line_h;
-        let item = &p.all[idx];
-        let selected = start + row == p.selected;
-        if selected {
-            fill_round_rect(ctx, Rect::new(px + pad, y, pw - 2.0 * pad, line_h), 6.0, PALETTE_SEL)?;
-        }
-        let bl = baseline_in_rect(y, line_h, ascent, descent);
-        // Primary display text; secondary detail right-aligned (dim).
-        ctx.draw_text_with_font(&item.display, Point::new(px + pad + 8.0, bl), &font, &solid(PALETTE_FG))?;
-        if !item.detail.is_empty() {
-            let dw = measure(ctx, &item.detail);
-            let name_w = measure(ctx, &item.display);
-            let dx = px + pw - pad - 8.0 - dw;
-            if dx > px + pad + 8.0 + name_w + 16.0 {
-                ctx.draw_text_with_font(&item.detail, Point::new(dx, bl), &font, &solid(PALETTE_DESC))?;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Top-right find bar: `find: <query>   (i/n)`.
-fn draw_search_bar(ctx: &mut dyn DrawingContext, s: &SearchState, font: &Font, width: f32) -> AureaResult<()> {
-    let line_h = (font.size * 1.7).max(18.0);
-    let m = ctx.measure_text("M", font).ok();
-    let ascent = m.as_ref().map(|x| x.ascent).unwrap_or(font.size * 0.8);
-    let descent = m.as_ref().map(|x| x.descent).unwrap_or(font.size * 0.2);
-
-    let count = if s.matches.is_empty() {
-        if s.query.is_empty() { String::new() } else { "  (no matches)".to_string() }
-    } else {
-        format!("  ({}/{})", s.current + 1, s.matches.len())
-    };
-    let text = format!("find: {}{}", s.query, count);
-    let text_w = ctx.measure_text(&text, font).map(|m| m.advance).unwrap_or(text.len() as f32 * font.size * 0.6);
-
-    let pad = 10.0;
-    let bw = (text_w + pad * 2.0 + 16.0).min(width - 24.0);
-    let bx = width - bw - 12.0;
-    let by = 10.0;
-    fill_round_rect(ctx, Rect::new(bx - 1.0, by - 1.0, bw + 2.0, line_h + 2.0), 9.0, PALETTE_BORDER)?;
-    fill_round_rect(ctx, Rect::new(bx, by, bw, line_h), 8.0, PALETTE_BG)?;
-
-    let bl = baseline_in_rect(by, line_h, ascent, descent);
-    // Prompt dim, query bright.
-    let prompt_w = ctx.measure_text("find: ", font).map(|m| m.advance).unwrap_or(0.0);
-    ctx.draw_text_with_font("find: ", Point::new(bx + pad, bl), font, &solid(PALETTE_DESC))?;
-    let rest = format!("{}{}", s.query, count);
-    ctx.draw_text_with_font(&rest, Point::new(bx + pad + prompt_w, bl), font, &solid(PALETTE_FG))?;
-    Ok(())
-}
-
 /// Fill a rounded rectangle using a cross of rects plus four corner circles.
-fn fill_round_rect(ctx: &mut dyn DrawingContext, rect: Rect, r: f32, color: Color) -> AureaResult<()> {
+pub(crate) fn fill_round_rect(ctx: &mut dyn DrawingContext, rect: Rect, r: f32, color: Color) -> AureaResult<()> {
     let r = r.min(rect.width / 2.0).min(rect.height / 2.0).max(0.0);
     if r <= 0.5 {
         return ctx.draw_rect(rect, &solid(color));
@@ -1656,7 +1289,7 @@ fn fill_round_rect(ctx: &mut dyn DrawingContext, rect: Rect, r: f32, color: Colo
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn baseline_in_rect(top: f32, height: f32, ascent: f32, descent: f32) -> f32 {
+pub(crate) fn baseline_in_rect(top: f32, height: f32, ascent: f32, descent: f32) -> f32 {
     top + (height + ascent - descent) / 2.0
 }
 
@@ -1666,6 +1299,42 @@ fn gutter_width(line_count: usize, char_w: f32, mode: LineNumbers) -> f32 {
     }
     let digits = line_count.max(1).to_string().len().max(2);
     GUTTER_MIN_W.max((digits as f32 + 2.0) * char_w + PAD)
+}
+
+/// Collect the on-screen rect of every terminal-buffer leaf in a pane tree,
+/// mirroring `draw_pane_tree`'s geometry so the PTY can be sized to its pane.
+fn collect_term_rects(
+    ws: &Workspace,
+    tree: &PaneTree,
+    rect: Rect,
+    out: &mut Vec<(BufferId, Rect)>,
+) {
+    match tree {
+        PaneTree::Leaf { view_id } => {
+            if let Some(bid) = ws.views.get(view_id).map(|v| v.buffer_id) {
+                if matches!(ws.buffers.get(&bid).map(|b| &b.kind), Some(BufferKind::Terminal)) {
+                    out.push((bid, rect));
+                }
+            }
+        }
+        PaneTree::Split { axis, ratio, first, second } => {
+            let (fr, sr, _) = split_rect(rect, *axis, *ratio);
+            collect_term_rects(ws, first, fr, out);
+            collect_term_rects(ws, second, sr, out);
+        }
+    }
+}
+
+/// Convert a pane rect to a terminal cell grid `(cols, rows)`, matching the
+/// renderer's text origin (left `PAD`, right scrollbar, `EDITOR_TOP_PAD`).
+fn rect_to_grid(rect: Rect, config: &Config) -> (u16, u16) {
+    let cw = (config.editor.font_size * 0.6).max(1.0);
+    let lh = (config.editor.font_size * config.editor.line_height).max(1.0);
+    let usable_w = (rect.width - PAD - 6.0).max(0.0);
+    let usable_h = (rect.height - EDITOR_TOP_PAD).max(0.0);
+    let cols = (usable_w / cw).clamp(8.0, 1000.0) as u16;
+    let rows = (usable_h / lh).clamp(2.0, 1000.0) as u16;
+    (cols, rows)
 }
 
 fn split_rect(rect: Rect, axis: SplitAxis, ratio: f32) -> (Rect, Rect, Rect) {
@@ -1746,6 +1415,3 @@ fn pane_status(ws: &Workspace, active: ViewId) -> String {
 fn max_scroll_line(line_count: usize, page_height: usize) -> usize {
     line_count.saturating_sub(page_height.max(1))
 }
-
-fn solid(c: Color) -> Paint { Paint::new().color(c).style(PaintStyle::Fill) }
-fn stroke(c: Color, w: f32) -> Paint { Paint::new().color(c).style(PaintStyle::Stroke).stroke_width(w) }

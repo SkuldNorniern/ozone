@@ -16,6 +16,7 @@ use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+pub use vt::{Cell, Color};
 use vt::Vt;
 
 /// Initial PTY/grid size (cells). The GUI resizes to the visible area.
@@ -60,6 +61,16 @@ impl Terminal {
     /// The current screen (scrollback + grid) rendered as text.
     pub fn output_snapshot(&self) -> String {
         self.vt.lock().map(|v| v.render()).unwrap_or_default()
+    }
+
+    /// The current screen as coloured cells (scrollback + grid), one row per line.
+    pub fn cell_snapshot(&self) -> Vec<Vec<Cell>> {
+        self.vt.lock().map(|v| v.render_cells()).unwrap_or_default()
+    }
+
+    /// The cursor's absolute `(line, col)` in the rendered output.
+    pub fn cursor(&self) -> (usize, usize) {
+        self.vt.lock().map(|v| v.cursor()).unwrap_or((0, 0))
     }
 
     /// Whether the shell process is still running.

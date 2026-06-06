@@ -1,16 +1,72 @@
 //! Minimal VT/ANSI terminal emulator: a character grid + cursor that interprets
 //! the escape sequences a shell emits, instead of stripping them.
 //!
-//! Scope: printable text, `\r` `\n` `\b` `\t`, and the common CSI sequences —
-//! cursor movement (CUU/CUD/CUF/CUB/CHA/VPA/CUP), erase in display/line (ED/EL).
-//! SGR colors are parsed and ignored for now (the buffer is plain text); a
-//! coloured render is a later step. OSC and other escapes are consumed.
+//! Scope: printable text, `\r` `\n` `\b` `\t`, the common CSI sequences —
+//! cursor movement (CUU/CUD/CUF/CUB/CHA/VPA/CUP), erase in display/line (ED/EL) —
+//! and SGR colours/attributes (`\x1b[...m`): the 16 ANSI colours, 256-colour and
+//! truecolour, plus bold and reverse-video. Each grid position stores a
+//! [`Cell`] (glyph + colours), so a coloured render is possible. OSC and other
+//! escapes are consumed.
 //!
-//! The screen scrolls into a capped scrollback; [`Vt::render`] returns the
-//! scrollback + screen as text (trailing spaces trimmed), ready for display.
+//! The screen scrolls into a capped scrollback; [`Vt::render`] returns the text,
+//! while [`Vt::render_cells`] returns the coloured grid for the GUI.
 
 const MAX_SCROLLBACK: usize = 5000;
 const TAB: usize = 8;
+
+/// A terminal colour: the slot's default, one of the 256 indexed colours, or
+/// a 24-bit RGB triple. Resolving an [`Color::Indexed`]/[`Color::Default`] to
+/// actual pixels is the renderer's job (it owns the palette/theme).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Color {
+    Default,
+    Indexed(u8),
+    Rgb(u8, u8, u8),
+}
+
+/// One screen position: a glyph plus its pen (colours + attributes).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Cell {
+    pub ch: char,
+    pub fg: Color,
+    pub bg: Color,
+    pub bold: bool,
+    /// Reverse video: swap fg/bg when rendering.
+    pub inverse: bool,
+}
+
+impl Cell {
+    const fn blank() -> Self {
+        Self { ch: ' ', fg: Color::Default, bg: Color::Default, bold: false, inverse: false }
+    }
+}
+
+impl Default for Cell {
+    fn default() -> Self {
+        Self::blank()
+    }
+}
+
+/// The current drawing pen applied to newly written glyphs.
+#[derive(Clone, Copy)]
+struct Pen {
+    fg: Color,
+    bg: Color,
+    bold: bool,
+    inverse: bool,
+}
+
+impl Pen {
+    const fn new() -> Self {
+        Self { fg: Color::Default, bg: Color::Default, bold: false, inverse: false }
+    }
+    fn reset(&mut self) {
+        *self = Self::new();
+    }
+    fn cell(&self, ch: char) -> Cell {
+        Cell { ch, fg: self.fg, bg: self.bg, bold: self.bold, inverse: self.inverse }
+    }
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum State {
@@ -25,10 +81,11 @@ enum State {
 pub struct Vt {
     cols: usize,
     rows: usize,
-    screen: Vec<Vec<char>>, // rows x cols
-    scrollback: Vec<String>,
+    screen: Vec<Vec<Cell>>, // rows x cols
+    scrollback: Vec<Vec<Cell>>,
     cx: usize,
     cy: usize,
+    pen: Pen,
     state: State,
     params: Vec<u32>,
     cur_param: Option<u32>,
@@ -41,10 +98,11 @@ impl Vt {
         Self {
             cols,
             rows,
-            screen: vec![vec![' '; cols]; rows],
+            screen: vec![vec![Cell::blank(); cols]; rows],
             scrollback: Vec::new(),
             cx: 0,
             cy: 0,
+            pen: Pen::new(),
             state: State::Ground,
             params: Vec::new(),
             cur_param: None,
@@ -159,39 +217,79 @@ impl Vt {
             }
             'J' => self.erase_display(self.param(0, 0)),
             'K' => self.erase_line(self.param(0, 0)),
-            // SGR (colors) and everything else: ignored for now.
+            'm' => self.sgr(),
             _ => {}
         }
     }
 
+    /// Apply an SGR sequence (`\x1b[...m`) to the current pen.
+    fn sgr(&mut self) {
+        if self.params.is_empty() {
+            self.pen.reset();
+            return;
+        }
+        let mut i = 0;
+        while i < self.params.len() {
+            let p = self.params[i];
+            match p {
+                0 => self.pen.reset(),
+                1 => self.pen.bold = true,
+                22 => self.pen.bold = false,
+                7 => self.pen.inverse = true,
+                27 => self.pen.inverse = false,
+                30..=37 => self.pen.fg = Color::Indexed((p - 30) as u8),
+                90..=97 => self.pen.fg = Color::Indexed((p - 90 + 8) as u8),
+                39 => self.pen.fg = Color::Default,
+                40..=47 => self.pen.bg = Color::Indexed((p - 40) as u8),
+                100..=107 => self.pen.bg = Color::Indexed((p - 100 + 8) as u8),
+                49 => self.pen.bg = Color::Default,
+                38 => {
+                    if let Some((c, used)) = parse_extended(&self.params[i + 1..]) {
+                        self.pen.fg = c;
+                        i += used;
+                    }
+                }
+                48 => {
+                    if let Some((c, used)) = parse_extended(&self.params[i + 1..]) {
+                        self.pen.bg = c;
+                        i += used;
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+    }
+
     fn erase_display(&mut self, mode: u32) {
+        let blank = self.pen.cell(' ');
         match mode {
             0 => {
                 // cursor → end of screen
                 for c in self.cx..self.cols {
-                    self.screen[self.cy][c] = ' ';
+                    self.screen[self.cy][c] = blank;
                 }
                 for r in (self.cy + 1)..self.rows {
                     for c in 0..self.cols {
-                        self.screen[r][c] = ' ';
+                        self.screen[r][c] = blank;
                     }
                 }
             }
             1 => {
                 for r in 0..self.cy {
                     for c in 0..self.cols {
-                        self.screen[r][c] = ' ';
+                        self.screen[r][c] = blank;
                     }
                 }
                 for c in 0..=self.cx.min(self.cols - 1) {
-                    self.screen[self.cy][c] = ' ';
+                    self.screen[self.cy][c] = blank;
                 }
             }
             _ => {
                 // 2 (and 3): clear whole screen.
                 for row in &mut self.screen {
                     for c in row.iter_mut() {
-                        *c = ' ';
+                        *c = blank;
                     }
                 }
                 if mode == 3 {
@@ -202,21 +300,22 @@ impl Vt {
     }
 
     fn erase_line(&mut self, mode: u32) {
+        let blank = self.pen.cell(' ');
         let row = &mut self.screen[self.cy];
         match mode {
             0 => {
                 for c in self.cx..self.cols {
-                    row[c] = ' ';
+                    row[c] = blank;
                 }
             }
             1 => {
                 for c in 0..=self.cx.min(self.cols - 1) {
-                    row[c] = ' ';
+                    row[c] = blank;
                 }
             }
             _ => {
                 for c in row.iter_mut() {
-                    *c = ' ';
+                    *c = blank;
                 }
             }
         }
@@ -227,7 +326,7 @@ impl Vt {
             self.cx = 0;
             self.linefeed();
         }
-        self.screen[self.cy][self.cx] = ch;
+        self.screen[self.cy][self.cx] = self.pen.cell(ch);
         self.cx += 1;
     }
 
@@ -241,17 +340,17 @@ impl Vt {
 
     fn scroll_up(&mut self) {
         let top = self.screen.remove(0);
-        self.scrollback.push(trim_row(&top));
+        self.scrollback.push(top);
         if self.scrollback.len() > MAX_SCROLLBACK {
             let excess = self.scrollback.len() - MAX_SCROLLBACK;
             self.scrollback.drain(0..excess);
         }
-        self.screen.push(vec![' '; self.cols]);
+        self.screen.push(vec![Cell::blank(); self.cols]);
     }
 
     fn scroll_down(&mut self) {
         self.screen.pop();
-        self.screen.insert(0, vec![' '; self.cols]);
+        self.screen.insert(0, vec![Cell::blank(); self.cols]);
     }
 
     /// Resize the grid, preserving overlapping content; clamps the cursor.
@@ -261,7 +360,7 @@ impl Vt {
         if cols == self.cols && rows == self.rows {
             return;
         }
-        let mut next = vec![vec![' '; cols]; rows];
+        let mut next = vec![vec![Cell::blank(); cols]; rows];
         for r in 0..rows.min(self.rows) {
             for c in 0..cols.min(self.cols) {
                 next[r][c] = self.screen[r][c];
@@ -274,11 +373,17 @@ impl Vt {
         self.cy = self.cy.min(rows - 1);
     }
 
+    /// The cursor's absolute position in the rendered output: `(line, col)`,
+    /// where `line` counts scrollback rows then screen rows.
+    pub fn cursor(&self) -> (usize, usize) {
+        (self.scrollback.len() + self.cy, self.cx)
+    }
+
     /// The full visible text: scrollback then the screen, trailing spaces trimmed.
     pub fn render(&self) -> String {
         let mut out = String::new();
         for line in &self.scrollback {
-            out.push_str(line);
+            out.push_str(&trim_row(line));
             out.push('\n');
         }
         for (i, row) in self.screen.iter().enumerate() {
@@ -289,19 +394,55 @@ impl Vt {
         }
         out
     }
+
+    /// The full visible grid as coloured cells: scrollback then screen, one
+    /// `Vec<Cell>` per line with trailing blank cells trimmed.
+    pub fn render_cells(&self) -> Vec<Vec<Cell>> {
+        let mut out: Vec<Vec<Cell>> = Vec::with_capacity(self.scrollback.len() + self.rows);
+        for line in &self.scrollback {
+            out.push(trim_cells(line));
+        }
+        for row in &self.screen {
+            out.push(trim_cells(row));
+        }
+        out
+    }
 }
 
-fn trim_row(row: &[char]) -> String {
+/// Parse the tail of a `38`/`48` SGR: `5;<idx>` (256-colour) or `2;<r>;<g>;<b>`
+/// (truecolour). Returns the colour and how many params it consumed.
+fn parse_extended(rest: &[u32]) -> Option<(Color, usize)> {
+    match rest.first().copied() {
+        Some(5) => rest.get(1).map(|&idx| (Color::Indexed(idx as u8), 2)),
+        Some(2) => {
+            let r = *rest.get(1)? as u8;
+            let g = *rest.get(2)? as u8;
+            let b = *rest.get(3)? as u8;
+            Some((Color::Rgb(r, g, b), 4))
+        }
+        _ => None,
+    }
+}
+
+fn trim_end(row: &[Cell]) -> usize {
     let mut end = row.len();
-    while end > 0 && row[end - 1] == ' ' {
+    while end > 0 && row[end - 1].ch == ' ' && row[end - 1].bg == Color::Default {
         end -= 1;
     }
-    row[..end].iter().collect()
+    end
+}
+
+fn trim_row(row: &[Cell]) -> String {
+    row[..trim_end(row)].iter().map(|c| c.ch).collect()
+}
+
+fn trim_cells(row: &[Cell]) -> Vec<Cell> {
+    row[..trim_end(row)].to_vec()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Vt;
+    use super::{Color, Vt};
 
     fn render(input: &str) -> String {
         let mut vt = Vt::new(20, 5);
@@ -342,8 +483,37 @@ mod tests {
     }
 
     #[test]
-    fn sgr_colors_are_ignored_not_shown() {
+    fn sgr_colors_are_stripped_from_text() {
         assert_eq!(render("\u{1b}[31mred\u{1b}[0m").lines().next().unwrap(), "red");
+    }
+
+    #[test]
+    fn sgr_sets_cell_colors() {
+        let mut vt = Vt::new(20, 2);
+        vt.process("\u{1b}[31mR\u{1b}[0mn");
+        let cells = vt.render_cells();
+        assert_eq!(cells[0][0].ch, 'R');
+        assert_eq!(cells[0][0].fg, Color::Indexed(1)); // red
+        assert_eq!(cells[0][1].ch, 'n');
+        assert_eq!(cells[0][1].fg, Color::Default); // reset
+    }
+
+    #[test]
+    fn sgr_truecolor_and_256() {
+        let mut vt = Vt::new(20, 2);
+        vt.process("\u{1b}[38;2;10;20;30mX\u{1b}[38;5;200mY");
+        let cells = vt.render_cells();
+        assert_eq!(cells[0][0].fg, Color::Rgb(10, 20, 30));
+        assert_eq!(cells[0][1].fg, Color::Indexed(200));
+    }
+
+    #[test]
+    fn sgr_bright_and_bg() {
+        let mut vt = Vt::new(20, 2);
+        vt.process("\u{1b}[92;44mX");
+        let cells = vt.render_cells();
+        assert_eq!(cells[0][0].fg, Color::Indexed(10)); // bright green = 2 + 8
+        assert_eq!(cells[0][0].bg, Color::Indexed(4)); // blue
     }
 
     #[test]
