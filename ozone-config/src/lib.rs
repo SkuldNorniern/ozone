@@ -141,17 +141,11 @@ pub struct ModifierOverrides {
 }
 
 /// Frontend behavior toggles (mirrors config.toml `[ui]`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct UiConfig {
     /// Enables mouse-driven editor interaction. Keyboard input remains active
     /// regardless of this setting.
     pub mouse: bool,
-}
-
-impl Default for UiConfig {
-    fn default() -> Self {
-        Self { mouse: false }
-    }
 }
 
 /// Top-level configuration.

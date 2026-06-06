@@ -524,6 +524,23 @@ impl OzoneGui {
 
                     WindowEvent::MouseWheel { delta_y, .. } => {
                         let mut ws = lock(self.workspace.as_ref());
+                        if self.config.ui.mouse
+                            && let Some((x, y)) = mouse_pos
+                        {
+                            let (width, height) = {
+                                let canvas = lock(canvas_arc.as_ref());
+                                (canvas.width() as f32, canvas.height() as f32)
+                            };
+                            let editor_rect =
+                                Rect::new(0.0, 0.0, width, (height - STATUS_H).max(0.0));
+                            if let Some((view_id, _)) = ws
+                                .panes
+                                .as_ref()
+                                .and_then(|tree| pane_at(tree, editor_rect, x, y))
+                            {
+                                ws.active_view_id = Some(view_id);
+                            }
+                        }
                         let max_scroll = ws
                             .active_view()
                             .and_then(|view| {

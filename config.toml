@@ -30,8 +30,8 @@ name = "catppuccin-mocha"
 # pane and places the cursor; Shift-click extends the selection.
 mouse = false
 
-# Keybindings are parsed now; runtime layering/chords are wired in the next
-# editor phase. Defaults still live in code until then.
+# User keybindings layer over the shipped defaults. Chords and filetype scopes
+# are active.
 [[keymap]]
 keys    = "ctrl+s"
 command = "file.save"
@@ -53,7 +53,7 @@ keys     = "ctrl+shift+f"
 command  = "lsp.format"
 filetype = "rust"
 
-# Filetype-local defaults. These are parsed but not fully applied yet.
+# Filetype-local defaults are applied when each file buffer is opened.
 [[filetype]]
 name = "markdown"
 word_wrap = true
@@ -63,7 +63,7 @@ tab_width = 2
 name = "makefile"
 soft_tabs = false
 
-# Autocommands are parsed but not executed until AutocommandRegistry lands.
+# Autocommands execute through the same command registry as keybindings.
 [[autocmd]]
 event   = "buffer.pre-save"
 pattern = "*"

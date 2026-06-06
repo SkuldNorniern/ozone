@@ -231,6 +231,14 @@ fn resolve_theme_path(selection: &str) -> Option<PathBuf> {
             return Some(path);
         }
     }
+    if let Ok(executable) = std::env::current_exe()
+        && let Some(executable_dir) = executable.parent()
+    {
+        let path = executable_dir.join("themes").join(&file_name);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
     let bundled = PathBuf::from("themes").join(file_name);
     bundled.is_file().then_some(bundled)
 }
