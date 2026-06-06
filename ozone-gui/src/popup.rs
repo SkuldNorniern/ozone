@@ -13,34 +13,67 @@
 use aurea::AureaResult;
 use aurea::render::{Color, DrawingContext, Point, Rect};
 
-use crate::theme::{PALETTE_BG, PALETTE_BORDER, PALETTE_SCRIM, solid};
+use crate::theme::{palette, solid};
 
 /// Fill a rounded rectangle using a cross of rects plus four corner circles.
 /// The shared building block for every panel and pill.
-pub(crate) fn fill_round_rect(ctx: &mut dyn DrawingContext, rect: Rect, r: f32, color: Color) -> AureaResult<()> {
+pub(crate) fn fill_round_rect(
+    ctx: &mut dyn DrawingContext,
+    rect: Rect,
+    r: f32,
+    color: Color,
+) -> AureaResult<()> {
     let r = r.min(rect.width / 2.0).min(rect.height / 2.0).max(0.0);
     if r <= 0.5 {
         return ctx.draw_rect(rect, &solid(color));
     }
-    ctx.draw_rect(Rect::new(rect.x, rect.y + r, rect.width, rect.height - 2.0 * r), &solid(color))?;
-    ctx.draw_rect(Rect::new(rect.x + r, rect.y, rect.width - 2.0 * r, rect.height), &solid(color))?;
+    ctx.draw_rect(
+        Rect::new(rect.x, rect.y + r, rect.width, rect.height - 2.0 * r),
+        &solid(color),
+    )?;
+    ctx.draw_rect(
+        Rect::new(rect.x + r, rect.y, rect.width - 2.0 * r, rect.height),
+        &solid(color),
+    )?;
     ctx.draw_circle(Point::new(rect.x + r, rect.y + r), r, &solid(color))?;
-    ctx.draw_circle(Point::new(rect.x + rect.width - r, rect.y + r), r, &solid(color))?;
-    ctx.draw_circle(Point::new(rect.x + r, rect.y + rect.height - r), r, &solid(color))?;
-    ctx.draw_circle(Point::new(rect.x + rect.width - r, rect.y + rect.height - r), r, &solid(color))?;
+    ctx.draw_circle(
+        Point::new(rect.x + rect.width - r, rect.y + r),
+        r,
+        &solid(color),
+    )?;
+    ctx.draw_circle(
+        Point::new(rect.x + r, rect.y + rect.height - r),
+        r,
+        &solid(color),
+    )?;
+    ctx.draw_circle(
+        Point::new(rect.x + rect.width - r, rect.y + rect.height - r),
+        r,
+        &solid(color),
+    )?;
     Ok(())
 }
 
 /// Dim the whole surface behind a modal popup.
 pub(crate) fn draw_scrim(ctx: &mut dyn DrawingContext, width: f32, height: f32) -> AureaResult<()> {
-    ctx.draw_rect(Rect::new(0.0, 0.0, width, height), &solid(PALETTE_SCRIM))
+    ctx.draw_rect(Rect::new(0.0, 0.0, width, height), &solid(palette().scrim))
 }
 
 /// Draw a bordered rounded panel (1px border ring + background fill). Content is
 /// drawn by the caller inside `rect`.
 pub(crate) fn draw_panel(ctx: &mut dyn DrawingContext, rect: Rect, radius: f32) -> AureaResult<()> {
-    fill_round_rect(ctx, Rect::new(rect.x - 1.0, rect.y - 1.0, rect.width + 2.0, rect.height + 2.0), radius + 1.0, PALETTE_BORDER)?;
-    fill_round_rect(ctx, rect, radius, PALETTE_BG)?;
+    fill_round_rect(
+        ctx,
+        Rect::new(
+            rect.x - 1.0,
+            rect.y - 1.0,
+            rect.width + 2.0,
+            rect.height + 2.0,
+        ),
+        radius + 1.0,
+        palette().picker_border,
+    )?;
+    fill_round_rect(ctx, rect, radius, palette().picker_bg)?;
     Ok(())
 }
 

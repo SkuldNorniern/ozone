@@ -9,7 +9,7 @@ use ozone_config::Config;
 use ozone_editor::{AutocommandRegistry, CommandRegistry, Workspace};
 
 use crate::popup::{centered_rect, draw_panel, draw_scrim, fill_round_rect};
-use crate::theme::{PALETTE_DESC, PALETTE_FG, PALETTE_INPUT_BG, PALETTE_PROMPT, PALETTE_SEL, solid};
+use crate::theme::{palette, solid};
 use crate::{baseline_in_rect, dispatch_autocmds, editor_font, run_cmd, run_cmd_with_arg};
 
 /// What committing a picker item does.
@@ -46,14 +46,26 @@ pub(crate) struct PickerState {
 
 impl PickerState {
     pub(crate) fn new(prompt: impl Into<String>, all: Vec<PickerItem>) -> Self {
-        let mut s = Self { prompt: prompt.into(), query: String::new(), all, filtered: Vec::new(), selected: 0 };
+        let mut s = Self {
+            prompt: prompt.into(),
+            query: String::new(),
+            all,
+            filtered: Vec::new(),
+            selected: 0,
+        };
         s.refilter();
         s
     }
 
     fn refilter(&mut self) {
         let q = self.query.to_lowercase();
-        self.filtered = self.all.iter().enumerate().filter(|(_, item)| subsequence_match(&item.haystack, &q)).map(|(i, _)| i).collect();
+        self.filtered = self
+            .all
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| subsequence_match(&item.haystack, &q))
+            .map(|(i, _)| i)
+            .collect();
         if self.selected >= self.filtered.len() {
             self.selected = self.filtered.len().saturating_sub(1);
         }
@@ -107,7 +119,12 @@ pub(crate) fn command_picker_items(reg: &CommandRegistry) -> Vec<PickerItem> {
         .map(|n| {
             let display = reg.display_name(n);
             let haystack = format!("{} {}", display, n).to_lowercase();
-            PickerItem { display, detail: reg.description(n).unwrap_or("").to_string(), haystack, action: PickerAction::RunCommand(n.to_string()) }
+            PickerItem {
+                display,
+                detail: reg.description(n).unwrap_or("").to_string(),
+                haystack,
+                action: PickerAction::RunCommand(n.to_string()),
+            }
         })
         .collect();
     v.sort_by(|a, b| a.display.cmp(&b.display));
@@ -121,7 +138,12 @@ pub(crate) fn file_picker_items() -> Vec<PickerItem> {
     };
     ozone_editor::commands::collect_workspace_files(&base, 5000)
         .into_iter()
-        .map(|rel| PickerItem { haystack: rel.to_lowercase(), display: rel.clone(), detail: String::new(), action: PickerAction::OpenFile(base.join(&rel)) })
+        .map(|rel| PickerItem {
+            haystack: rel.to_lowercase(),
+            display: rel.clone(),
+            detail: String::new(),
+            action: PickerAction::OpenFile(base.join(&rel)),
+        })
         .collect()
 }
 
@@ -140,7 +162,11 @@ pub(crate) fn buffer_picker_items(ws: &Workspace, mru: &[BufferId]) -> Vec<Picke
         };
         let (name, detail) = match &buf.kind {
             BufferKind::File(p) | BufferKind::Image(p) => {
-                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("?").to_string();
+                let name = p
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("?")
+                    .to_string();
                 (name, p.to_string_lossy().to_string())
             }
             BufferKind::Scratch => ("*scratch*".to_string(), String::new()),
@@ -151,7 +177,12 @@ pub(crate) fn buffer_picker_items(ws: &Workspace, mru: &[BufferId]) -> Vec<Picke
         let dirty = if buf.is_dirty() { " ●" } else { "" };
         let display = format!("{name}{dirty}");
         let haystack = format!("{display} {detail}").to_lowercase();
-        items.push(PickerItem { display, detail, haystack, action: PickerAction::SwitchBuffer(id) });
+        items.push(PickerItem {
+            display,
+            detail,
+            haystack,
+            action: PickerAction::SwitchBuffer(id),
+        });
     };
 
     // MRU order first (most recent that isn't the active buffer), then any
@@ -160,7 +191,12 @@ pub(crate) fn buffer_picker_items(ws: &Workspace, mru: &[BufferId]) -> Vec<Picke
         push(*id, ws, &mut items);
     }
     let listed: std::collections::HashSet<BufferId> = mru.iter().copied().collect();
-    let mut rest: Vec<BufferId> = ws.buffers.keys().copied().filter(|id| !listed.contains(id)).collect();
+    let mut rest: Vec<BufferId> = ws
+        .buffers
+        .keys()
+        .copied()
+        .filter(|id| !listed.contains(id))
+        .collect();
     rest.sort_by_key(|id| id.raw());
     for id in rest {
         push(id, ws, &mut items);
@@ -174,7 +210,12 @@ pub(crate) fn select_picker_items(items: Vec<ozone_editor::SelectItem>) -> Vec<P
         .into_iter()
         .map(|it| {
             let haystack = format!("{} {}", it.label, it.detail).to_lowercase();
-            PickerItem { display: it.label, detail: it.detail, haystack, action: PickerAction::RunCommandArg(it.command, it.arg) }
+            PickerItem {
+                display: it.label,
+                detail: it.detail,
+                haystack,
+                action: PickerAction::RunCommandArg(it.command, it.arg),
+            }
         })
         .collect()
 }
@@ -236,7 +277,11 @@ pub(crate) fn handle_palette_key(
 }
 
 /// Render the picker overlay: a centered rounded panel with prompt + result list.
-pub(crate) fn draw_palette(ctx: &mut dyn DrawingContext, p: &PickerState, config: &Config) -> AureaResult<()> {
+pub(crate) fn draw_palette(
+    ctx: &mut dyn DrawingContext,
+    p: &PickerState,
+    config: &Config,
+) -> AureaResult<()> {
     let w = ctx.width() as f32;
     let h = ctx.height() as f32;
     let font = editor_font(config);
@@ -247,15 +292,29 @@ pub(crate) fn draw_palette(ctx: &mut dyn DrawingContext, p: &PickerState, config
     let m = ctx.measure_text("M", &font).ok();
     let ascent = m.as_ref().map(|x| x.ascent).unwrap_or(font.size * 0.8);
     let descent = m.as_ref().map(|x| x.descent).unwrap_or(font.size * 0.2);
-    let measure = |ctx: &mut dyn DrawingContext, s: &str| ctx.measure_text(s, &font).map(|m| m.advance).unwrap_or(s.len() as f32 * font.size * 0.6);
+    let measure = |ctx: &mut dyn DrawingContext, s: &str| {
+        ctx.measure_text(s, &font)
+            .map(|m| m.advance)
+            .unwrap_or(s.len() as f32 * font.size * 0.6)
+    };
 
     // Dim the editor behind the panel.
     draw_scrim(ctx, w, h)?;
 
     // Window the visible rows around the selection.
     let max_rows = 12usize;
-    let start = if p.selected >= max_rows { p.selected + 1 - max_rows } else { 0 };
-    let shown: Vec<usize> = p.filtered.iter().skip(start).take(max_rows).copied().collect();
+    let start = if p.selected >= max_rows {
+        p.selected + 1 - max_rows
+    } else {
+        0
+    };
+    let shown: Vec<usize> = p
+        .filtered
+        .iter()
+        .skip(start)
+        .take(max_rows)
+        .copied()
+        .collect();
 
     let pw = (w * 0.6).clamp(380.0, 760.0);
     let header_h = line_h + pad * 2.0;
@@ -269,20 +328,38 @@ pub(crate) fn draw_palette(ctx: &mut dyn DrawingContext, p: &PickerState, config
 
     // Input box: "<prompt> <query>" with a caret.
     let input_rect = Rect::new(px + pad, py + pad, pw - 2.0 * pad, line_h);
-    fill_round_rect(ctx, input_rect, 6.0, PALETTE_INPUT_BG)?;
+    fill_round_rect(ctx, input_rect, 6.0, palette().picker_input_bg)?;
     let in_baseline = baseline_in_rect(input_rect.y, input_rect.height, ascent, descent);
-    ctx.draw_text_with_font(&p.prompt, Point::new(input_rect.x + 8.0, in_baseline), &font, &solid(PALETTE_PROMPT))?;
+    ctx.draw_text_with_font(
+        &p.prompt,
+        Point::new(input_rect.x + 8.0, in_baseline),
+        &font,
+        &solid(palette().picker_prompt),
+    )?;
     let prompt_w = measure(ctx, &format!("{} ", p.prompt));
     let query_x = input_rect.x + 8.0 + prompt_w;
-    ctx.draw_text_with_font(&p.query, Point::new(query_x, in_baseline), &font, &solid(PALETTE_FG))?;
+    ctx.draw_text_with_font(
+        &p.query,
+        Point::new(query_x, in_baseline),
+        &font,
+        &solid(palette().picker_fg),
+    )?;
     let caret_x = query_x + measure(ctx, &p.query) + 1.0;
-    ctx.draw_rect(Rect::new(caret_x, input_rect.y + 4.0, 2.0, line_h - 8.0), &solid(PALETTE_FG))?;
+    ctx.draw_rect(
+        Rect::new(caret_x, input_rect.y + 4.0, 2.0, line_h - 8.0),
+        &solid(palette().picker_fg),
+    )?;
 
     // Result list.
     let list_top = py + header_h;
     if shown.is_empty() {
         let bl = baseline_in_rect(list_top, line_h, ascent, descent);
-        ctx.draw_text_with_font("no matches", Point::new(px + pad + 8.0, bl), &font, &solid(PALETTE_DESC))?;
+        ctx.draw_text_with_font(
+            "no matches",
+            Point::new(px + pad + 8.0, bl),
+            &font,
+            &solid(palette().picker_detail),
+        )?;
         return Ok(());
     }
     for (row, &idx) in shown.iter().enumerate() {
@@ -290,16 +367,31 @@ pub(crate) fn draw_palette(ctx: &mut dyn DrawingContext, p: &PickerState, config
         let item = &p.all[idx];
         let selected = start + row == p.selected;
         if selected {
-            fill_round_rect(ctx, Rect::new(px + pad, y, pw - 2.0 * pad, line_h), 6.0, PALETTE_SEL)?;
+            fill_round_rect(
+                ctx,
+                Rect::new(px + pad, y, pw - 2.0 * pad, line_h),
+                6.0,
+                palette().picker_selection,
+            )?;
         }
         let bl = baseline_in_rect(y, line_h, ascent, descent);
-        ctx.draw_text_with_font(&item.display, Point::new(px + pad + 8.0, bl), &font, &solid(PALETTE_FG))?;
+        ctx.draw_text_with_font(
+            &item.display,
+            Point::new(px + pad + 8.0, bl),
+            &font,
+            &solid(palette().picker_fg),
+        )?;
         if !item.detail.is_empty() {
             let dw = measure(ctx, &item.detail);
             let name_w = measure(ctx, &item.display);
             let dx = px + pw - pad - 8.0 - dw;
             if dx > px + pad + 8.0 + name_w + 16.0 {
-                ctx.draw_text_with_font(&item.detail, Point::new(dx, bl), &font, &solid(PALETTE_DESC))?;
+                ctx.draw_text_with_font(
+                    &item.detail,
+                    Point::new(dx, bl),
+                    &font,
+                    &solid(palette().picker_detail),
+                )?;
             }
         }
     }
@@ -316,7 +408,8 @@ mod tests {
             .map(|n| PickerItem {
                 display: ozone_editor::commands::pretty_command_name(n),
                 detail: String::new(),
-                haystack: format!("{} {}", ozone_editor::commands::pretty_command_name(n), n).to_lowercase(),
+                haystack: format!("{} {}", ozone_editor::commands::pretty_command_name(n), n)
+                    .to_lowercase(),
                 action: PickerAction::RunCommand(n.to_string()),
             })
             .collect()

@@ -140,11 +140,28 @@ pub struct ModifierOverrides {
     pub super_: Option<String>,
 }
 
+/// Frontend behavior toggles (mirrors config.toml `[ui]`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UiConfig {
+    /// Enables mouse-driven editor interaction. Keyboard input remains active
+    /// regardless of this setting.
+    pub mouse: bool,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self { mouse: false }
+    }
+}
+
 /// Top-level configuration.
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     pub editor: EditorConfig,
+    /// Theme name or path. Names resolve through the user and bundled theme
+    /// directories; paths load a specific TOML file.
     pub theme: String,
+    pub ui: UiConfig,
     pub keymaps: Vec<KeymapConfig>,
     pub autocmds: Vec<AutocmdConfig>,
     pub filetypes: Vec<FiletypeConfig>,
@@ -157,6 +174,7 @@ impl Config {
         Self {
             editor: EditorConfig::default(),
             theme: "catppuccin-mocha".to_string(),
+            ui: UiConfig::default(),
             keymaps: Vec::new(),
             autocmds: Vec::new(),
             filetypes: Vec::new(),
@@ -240,6 +258,12 @@ impl Config {
             && !name.trim().is_empty()
         {
             config.theme = name.to_string();
+        }
+
+        if let Some(ui) = table.get("ui").and_then(|v| v.as_table())
+            && let Some(mouse) = ui.get("mouse").and_then(|v| v.as_bool())
+        {
+            config.ui.mouse = mouse;
         }
 
         config.keymaps = parse_keymaps(&table);
@@ -453,6 +477,9 @@ mod tests {
 
             [theme]
             name = "gruvbox"
+
+            [ui]
+            mouse = true
         "#,
         );
         assert_eq!(c.editor.font, "JetBrains Mono");
@@ -464,6 +491,7 @@ mod tests {
         assert!(c.editor.auto_format);
         assert_eq!(c.editor.jump_list_size, 42);
         assert_eq!(c.theme, "gruvbox");
+        assert!(c.ui.mouse);
     }
 
     #[test]

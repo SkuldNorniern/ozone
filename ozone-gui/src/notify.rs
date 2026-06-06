@@ -17,7 +17,7 @@ use aurea::render::{DrawingContext, Font, Point, Rect};
 use ozone_editor::NotifyLevel;
 
 use crate::popup::{draw_panel, top_right_rect};
-use crate::theme::{PALETTE_DESC, PALETTE_FG, notify_accent, solid};
+use crate::theme::{notify_accent, palette, solid};
 
 /// Default time a toast stays before auto-dismissing, by severity. Errors linger.
 fn default_ttl(level: NotifyLevel) -> Duration {
@@ -55,7 +55,11 @@ pub(crate) struct Notifications {
 
 impl Notifications {
     pub(crate) fn new() -> Self {
-        Self { items: Vec::new(), next_id: 1, max: 6 }
+        Self {
+            items: Vec::new(),
+            next_id: 1,
+            max: 6,
+        }
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -64,11 +68,24 @@ impl Notifications {
 
     /// Post a notification. `timeout_ms` `None` uses the per-severity default.
     /// Returns the assigned id (for a future dismiss/update API).
-    pub(crate) fn push(&mut self, level: NotifyLevel, text: String, timeout_ms: Option<u64>) -> u64 {
+    pub(crate) fn push(
+        &mut self,
+        level: NotifyLevel,
+        text: String,
+        timeout_ms: Option<u64>,
+    ) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
-        let ttl = timeout_ms.map(Duration::from_millis).unwrap_or_else(|| default_ttl(level));
-        self.items.push(Notification { id, level, text, born: Instant::now(), ttl });
+        let ttl = timeout_ms
+            .map(Duration::from_millis)
+            .unwrap_or_else(|| default_ttl(level));
+        self.items.push(Notification {
+            id,
+            level,
+            text,
+            born: Instant::now(),
+            ttl,
+        });
         // Drop the oldest if we exceeded the cap.
         if self.items.len() > self.max {
             self.items.remove(0);
@@ -98,9 +115,18 @@ impl Notifications {
         }
 
         let metrics = ctx.measure_text("M", font).ok();
-        let char_w = metrics.as_ref().map(|m| m.advance).unwrap_or(font.size * 0.6);
-        let ascent = metrics.as_ref().map(|m| m.ascent).unwrap_or(font.size * 0.8);
-        let descent = metrics.as_ref().map(|m| m.descent).unwrap_or(font.size * 0.2);
+        let char_w = metrics
+            .as_ref()
+            .map(|m| m.advance)
+            .unwrap_or(font.size * 0.6);
+        let ascent = metrics
+            .as_ref()
+            .map(|m| m.ascent)
+            .unwrap_or(font.size * 0.8);
+        let descent = metrics
+            .as_ref()
+            .map(|m| m.descent)
+            .unwrap_or(font.size * 0.2);
         let line_h = (font.size * 1.5).max(15.0);
 
         let margin = 12.0;
@@ -126,14 +152,21 @@ impl Notifications {
             draw_panel(ctx, card, 6.0)?;
             // Severity accent stripe down the left edge.
             let accent = notify_accent(n.level);
-            ctx.draw_rect(Rect::new(card.x, card.y + 4.0, stripe_w, card_h - 8.0), &solid(accent))?;
+            ctx.draw_rect(
+                Rect::new(card.x, card.y + 4.0, stripe_w, card_h - 8.0),
+                &solid(accent),
+            )?;
 
             let text_x = card.x + stripe_w + 8.0;
             for (i, line) in lines.iter().enumerate() {
                 let top = card.y + pad + i as f32 * line_h;
                 let base = top + (line_h + ascent - descent) / 2.0;
                 // First line in full strength, continuation lines dimmer.
-                let color = if i == 0 { PALETTE_FG } else { PALETTE_DESC };
+                let color = if i == 0 {
+                    palette().picker_fg
+                } else {
+                    palette().picker_detail
+                };
                 ctx.draw_text_with_font(line, Point::new(text_x, base), font, &solid(color))?;
             }
 
@@ -158,7 +191,11 @@ fn wrap(text: &str, cols: usize) -> Vec<String> {
                     lines.push(std::mem::take(&mut line));
                 }
                 lines.push(take);
-                word = &word[word.char_indices().nth(cols).map(|(i, _)| i).unwrap_or(word.len())..];
+                word = &word[word
+                    .char_indices()
+                    .nth(cols)
+                    .map(|(i, _)| i)
+                    .unwrap_or(word.len())..];
             }
             let extra = if line.is_empty() { 0 } else { 1 };
             if line.chars().count() + extra + word.chars().count() > cols && !line.is_empty() {

@@ -12,7 +12,7 @@ use ozone_editor::Workspace;
 
 use crate::baseline_in_rect;
 use crate::popup::{draw_panel, top_right_rect};
-use crate::theme::{PALETTE_DESC, PALETTE_FG, PALETTE_PROMPT, solid};
+use crate::theme::{palette, solid};
 
 pub(crate) struct SearchState {
     pub(crate) query: String,
@@ -28,7 +28,14 @@ pub(crate) struct SearchState {
 
 impl SearchState {
     pub(crate) fn new(case_sensitive: bool) -> Self {
-        Self { query: String::new(), matches: Vec::new(), current: 0, case_sensitive, replace: None, focus_replace: false }
+        Self {
+            query: String::new(),
+            matches: Vec::new(),
+            current: 0,
+            case_sensitive,
+            replace: None,
+            focus_replace: false,
+        }
     }
 
     /// Turn on replace mode (keeps the existing query). Typing stays on the
@@ -65,7 +72,14 @@ pub(crate) fn search_recompute(s: &mut SearchState, ws: &Workspace) {
 
 /// Point `current` at the first match at/after the cursor (wrapping).
 pub(crate) fn search_select_from_cursor(s: &mut SearchState, ws: &Workspace) {
-    let from = ws.active_view().and_then(|v| ws.buffers.get(&v.buffer_id).map(|b| b.pos_to_offset(v.cursor))).unwrap_or(0);
+    let from = ws
+        .active_view()
+        .and_then(|v| {
+            ws.buffers
+                .get(&v.buffer_id)
+                .map(|b| b.pos_to_offset(v.cursor))
+        })
+        .unwrap_or(0);
     if let Some(i) = ozone_editor::search::first_match_from(&s.matches, from) {
         s.current = i;
     }
@@ -134,7 +148,12 @@ pub(crate) fn search_replace_all(s: &mut SearchState, ws: &mut Workspace) {
 }
 
 /// Handle a key while search is active. Returns whether a redraw is needed.
-pub(crate) fn handle_search_key(key: aurea::KeyCode, mods: aurea::Modifiers, search: &mut Option<SearchState>, ws: &mut Workspace) -> bool {
+pub(crate) fn handle_search_key(
+    key: aurea::KeyCode,
+    mods: aurea::Modifiers,
+    search: &mut Option<SearchState>,
+    ws: &mut Workspace,
+) -> bool {
     use aurea::KeyCode::*;
     let Some(s) = search.as_mut() else {
         return false;
@@ -213,24 +232,44 @@ pub(crate) fn search_input_text(s: &mut SearchState, text: &str, ws: &Workspace)
 
 /// Top-right find bar: `find: <query>   (i/n)`, with a second `replace:` line
 /// when in replace mode. The focused input is marked.
-pub(crate) fn draw_search_bar(ctx: &mut dyn DrawingContext, s: &SearchState, font: &Font, width: f32) -> AureaResult<()> {
+pub(crate) fn draw_search_bar(
+    ctx: &mut dyn DrawingContext,
+    s: &SearchState,
+    font: &Font,
+    width: f32,
+) -> AureaResult<()> {
     let line_h = (font.size * 1.7).max(18.0);
     let m = ctx.measure_text("M", font).ok();
     let ascent = m.as_ref().map(|x| x.ascent).unwrap_or(font.size * 0.8);
     let descent = m.as_ref().map(|x| x.descent).unwrap_or(font.size * 0.2);
 
     let count = if s.matches.is_empty() {
-        if s.query.is_empty() { String::new() } else { "  (no matches)".to_string() }
+        if s.query.is_empty() {
+            String::new()
+        } else {
+            "  (no matches)".to_string()
+        }
     } else {
         format!("  ({}/{})", s.current + 1, s.matches.len())
     };
     let find_text = format!("find: {}{}", s.query, count);
     let replace_text = s.replace.as_ref().map(|r| format!("replace: {r}"));
 
-    let measure = |ctx: &mut dyn DrawingContext, t: &str| ctx.measure_text(t, font).map(|m| m.advance).unwrap_or(t.len() as f32 * font.size * 0.6);
+    let measure = |ctx: &mut dyn DrawingContext, t: &str| {
+        ctx.measure_text(t, font)
+            .map(|m| m.advance)
+            .unwrap_or(t.len() as f32 * font.size * 0.6)
+    };
     let find_w = measure(ctx, &find_text);
-    let repl_w = replace_text.as_ref().map(|t| measure(ctx, t)).unwrap_or(0.0);
-    let hint_w = if s.replace.is_some() { measure(ctx, "Tab switch · Enter one · ^Enter all") } else { 0.0 };
+    let repl_w = replace_text
+        .as_ref()
+        .map(|t| measure(ctx, t))
+        .unwrap_or(0.0);
+    let hint_w = if s.replace.is_some() {
+        measure(ctx, "Tab switch · Enter one · ^Enter all")
+    } else {
+        0.0
+    };
     let content_w = find_w.max(repl_w).max(hint_w);
 
     let pad = 10.0;
@@ -244,23 +283,56 @@ pub(crate) fn draw_search_bar(ctx: &mut dyn DrawingContext, s: &SearchState, fon
     // Find line.
     let bl = baseline_in_rect(by + 3.0, line_h, ascent, descent);
     let prompt_w = measure(ctx, "find: ");
-    let find_label_color = if s.focus_replace { PALETTE_DESC } else { PALETTE_PROMPT };
-    ctx.draw_text_with_font("find: ", Point::new(bx + pad, bl), font, &solid(find_label_color))?;
+    let find_label_color = if s.focus_replace {
+        palette().picker_detail
+    } else {
+        palette().picker_prompt
+    };
+    ctx.draw_text_with_font(
+        "find: ",
+        Point::new(bx + pad, bl),
+        font,
+        &solid(find_label_color),
+    )?;
     let rest = format!("{}{}", s.query, count);
-    ctx.draw_text_with_font(&rest, Point::new(bx + pad + prompt_w, bl), font, &solid(PALETTE_FG))?;
+    ctx.draw_text_with_font(
+        &rest,
+        Point::new(bx + pad + prompt_w, bl),
+        font,
+        &solid(palette().picker_fg),
+    )?;
 
     // Replace line + hint.
     if let Some(replace_text) = replace_text {
         let bl2 = baseline_in_rect(by + 3.0 + line_h, line_h, ascent, descent);
         let rprompt_w = measure(ctx, "replace: ");
-        let repl_label_color = if s.focus_replace { PALETTE_PROMPT } else { PALETTE_DESC };
-        ctx.draw_text_with_font("replace: ", Point::new(bx + pad, bl2), font, &solid(repl_label_color))?;
+        let repl_label_color = if s.focus_replace {
+            palette().picker_prompt
+        } else {
+            palette().picker_detail
+        };
+        ctx.draw_text_with_font(
+            "replace: ",
+            Point::new(bx + pad, bl2),
+            font,
+            &solid(repl_label_color),
+        )?;
         let rval = s.replace.clone().unwrap_or_default();
         let _ = replace_text;
-        ctx.draw_text_with_font(&rval, Point::new(bx + pad + rprompt_w, bl2), font, &solid(PALETTE_FG))?;
+        ctx.draw_text_with_font(
+            &rval,
+            Point::new(bx + pad + rprompt_w, bl2),
+            font,
+            &solid(palette().picker_fg),
+        )?;
 
         let bl3 = baseline_in_rect(by + 3.0 + line_h * 2.0, line_h, ascent, descent);
-        ctx.draw_text_with_font("Tab switch · Enter one · ^Enter all", Point::new(bx + pad, bl3), font, &solid(PALETTE_DESC))?;
+        ctx.draw_text_with_font(
+            "Tab switch · Enter one · ^Enter all",
+            Point::new(bx + pad, bl3),
+            font,
+            &solid(palette().picker_detail),
+        )?;
     }
     Ok(())
 }

@@ -11,7 +11,9 @@ type TermCells = HashMap<BufferId, Vec<Vec<ozone_term::Cell>>>;
 type ImageCache = HashMap<BufferId, Option<Image>>;
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Decode a PNG/JPEG file into an RGBA8 `Image` for the renderer.
@@ -22,7 +24,7 @@ fn decode_image(path: &std::path::Path) -> Option<Image> {
 }
 
 use aurea::render::{Canvas, DrawingContext, Font, Image, Point, Rect, RendererBackend};
-use aurea::{AureaResult, Element, Window, WindowEvent};
+use aurea::{AureaResult, Element, MouseButton, Window, WindowEvent};
 
 mod input;
 mod minibuffer;
@@ -39,8 +41,9 @@ use ozone_buffer::{BufferId, BufferKind};
 use ozone_config::{Config, CursorStyle, FiletypeConfig, LineNumbers};
 use ozone_editor::commands::register_defaults;
 use ozone_editor::{
-    AutocommandRegistry, CommandContext, CommandRegistry, EditorEvent, IndentConfig, KeyStroke, Keymap, KeymapOutcome, ModifierMap, PaneTree, SplitAxis,
-    UiIntent, ViewId, Workspace, matching_bracket,
+    AutocommandRegistry, CommandContext, CommandRegistry, EditorEvent, IndentConfig, KeyStroke,
+    Keymap, KeymapOutcome, ModifierMap, PaneTree, SplitAxis, UiIntent, ViewId, Workspace,
+    matching_bracket,
 };
 use ozone_syntax::{Filetype, ScanState, TokenKind, scan_line};
 use picker::*;
@@ -106,8 +109,12 @@ impl OzoneGui {
     }
 
     pub fn with_config(mut workspace: Workspace, config: Config) -> Self {
+        theme::initialize(&config.theme);
         // Editing uses the configured indentation.
-        workspace.indent = IndentConfig { width: config.editor.tab_width, soft_tabs: config.editor.soft_tabs };
+        workspace.indent = IndentConfig {
+            width: config.editor.tab_width,
+            soft_tabs: config.editor.soft_tabs,
+        };
 
         let mut reg = CommandRegistry::new();
         register_defaults(&mut reg);
@@ -167,7 +174,16 @@ impl OzoneGui {
             // Repaint callback: terminal colour grids + PTY sizing are driven
             // by the explicit redraw in the run loop, so none here.
             let mut scratch_char_w = 0.0;
-            draw_editor(ctx, &mut ws, &config_for_draw, srch.as_ref(), &TermCells::new(), &ImageCache::new(), ActiveMods::default(), &mut scratch_char_w)?;
+            draw_editor(
+                ctx,
+                &mut ws,
+                &config_for_draw,
+                srch.as_ref(),
+                &TermCells::new(),
+                &ImageCache::new(),
+                ActiveMods::default(),
+                &mut scratch_char_w,
+            )?;
             if let Some(p) = pal.as_ref() {
                 draw_palette(ctx, p, &config_for_draw)?;
             }
@@ -197,7 +213,18 @@ impl OzoneGui {
             let mut ws = lock(self.workspace.as_ref());
             let config = self.config.clone();
             let mut scratch_char_w = 0.0;
-            canvas.draw(|ctx| draw_editor(ctx, &mut ws, &config, None, &TermCells::new(), &ImageCache::new(), ActiveMods::default(), &mut scratch_char_w))?;
+            canvas.draw(|ctx| {
+                draw_editor(
+                    ctx,
+                    &mut ws,
+                    &config,
+                    None,
+                    &TermCells::new(),
+                    &ImageCache::new(),
+                    ActiveMods::default(),
+                    &mut scratch_char_w,
+                )
+            })?;
             canvas.invalidate_all();
         }
 
@@ -206,7 +233,8 @@ impl OzoneGui {
         let mut chord_pending: Vec<KeyStroke> = Vec::new();
         // Live terminal sessions, keyed by their Terminal buffer.
         let mut terminals: HashMap<BufferId, Terminal> = HashMap::new();
-        let mut failed_terminals: std::collections::HashSet<BufferId> = std::collections::HashSet::new();
+        let mut failed_terminals: std::collections::HashSet<BufferId> =
+            std::collections::HashSet::new();
         // Latest coloured grid per terminal, refreshed only when output changes
         // (cloning the whole scrollback every frame would be far too costly).
         let mut term_cells: TermCells = TermCells::new();
@@ -226,6 +254,9 @@ impl OzoneGui {
         // Live physical modifier state, updated on every key press/release, for
         // the status-bar modifier indicator.
         let mut live_mods = aurea::Modifiers::default();
+        // Mouse button events do not carry coordinates, so retain the most
+        // recent move position for click dispatch and editor hit testing.
+        let mut mouse_pos: Option<(f32, f32)> = None;
 
         // --------------- event loop ---------------
         loop {
@@ -269,7 +300,11 @@ impl OzoneGui {
                     // Modifier release: refresh the live modifier indicator. The
                     // native modifier snapshot is unreliable for a modifier's own
                     // release (GetKeyState quirk), so derive the bit from the key.
-                    WindowEvent::KeyInput { key, pressed: false, modifiers } => {
+                    WindowEvent::KeyInput {
+                        key,
+                        pressed: false,
+                        modifiers,
+                    } => {
                         let m = corrected_mods(modifiers, key, false);
                         if live_mods != m {
                             live_mods = m;
@@ -277,7 +312,11 @@ impl OzoneGui {
                         }
                     }
 
-                    WindowEvent::KeyInput { key, pressed: true, modifiers } => {
+                    WindowEvent::KeyInput {
+                        key,
+                        pressed: true,
+                        modifiers,
+                    } => {
                         let m = corrected_mods(modifiers, key, true);
                         if live_mods != m {
                             live_mods = m;
@@ -289,21 +328,49 @@ impl OzoneGui {
                         let mut notes = lock(notifications.as_ref());
                         if mb.is_some() {
                             let mut ws = lock(self.workspace.as_ref());
-                            if handle_minibuffer_key(key, &mut mb, &mut ws, &self.commands, &self.autocmds) {
+                            if handle_minibuffer_key(
+                                key,
+                                &mut mb,
+                                &mut ws,
+                                &self.commands,
+                                &self.autocmds,
+                            ) {
                                 needs_redraw = true;
                             }
                             // Submitting may queue another intent (e.g. re-prompt).
-                            if apply_ui_intents(&mut ws, &self.commands, &mut pal, &mut srch, &mut mb, &mut notes, &buffer_mru) {
+                            if apply_ui_intents(
+                                &mut ws,
+                                &self.commands,
+                                &mut pal,
+                                &mut srch,
+                                &mut mb,
+                                &mut notes,
+                                &buffer_mru,
+                            ) {
                                 needs_redraw = true;
                             }
                         } else if pal.is_some() {
                             let mut ws = lock(self.workspace.as_ref());
-                            if handle_palette_key(key, &mut pal, &mut ws, &self.commands, &self.autocmds) {
+                            if handle_palette_key(
+                                key,
+                                &mut pal,
+                                &mut ws,
+                                &self.commands,
+                                &self.autocmds,
+                            ) {
                                 needs_redraw = true;
                             }
                             // A palette selection may itself request an overlay
                             // (e.g. running search.start from the palette).
-                            if apply_ui_intents(&mut ws, &self.commands, &mut pal, &mut srch, &mut mb, &mut notes, &buffer_mru) {
+                            if apply_ui_intents(
+                                &mut ws,
+                                &self.commands,
+                                &mut pal,
+                                &mut srch,
+                                &mut mb,
+                                &mut notes,
+                                &buffer_mru,
+                            ) {
                                 needs_redraw = true;
                             }
                         } else if srch.is_some() {
@@ -311,9 +378,10 @@ impl OzoneGui {
                             if handle_search_key(key, modifiers, &mut srch, &mut ws) {
                                 needs_redraw = true;
                             }
-                        } else if let Some((term_id, bytes)) = active_terminal(&lock(self.workspace.as_ref()))
-                            .filter(|id| terminals.contains_key(id))
-                            .and_then(|id| terminal_key_bytes(key, modifiers).map(|b| (id, b)))
+                        } else if let Some((term_id, bytes)) =
+                            active_terminal(&lock(self.workspace.as_ref()))
+                                .filter(|id| terminals.contains_key(id))
+                                .and_then(|id| terminal_key_bytes(key, modifiers).map(|b| (id, b)))
                         {
                             // Active buffer is a live terminal and this key maps to
                             // PTY bytes (Enter/Backspace/arrows/Ctrl-C…). Printable
@@ -388,10 +456,12 @@ impl OzoneGui {
                             } else {
                                 drop(srch);
                                 let mut ws = lock(self.workspace.as_ref());
-                                let term_id = active_terminal(&ws).filter(|id| terminals.contains_key(id));
+                                let term_id =
+                                    active_terminal(&ws).filter(|id| terminals.contains_key(id));
                                 if let Some(term_id) = term_id {
                                     // Send typed text straight to the PTY; the shell echoes it back.
-                                    let printable: String = text.chars().filter(|c| !c.is_control()).collect();
+                                    let printable: String =
+                                        text.chars().filter(|c| !c.is_control()).collect();
                                     if !printable.is_empty() {
                                         terminals.get(&term_id).unwrap().write_str(&printable);
                                         needs_redraw = true;
@@ -404,11 +474,63 @@ impl OzoneGui {
                         }
                     }
 
+                    WindowEvent::MouseMove { x, y } => {
+                        mouse_pos = Some((x as f32, y as f32));
+                        if self.config.ui.mouse {
+                            let canvas = lock(canvas_arc.as_ref());
+                            let _ = canvas.handle_hover(x as f32, y as f32);
+                        }
+                    }
+
+                    WindowEvent::MouseButton {
+                        button: MouseButton::Left,
+                        pressed: true,
+                        modifiers,
+                    } if self.config.ui.mouse => {
+                        let Some((x, y)) = mouse_pos else {
+                            continue;
+                        };
+                        {
+                            // Sparse Canvas controls can opt into Aurea's
+                            // InteractiveId callback system.
+                            let canvas = lock(canvas_arc.as_ref());
+                            let _ = canvas.handle_click(x, y);
+                        }
+                        // Dense editor text uses coordinate mapping instead of
+                        // one interactive display item per glyph.
+                        let overlays_open = lock(palette.as_ref()).is_some()
+                            || lock(search.as_ref()).is_some()
+                            || lock(minibuffer.as_ref()).is_some();
+                        if !overlays_open {
+                            let (width, height) = {
+                                let canvas = lock(canvas_arc.as_ref());
+                                (canvas.width() as f32, canvas.height() as f32)
+                            };
+                            let mut ws = lock(self.workspace.as_ref());
+                            if handle_editor_click(
+                                &mut ws,
+                                &self.config,
+                                x,
+                                y,
+                                width,
+                                height,
+                                measured_char_w,
+                                modifiers.shift,
+                            ) {
+                                needs_redraw = true;
+                            }
+                        }
+                    }
+
                     WindowEvent::MouseWheel { delta_y, .. } => {
                         let mut ws = lock(self.workspace.as_ref());
                         let max_scroll = ws
                             .active_view()
-                            .and_then(|view| ws.buffers.get(&view.buffer_id).map(|buf| max_scroll_line(buf.line_count(), view.page_height)))
+                            .and_then(|view| {
+                                ws.buffers
+                                    .get(&view.buffer_id)
+                                    .map(|buf| max_scroll_line(buf.line_count(), view.page_height))
+                            })
                             .unwrap_or(0);
                         if let Some(view) = ws.active_view_mut() {
                             let lines = (delta_y.abs() * 3.0).round() as usize;
@@ -416,7 +538,8 @@ impl OzoneGui {
                                 if delta_y > 0.0 {
                                     view.scroll_line = view.scroll_line.saturating_sub(lines);
                                 } else {
-                                    view.scroll_line = view.scroll_line.saturating_add(lines).min(max_scroll);
+                                    view.scroll_line =
+                                        view.scroll_line.saturating_add(lines).min(max_scroll);
                                 }
                             }
                         }
@@ -434,7 +557,12 @@ impl OzoneGui {
             // --- terminal sync: spawn, stream output into the buffer, scroll ---
             {
                 let mut ws = lock(self.workspace.as_ref());
-                let term_bufs: Vec<BufferId> = ws.buffers.iter().filter(|(_, b)| matches!(b.kind, BufferKind::Terminal)).map(|(id, _)| *id).collect();
+                let term_bufs: Vec<BufferId> = ws
+                    .buffers
+                    .iter()
+                    .filter(|(_, b)| matches!(b.kind, BufferKind::Terminal))
+                    .map(|(id, _)| *id)
+                    .collect();
                 // Attach a shell to any Terminal buffer that lacks one.
                 for id in &term_bufs {
                     if terminals.contains_key(id) || failed_terminals.contains(id) {
@@ -444,9 +572,12 @@ impl OzoneGui {
                         Ok(term) => {
                             // Size the PTY to the (approx) visible character grid.
                             let cw = (self.config.editor.font_size * 0.6).max(1.0);
-                            let lh = (self.config.editor.font_size * self.config.editor.line_height).max(1.0);
+                            let lh = (self.config.editor.font_size
+                                * self.config.editor.line_height)
+                                .max(1.0);
                             let cols = (((W as f32) - 60.0) / cw).clamp(20.0, 500.0) as u16;
-                            let rows = (((H as f32) - STATUS_H - EDITOR_TOP_PAD) / lh).clamp(5.0, 300.0) as u16;
+                            let rows = (((H as f32) - STATUS_H - EDITOR_TOP_PAD) / lh)
+                                .clamp(5.0, 300.0) as u16;
                             term.resize(cols, rows);
                             terminals.insert(*id, term);
                         }
@@ -511,9 +642,18 @@ impl OzoneGui {
                             // so pinning to the last line would scroll past all the
                             // content and show blank rows.
                             let (cline, ccol) = term.cursor();
-                            let last = ws.buffers.get(id).map(|b| b.line_count().saturating_sub(1)).unwrap_or(0);
+                            let last = ws
+                                .buffers
+                                .get(id)
+                                .map(|b| b.line_count().saturating_sub(1))
+                                .unwrap_or(0);
                             let line = cline.min(last);
-                            let col = ws.buffers.get(id).map(|b| b.line_len(line)).unwrap_or(0).min(ccol);
+                            let col = ws
+                                .buffers
+                                .get(id)
+                                .map(|b| b.line_len(line))
+                                .unwrap_or(0)
+                                .min(ccol);
                             if let Some(view) = ws.active_view_mut() {
                                 view.cursor = ozone_buffer::Pos::new(line, col);
                                 view.scroll_to_cursor(view.page_height.max(1));
@@ -546,7 +686,10 @@ impl OzoneGui {
                     .iter()
                     .filter(|(id, _)| !ft_applied.contains(id))
                     .filter_map(|(id, b)| match &b.kind {
-                        BufferKind::File(p) => Some((*id, filetype_config_name(Filetype::from_path(&p.to_string_lossy())))),
+                        BufferKind::File(p) => Some((
+                            *id,
+                            filetype_config_name(Filetype::from_path(&p.to_string_lossy())),
+                        )),
                         _ => None,
                     })
                     .collect();
@@ -585,16 +728,36 @@ impl OzoneGui {
                 let active_mods = ActiveMods::from_physical(live_mods, &self.modmap);
                 // Which-key: while a chord prefix is pending and no other overlay
                 // owns the input, show the keys that could come next.
-                let (wk_prefix, wk_entries) = if !chord_pending.is_empty() && pal.is_none() && srch.is_none() && mb.is_none() {
-                    let ft = active_filetype_name(&ws);
-                    let entries = which_key_entries(&self.keymap, &chord_pending, ft.as_deref(), &self.commands);
-                    let prefix = chord_pending.iter().map(ozone_editor::stroke_label).collect::<Vec<_>>().join(" ");
-                    (prefix, entries)
-                } else {
-                    (String::new(), Vec::new())
-                };
+                let (wk_prefix, wk_entries) =
+                    if !chord_pending.is_empty() && pal.is_none() && srch.is_none() && mb.is_none()
+                    {
+                        let ft = active_filetype_name(&ws);
+                        let entries = which_key_entries(
+                            &self.keymap,
+                            &chord_pending,
+                            ft.as_deref(),
+                            &self.commands,
+                        );
+                        let prefix = chord_pending
+                            .iter()
+                            .map(ozone_editor::stroke_label)
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        (prefix, entries)
+                    } else {
+                        (String::new(), Vec::new())
+                    };
                 canvas.draw(|ctx| {
-                    draw_editor(ctx, &mut ws, &config, srch.as_ref(), &term_cells, &images, active_mods, &mut measured_char_w)?;
+                    draw_editor(
+                        ctx,
+                        &mut ws,
+                        &config,
+                        srch.as_ref(),
+                        &term_cells,
+                        &images,
+                        active_mods,
+                        &mut measured_char_w,
+                    )?;
                     if let Some(p) = pal.as_ref() {
                         draw_palette(ctx, p, &config)?;
                     }
@@ -676,7 +839,10 @@ fn handle_key(
 
     // Picker buffers take precedence so Enter/Esc act on the selection rather
     // than the editing defaults. (Edit keys are swallowed to keep the list.)
-    let in_picker = matches!(ws.active_buffer().map(|b| &b.kind), Some(BufferKind::Search));
+    let in_picker = matches!(
+        ws.active_buffer().map(|b| &b.kind),
+        Some(BufferKind::Search)
+    );
     if in_picker && pending.is_empty() && !mods.ctrl && !mods.alt {
         match key {
             Enter => {
@@ -737,14 +903,27 @@ fn handle_key(
 
 /// Build which-key panel entries from the keymap's continuations for a pending
 /// chord, resolving command ids to friendly display names.
-fn which_key_entries(keymap: &Keymap, pending: &[KeyStroke], filetype: Option<&str>, reg: &CommandRegistry) -> Vec<WhichKeyEntry> {
+fn which_key_entries(
+    keymap: &Keymap,
+    pending: &[KeyStroke],
+    filetype: Option<&str>,
+    reg: &CommandRegistry,
+) -> Vec<WhichKeyEntry> {
     keymap
         .continuations(pending, filetype)
         .into_iter()
         .map(|(key, desc)| {
             let is_group = desc == "+prefix";
-            let desc = if is_group { desc } else { reg.display_name(&desc) };
-            WhichKeyEntry { key, desc, is_group }
+            let desc = if is_group {
+                desc
+            } else {
+                reg.display_name(&desc)
+            };
+            WhichKeyEntry {
+                key,
+                desc,
+                is_group,
+            }
         })
         .collect()
 }
@@ -761,7 +940,9 @@ fn active_terminal(ws: &Workspace) -> Option<BufferId> {
 /// Filetype token for the active buffer (for filetype-scoped keymaps).
 fn active_filetype_name(ws: &Workspace) -> Option<String> {
     match &ws.active_buffer()?.kind {
-        BufferKind::File(p) => Some(filetype_config_name(Filetype::from_path(&p.to_string_lossy()))),
+        BufferKind::File(p) => Some(filetype_config_name(Filetype::from_path(
+            &p.to_string_lossy(),
+        ))),
         _ => None,
     }
 }
@@ -830,7 +1011,11 @@ pub(crate) fn apply_ui_intents(
             UiIntent::Select { prompt, items } => {
                 *palette = Some(PickerState::new(prompt, select_picker_items(items)));
             }
-            UiIntent::Notify { level, text, timeout_ms } => {
+            UiIntent::Notify {
+                level,
+                text,
+                timeout_ms,
+            } => {
                 notifications.push(level, text, timeout_ms);
             }
         }
@@ -857,7 +1042,12 @@ fn open_search(ws: &mut Workspace, search: &mut Option<SearchState>, replace: bo
     *search = Some(s);
 }
 
-pub(crate) fn run_cmd(name: &str, ws: &mut Workspace, reg: &CommandRegistry, autocmds: &AutocommandRegistry) {
+pub(crate) fn run_cmd(
+    name: &str,
+    ws: &mut Workspace,
+    reg: &CommandRegistry,
+    autocmds: &AutocommandRegistry,
+) {
     if name == "file.save" {
         if let Some(buffer_id) = ws.active_view().map(|view| view.buffer_id) {
             run_pre_save_autocmds(buffer_id, ws, reg, autocmds);
@@ -921,12 +1111,23 @@ fn handle_minibuffer_key(
 
 /// Run a command with a string argument (minibuffer submit), then dispatch
 /// autocommands. Mirrors `run_cmd` but passes `arg` to the command.
-pub(crate) fn run_cmd_with_arg(name: &str, arg: String, ws: &mut Workspace, reg: &CommandRegistry, autocmds: &AutocommandRegistry) {
+pub(crate) fn run_cmd_with_arg(
+    name: &str,
+    arg: String,
+    ws: &mut Workspace,
+    reg: &CommandRegistry,
+    autocmds: &AutocommandRegistry,
+) {
     execute_command_arg(name, Some(arg), ws, reg);
     dispatch_autocmds(ws, reg, autocmds);
 }
 
-fn run_pre_save_autocmds(buffer_id: BufferId, ws: &mut Workspace, reg: &CommandRegistry, autocmds: &AutocommandRegistry) {
+fn run_pre_save_autocmds(
+    buffer_id: BufferId,
+    ws: &mut Workspace,
+    reg: &CommandRegistry,
+    autocmds: &AutocommandRegistry,
+) {
     let path = ws.buffers.get(&buffer_id).and_then(|buf| match &buf.kind {
         BufferKind::File(path) => Some(path.clone()),
         _ => None,
@@ -935,8 +1136,15 @@ fn run_pre_save_autocmds(buffer_id: BufferId, ws: &mut Workspace, reg: &CommandR
         return;
     };
 
-    let event = EditorEvent::BufferPreSave { id: buffer_id, path };
-    let commands: Vec<String> = autocmds.matching_commands(&event).into_iter().map(str::to_string).collect();
+    let event = EditorEvent::BufferPreSave {
+        id: buffer_id,
+        path,
+    };
+    let commands: Vec<String> = autocmds
+        .matching_commands(&event)
+        .into_iter()
+        .map(str::to_string)
+        .collect();
     for command in commands {
         if command == "file.save" || command == "file.save-all" {
             continue;
@@ -945,7 +1153,11 @@ fn run_pre_save_autocmds(buffer_id: BufferId, ws: &mut Workspace, reg: &CommandR
     }
 }
 
-pub(crate) fn dispatch_autocmds(ws: &mut Workspace, reg: &CommandRegistry, autocmds: &AutocommandRegistry) {
+pub(crate) fn dispatch_autocmds(
+    ws: &mut Workspace,
+    reg: &CommandRegistry,
+    autocmds: &AutocommandRegistry,
+) {
     const MAX_AUTOCMD_ROUNDS: usize = 16;
 
     for _ in 0..MAX_AUTOCMD_ROUNDS {
@@ -954,7 +1166,11 @@ pub(crate) fn dispatch_autocmds(ws: &mut Workspace, reg: &CommandRegistry, autoc
             break;
         }
 
-        let commands: Vec<String> = events.iter().flat_map(|event| autocmds.matching_commands(event)).map(str::to_string).collect();
+        let commands: Vec<String> = events
+            .iter()
+            .flat_map(|event| autocmds.matching_commands(event))
+            .map(str::to_string)
+            .collect();
 
         if commands.is_empty() {
             continue;
@@ -982,7 +1198,15 @@ fn insert_text_raw(text: &str, ws: &mut Workspace) -> bool {
     let buf_id = view.buffer_id;
 
     // Virtual/read-only surfaces (pickers, terminal placeholder) reject edits.
-    if matches!(ws.buffers.get(&buf_id).map(|b| &b.kind), Some(BufferKind::Search | BufferKind::References | BufferKind::Terminal | BufferKind::Image(_))) {
+    if matches!(
+        ws.buffers.get(&buf_id).map(|b| &b.kind),
+        Some(
+            BufferKind::Search
+                | BufferKind::References
+                | BufferKind::Terminal
+                | BufferKind::Image(_)
+        )
+    ) {
         return false;
     }
 
@@ -996,7 +1220,10 @@ fn insert_text_raw(text: &str, ws: &mut Workspace) -> bool {
             view.cursor.col += bytes;
             view.col_memory = view.cursor.col;
             view.scroll_to_cursor(view.page_height.max(1));
-            EditorEvent::CursorMoved { view_id: view.id, pos: view.cursor }
+            EditorEvent::CursorMoved {
+                view_id: view.id,
+                pos: view.cursor,
+            }
         });
         if let Some(event) = cursor_event {
             ws.emit(event);
@@ -1039,24 +1266,59 @@ fn draw_editor(
     let width = ctx.width() as f32;
     let height = ctx.height() as f32;
 
-    ctx.clear(BG)?;
+    ctx.clear(palette().background)?;
 
     let font = editor_font(config);
     let metrics = ctx.measure_text("M", &font).ok();
-    let char_w = metrics.as_ref().map(|m| m.advance).unwrap_or(font.size * 0.6);
-    let text_ascent = metrics.as_ref().map(|m| m.ascent).unwrap_or(font.size * 0.8);
-    let text_descent = metrics.as_ref().map(|m| m.descent).unwrap_or(font.size * 0.2);
+    let char_w = metrics
+        .as_ref()
+        .map(|m| m.advance)
+        .unwrap_or(font.size * 0.6);
+    let text_ascent = metrics
+        .as_ref()
+        .map(|m| m.ascent)
+        .unwrap_or(font.size * 0.8);
+    let text_descent = metrics
+        .as_ref()
+        .map(|m| m.descent)
+        .unwrap_or(font.size * 0.2);
     // Report the real measured cell width so the PTY can be sized to match.
     *char_w_out = char_w;
 
     let editor_rect = Rect::new(0.0, 0.0, width, (height - STATUS_H).max(0.0));
-    let metrics = TextMetrics { char_w, text_ascent, text_descent };
+    let metrics = TextMetrics {
+        char_w,
+        text_ascent,
+        text_descent,
+    };
 
     if let Some(panes) = &ws.panes {
         let panes = panes.clone();
-        draw_pane_tree(ctx, ws, config, &panes, editor_rect, &font, metrics, search, term_cells, images)?;
+        draw_pane_tree(
+            ctx,
+            ws,
+            config,
+            &panes,
+            editor_rect,
+            &font,
+            metrics,
+            search,
+            term_cells,
+            images,
+        )?;
     } else if let Some(view_id) = ws.active_view().map(|view| view.id) {
-        draw_view(ctx, ws, config, view_id, editor_rect, &font, metrics, search, term_cells, images)?;
+        draw_view(
+            ctx,
+            ws,
+            config,
+            view_id,
+            editor_rect,
+            &font,
+            metrics,
+            search,
+            term_cells,
+            images,
+        )?;
     }
 
     if let Some(s) = search {
@@ -1088,12 +1350,32 @@ fn draw_pane_tree(
     images: &ImageCache,
 ) -> AureaResult<()> {
     match tree {
-        PaneTree::Leaf { view_id } => draw_view(ctx, ws, config, *view_id, rect, font, metrics, search, term_cells, images),
-        PaneTree::Split { axis, ratio, first, second } => {
+        PaneTree::Leaf { view_id } => draw_view(
+            ctx, ws, config, *view_id, rect, font, metrics, search, term_cells, images,
+        ),
+        PaneTree::Split {
+            axis,
+            ratio,
+            first,
+            second,
+        } => {
             let (first_rect, second_rect, divider) = split_rect(rect, *axis, *ratio);
-            draw_pane_tree(ctx, ws, config, first, first_rect, font, metrics, search, term_cells, images)?;
-            draw_pane_tree(ctx, ws, config, second, second_rect, font, metrics, search, term_cells, images)?;
-            ctx.draw_rect(divider, &solid(BORDER))?;
+            draw_pane_tree(
+                ctx, ws, config, first, first_rect, font, metrics, search, term_cells, images,
+            )?;
+            draw_pane_tree(
+                ctx,
+                ws,
+                config,
+                second,
+                second_rect,
+                font,
+                metrics,
+                search,
+                term_cells,
+                images,
+            )?;
+            ctx.draw_rect(divider, &solid(palette().border))?;
             Ok(())
         }
     }
@@ -1122,12 +1404,18 @@ fn draw_view(
     let is_active_pane = ws.active_view_id == Some(view_id);
 
     // Image buffers render the picture, not text — handle and return early.
-    if matches!(ws.buffers.get(&buffer_id).map(|b| &b.kind), Some(BufferKind::Image(_))) {
-        ctx.draw_rect(rect, &solid(BG))?;
+    if matches!(
+        ws.buffers.get(&buffer_id).map(|b| &b.kind),
+        Some(BufferKind::Image(_))
+    ) {
+        ctx.draw_rect(rect, &solid(palette().background))?;
         let img = images.get(&buffer_id).and_then(|o| o.as_ref());
         draw_image_pane(ctx, rect, img, font, metrics)?;
         if is_active_pane {
-            ctx.draw_rect(Rect::new(rect.x, rect.y, rect.width, 2.0), &solid(ACTIVE_PANE_BORDER))?;
+            ctx.draw_rect(
+                Rect::new(rect.x, rect.y, rect.width, 2.0),
+                &solid(palette().active_pane_border),
+            )?;
         }
         return Ok(());
     }
@@ -1148,7 +1436,7 @@ fn draw_view(
         return Ok(());
     };
 
-    ctx.draw_rect(rect, &solid(BG))?;
+    ctx.draw_rect(rect, &solid(palette().background))?;
 
     // Filetype for syntax
     let ft = match &buf.kind {
@@ -1159,8 +1447,14 @@ fn draw_view(
     // Virtual surfaces (terminal, pickers, references) have no line numbers;
     // real buffers use their buffer-local override, else the global default.
     let line_numbers = match buf.kind {
-        BufferKind::Terminal | BufferKind::Search | BufferKind::References | BufferKind::Image(_) => LineNumbers::Off,
-        _ => ws.buffer_local(buffer_id).and_then(|l| l.line_numbers).unwrap_or(config.editor.line_numbers),
+        BufferKind::Terminal
+        | BufferKind::Search
+        | BufferKind::References
+        | BufferKind::Image(_) => LineNumbers::Off,
+        _ => ws
+            .buffer_local(buffer_id)
+            .and_then(|l| l.line_numbers)
+            .unwrap_or(config.editor.line_numbers),
     };
 
     let scroll = view.scroll_line;
@@ -1169,22 +1463,37 @@ fn draw_view(
     let text_x = rect.x + gutter_w + PAD;
 
     // For a live terminal, render the colour grid instead of the text buffer.
-    let term_grid: Option<&[Vec<ozone_term::Cell>]> =
-        if matches!(buf.kind, BufferKind::Terminal) { term_cells.get(&buffer_id).map(|v| v.as_slice()) } else { None };
+    let term_grid: Option<&[Vec<ozone_term::Cell>]> = if matches!(buf.kind, BufferKind::Terminal) {
+        term_cells.get(&buffer_id).map(|v| v.as_slice())
+    } else {
+        None
+    };
 
     // Matching-bracket pair for the active cursor (highlighted behind the glyphs).
-    let bracket_pair = if is_active_pane { matching_bracket(buf, view.cursor) } else { None };
+    let bracket_pair = if is_active_pane {
+        matching_bracket(buf, view.cursor)
+    } else {
+        None
+    };
 
     // Search-match positions for the active pane (Pos, is_current).
     let search_hits: Vec<(ozone_buffer::Pos, bool)> = match (is_active_pane, search) {
-        (true, Some(s)) if !s.query.is_empty() => s.matches.iter().enumerate().map(|(i, &off)| (buf.offset_to_pos(off), i == s.current)).collect(),
+        (true, Some(s)) if !s.query.is_empty() => s
+            .matches
+            .iter()
+            .enumerate()
+            .map(|(i, &off)| (buf.offset_to_pos(off), i == s.current))
+            .collect(),
         _ => Vec::new(),
     };
     let search_qlen = search.map(|s| s.query.chars().count()).unwrap_or(0);
 
     // Gutter strip
     if gutter_w > 0.0 {
-        ctx.draw_rect(Rect::new(rect.x, rect.y, gutter_w, rect.height), &solid(GUTTER_BG))?;
+        ctx.draw_rect(
+            Rect::new(rect.x, rect.y, gutter_w, rect.height),
+            &solid(palette().gutter),
+        )?;
     }
 
     // Pre-scan: walk from line 0 to scroll to find block-comment state.
@@ -1208,12 +1517,43 @@ fn draw_view(
             break;
         }
 
-        let baseline = baseline_in_rect(line_top, line_h, metrics.text_ascent, metrics.text_descent);
+        let baseline =
+            baseline_in_rect(line_top, line_h, metrics.text_ascent, metrics.text_descent);
         let is_cursor = line_idx == view.cursor.line;
 
         // Cursor-line highlight
         if is_cursor && is_active_pane {
-            ctx.draw_rect(Rect::new(rect.x, line_top + 1.0, rect.width, line_h - 1.0), &solid(CURSOR_LINE))?;
+            ctx.draw_rect(
+                Rect::new(rect.x, line_top + 1.0, rect.width, line_h - 1.0),
+                &solid(palette().cursor_line),
+            )?;
+        }
+
+        // Selection is view-local and byte-oriented, matching the editor's
+        // `Pos`/`Span` model. Draw it before search/bracket decorations.
+        if let Some(selection) = view.selection
+            && line_idx >= selection.start.line
+            && line_idx <= selection.end.line
+        {
+            let line_len = buf.line_len(line_idx);
+            let start_col = if line_idx == selection.start.line {
+                selection.start.col.min(line_len)
+            } else {
+                0
+            };
+            let end_col = if line_idx == selection.end.line {
+                selection.end.col.min(line_len)
+            } else {
+                line_len
+            };
+            if end_col > start_col {
+                let sx = text_x + start_col as f32 * metrics.char_w;
+                let sw = (end_col - start_col) as f32 * metrics.char_w;
+                ctx.draw_rect(
+                    Rect::new(sx, line_top + 1.0, sw, line_h - 2.0),
+                    &solid(palette().selection),
+                )?;
+            }
         }
 
         // Search match highlights (behind the glyphs).
@@ -1222,7 +1562,11 @@ fn draw_view(
                 if pos.line == line_idx {
                     let hx = text_x + pos.col as f32 * metrics.char_w;
                     let hw = search_qlen as f32 * metrics.char_w;
-                    let col = if *is_current { SEARCH_CURRENT } else { SEARCH_MATCH };
+                    let col = if *is_current {
+                        palette().search_match_active
+                    } else {
+                        palette().search_match
+                    };
                     ctx.draw_rect(Rect::new(hx, line_top + 1.0, hw, line_h - 2.0), &solid(col))?;
                 }
             }
@@ -1233,7 +1577,10 @@ fn draw_view(
             for bp in [p1, p2] {
                 if bp.line == line_idx {
                     let bx = text_x + bp.col as f32 * metrics.char_w;
-                    ctx.draw_rect(Rect::new(bx, line_top + 1.0, metrics.char_w, line_h - 2.0), &solid(BRACKET_MATCH))?;
+                    ctx.draw_rect(
+                        Rect::new(bx, line_top + 1.0, metrics.char_w, line_h - 2.0),
+                        &solid(palette().bracket_match),
+                    )?;
                 }
             }
         }
@@ -1252,35 +1599,75 @@ fn draw_view(
             }
         };
         if let Some(num) = gutter_label {
-            let ng = if is_cursor { GUTTER_ACT } else { GUTTER_FG };
-            let num_x = (rect.x + gutter_w - PAD - num.len() as f32 * metrics.char_w).max(rect.x + 4.0);
+            let ng = if is_cursor {
+                palette().line_number_active
+            } else {
+                palette().line_number
+            };
+            let num_x =
+                (rect.x + gutter_w - PAD - num.len() as f32 * metrics.char_w).max(rect.x + 4.0);
             ctx.draw_text_with_font(&num, Point::new(num_x, baseline), font, &solid(ng))?;
         }
 
         // Line content: terminal colour grid, or syntax-highlighted buffer text.
         if let Some(grid) = term_grid {
             if let Some(row) = grid.get(line_idx) {
-                draw_term_row(ctx, row, text_x, line_top, baseline, line_h, metrics.char_w, font)?;
+                draw_term_row(
+                    ctx,
+                    row,
+                    text_x,
+                    line_top,
+                    baseline,
+                    line_h,
+                    metrics.char_w,
+                    font,
+                )?;
             }
         } else if let Some(line_text) = buf.line(line_idx) {
             let (spans, new_state) = scan_line(ft, &line_text, scan_state);
             scan_state = new_state;
 
             if spans.is_empty() || ft == Filetype::Plain {
-                ctx.draw_text_with_font(&line_text, Point::new(text_x, baseline), font, &solid(token_color(TokenKind::Default)))?;
+                ctx.draw_text_with_font(
+                    &line_text,
+                    Point::new(text_x, baseline),
+                    font,
+                    &solid(token_color(TokenKind::Default)),
+                )?;
             } else {
-                draw_highlighted(ctx, &line_text, &spans, text_x, baseline, metrics.char_w, font)?;
+                draw_highlighted(
+                    ctx,
+                    &line_text,
+                    &spans,
+                    text_x,
+                    baseline,
+                    metrics.char_w,
+                    font,
+                )?;
             }
         }
 
         if is_cursor && is_active_pane {
-            draw_cursor(ctx, text_x + view.cursor.col as f32 * metrics.char_w, line_top, line_h, metrics.char_w, config.editor.cursor_style)?;
+            draw_cursor(
+                ctx,
+                text_x + view.cursor.col as f32 * metrics.char_w,
+                line_top,
+                line_h,
+                metrics.char_w,
+                config.editor.cursor_style,
+            )?;
         }
     }
 
     // Gutter divider
     if gutter_w > 0.0 {
-        ctx.draw_line(rect.x + gutter_w, rect.y, rect.x + gutter_w, rect.y + rect.height, &stroke(BORDER, 1.0))?;
+        ctx.draw_line(
+            rect.x + gutter_w,
+            rect.y,
+            rect.x + gutter_w,
+            rect.y + rect.height,
+            &stroke(palette().border, 1.0),
+        )?;
     }
 
     // Scrollbar thumb (right edge), only when content overflows the viewport.
@@ -1289,21 +1676,39 @@ fn draw_view(
         let track_h = rect.height;
         let thumb_h = (track_h * viewport_lines / line_count as f32).clamp(24.0, track_h);
         let max_scroll = max_scroll_line(line_count, viewport_lines as usize);
-        let t = if max_scroll > 0 { (scroll as f32 / max_scroll as f32).clamp(0.0, 1.0) } else { 0.0 };
+        let t = if max_scroll > 0 {
+            (scroll as f32 / max_scroll as f32).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         let thumb_y = rect.y + t * (track_h - thumb_h);
         let bar_x = rect.x + rect.width - 4.0;
-        ctx.draw_rect(Rect::new(bar_x, thumb_y, 3.0, thumb_h), &solid(SCROLLBAR_THUMB))?;
+        ctx.draw_rect(
+            Rect::new(bar_x, thumb_y, 3.0, thumb_h),
+            &solid(palette().scrollbar_thumb),
+        )?;
     }
 
     if is_active_pane {
-        ctx.draw_rect(Rect::new(rect.x, rect.y, rect.width, 2.0), &solid(ACTIVE_PANE_BORDER))?;
+        ctx.draw_rect(
+            Rect::new(rect.x, rect.y, rect.width, 2.0),
+            &solid(palette().active_pane_border),
+        )?;
     }
 
     Ok(())
 }
 
 /// Draw a line with per-token colouring. Gaps between spans use Default colour.
-fn draw_highlighted(ctx: &mut dyn DrawingContext, text: &str, spans: &[ozone_syntax::TokenSpan], x0: f32, y: f32, char_w: f32, font: &Font) -> AureaResult<()> {
+fn draw_highlighted(
+    ctx: &mut dyn DrawingContext,
+    text: &str,
+    spans: &[ozone_syntax::TokenSpan],
+    x0: f32,
+    y: f32,
+    char_w: f32,
+    font: &Font,
+) -> AureaResult<()> {
     let bytes = text.as_bytes();
     let mut last = 0usize;
 
@@ -1312,7 +1717,12 @@ fn draw_highlighted(ctx: &mut dyn DrawingContext, text: &str, spans: &[ozone_syn
         if span.start > last {
             let seg = &text[last..span.start];
             let sx = x0 + last as f32 * char_w;
-            ctx.draw_text_with_font(seg, Point::new(sx, y), font, &solid(token_color(TokenKind::Default)))?;
+            ctx.draw_text_with_font(
+                seg,
+                Point::new(sx, y),
+                font,
+                &solid(token_color(TokenKind::Default)),
+            )?;
         }
 
         let end = (span.start + span.len).min(bytes.len());
@@ -1327,7 +1737,12 @@ fn draw_highlighted(ctx: &mut dyn DrawingContext, text: &str, spans: &[ozone_syn
     if last < text.len() {
         let seg = &text[last..];
         let sx = x0 + last as f32 * char_w;
-        ctx.draw_text_with_font(seg, Point::new(sx, y), font, &solid(token_color(TokenKind::Default)))?;
+        ctx.draw_text_with_font(
+            seg,
+            Point::new(sx, y),
+            font,
+            &solid(token_color(TokenKind::Default)),
+        )?;
     }
 
     Ok(())
@@ -1353,20 +1768,26 @@ fn draw_term_row(
     let resolve = |c: &ozone_term::Cell| -> (aurea::render::Color, Option<aurea::render::Color>) {
         if c.inverse {
             // Reverse video: foreground paints the background and vice versa.
-            return (term_color(c.bg, TERM_BG), Some(term_color(c.fg, TERM_FG)));
+            return (
+                term_color(c.bg, palette().background),
+                Some(term_color(c.fg, palette().foreground)),
+            );
         }
         let bg = match c.bg {
             TC::Default => None,
-            other => Some(term_color(other, TERM_BG)),
+            other => Some(term_color(other, palette().background)),
         };
-        (term_color(c.fg, TERM_FG), bg)
+        (term_color(c.fg, palette().foreground), bg)
     };
 
     // Background fills first (so glyphs sit on top).
     for (i, cell) in row.iter().enumerate() {
         if let (_, Some(bg)) = resolve(cell) {
             let bx = x0 + i as f32 * char_w;
-            ctx.draw_rect(Rect::new(bx, line_top + 1.0, char_w + 0.5, line_h - 1.0), &solid(bg))?;
+            ctx.draw_rect(
+                Rect::new(bx, line_top + 1.0, char_w + 0.5, line_h - 1.0),
+                &solid(bg),
+            )?;
         }
     }
 
@@ -1392,13 +1813,27 @@ fn draw_term_row(
 
 /// Draw an image centered in `rect`, scaled to fit while preserving aspect
 /// ratio (never upscaling past 1:1). Shows a label if the image failed to load.
-fn draw_image_pane(ctx: &mut dyn DrawingContext, rect: Rect, image: Option<&Image>, font: &Font, metrics: TextMetrics) -> AureaResult<()> {
+fn draw_image_pane(
+    ctx: &mut dyn DrawingContext,
+    rect: Rect,
+    image: Option<&Image>,
+    font: &Font,
+    metrics: TextMetrics,
+) -> AureaResult<()> {
     let Some(img) = image else {
         // Decode failed or not ready: centered dim label.
         let msg = "cannot display image";
-        let w = ctx.measure_text(msg, font).map(|m| m.advance).unwrap_or(msg.len() as f32 * metrics.char_w);
+        let w = ctx
+            .measure_text(msg, font)
+            .map(|m| m.advance)
+            .unwrap_or(msg.len() as f32 * metrics.char_w);
         let bl = rect.y + rect.height / 2.0;
-        ctx.draw_text_with_font(msg, Point::new(rect.x + (rect.width - w) / 2.0, bl), font, &solid(PALETTE_DESC))?;
+        ctx.draw_text_with_font(
+            msg,
+            Point::new(rect.x + (rect.width - w) / 2.0, bl),
+            font,
+            &solid(palette().picker_detail),
+        )?;
         return Ok(());
     };
     if img.width == 0 || img.height == 0 {
@@ -1420,9 +1855,17 @@ fn draw_image_pane(ctx: &mut dyn DrawingContext, rect: Rect, image: Option<&Imag
 
     // Dimensions label, bottom-centered.
     let label = format!("{}×{}", img.width, img.height);
-    let lw = ctx.measure_text(&label, font).map(|m| m.advance).unwrap_or(0.0);
+    let lw = ctx
+        .measure_text(&label, font)
+        .map(|m| m.advance)
+        .unwrap_or(0.0);
     let ly = (rect.y + rect.height - 6.0).min(rect.y + rect.height);
-    ctx.draw_text_with_font(&label, Point::new(rect.x + (rect.width - lw) / 2.0, ly), font, &solid(PALETTE_DESC))?;
+    ctx.draw_text_with_font(
+        &label,
+        Point::new(rect.x + (rect.width - lw) / 2.0, ly),
+        font,
+        &solid(palette().picker_detail),
+    )?;
     Ok(())
 }
 
@@ -1430,71 +1873,144 @@ fn draw_image_pane(ctx: &mut dyn DrawingContext, rect: Rect, image: Option<&Imag
 // draw_status_bar
 // ---------------------------------------------------------------------------
 
-fn draw_status_bar(ctx: &mut dyn DrawingContext, width: f32, height: f32, font: &Font, ws: &Workspace, mods: ActiveMods) -> AureaResult<()> {
+fn draw_status_bar(
+    ctx: &mut dyn DrawingContext,
+    width: f32,
+    height: f32,
+    font: &Font,
+    ws: &Workspace,
+    mods: ActiveMods,
+) -> AureaResult<()> {
     let bar_top = height - STATUS_H;
-    ctx.draw_rect(Rect::new(0.0, bar_top, width, STATUS_H), &solid(STATUSBAR_BG))?;
-    ctx.draw_line(0.0, bar_top, width, bar_top, &stroke(BORDER, 1.0))?;
+    ctx.draw_rect(
+        Rect::new(0.0, bar_top, width, STATUS_H),
+        &solid(palette().statusbar_bg),
+    )?;
+    ctx.draw_line(0.0, bar_top, width, bar_top, &stroke(palette().border, 1.0))?;
 
     // Emacs-style modeline: the left badge is the buffer's *major mode*, not a
     // generic "EDIT" (Ozone is non-modal). Transient input modes (find, M-x) have
     // their own overlays, so they don't belong here.
-    let (mode, file_name, cursor_info, dirty, pane_info) = if let (Some(view), Some(buf)) = (ws.active_view(), ws.active_buffer()) {
-        let file_name = match &buf.kind {
-            BufferKind::File(p) | BufferKind::Image(p) => p.file_name().and_then(|n| n.to_str()).unwrap_or("?").to_string(),
-            BufferKind::Scratch => "*scratch*".to_string(),
-            BufferKind::Search => "*files*".to_string(),
-            BufferKind::References => "*references*".to_string(),
-            BufferKind::Terminal => "*terminal*".to_string(),
+    let (mode, file_name, cursor_info, dirty, pane_info) =
+        if let (Some(view), Some(buf)) = (ws.active_view(), ws.active_buffer()) {
+            let file_name = match &buf.kind {
+                BufferKind::File(p) | BufferKind::Image(p) => p
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("?")
+                    .to_string(),
+                BufferKind::Scratch => "*scratch*".to_string(),
+                BufferKind::Search => "*files*".to_string(),
+                BufferKind::References => "*references*".to_string(),
+                BufferKind::Terminal => "*terminal*".to_string(),
+            };
+            let cursor_info = format!("{}:{}", view.cursor.line + 1, view.cursor.col + 1);
+            let dirty = if buf.is_dirty() { "*" } else { "" };
+            let mode = match &buf.kind {
+                BufferKind::File(p) => major_mode_label(Filetype::from_path(&p.to_string_lossy())),
+                BufferKind::Search => "Files",
+                BufferKind::References => "Refs",
+                BufferKind::Terminal => "Term",
+                BufferKind::Image(_) => "Image",
+                BufferKind::Scratch => "Text",
+            };
+            let pane_info = pane_status(ws, view.id);
+            (mode, file_name, cursor_info, dirty.to_string(), pane_info)
+        } else {
+            (
+                "",
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            )
         };
-        let cursor_info = format!("{}:{}", view.cursor.line + 1, view.cursor.col + 1);
-        let dirty = if buf.is_dirty() { "*" } else { "" };
-        let mode = match &buf.kind {
-            BufferKind::File(p) => major_mode_label(Filetype::from_path(&p.to_string_lossy())),
-            BufferKind::Search => "Files",
-            BufferKind::References => "Refs",
-            BufferKind::Terminal => "Term",
-            BufferKind::Image(_) => "Image",
-            BufferKind::Scratch => "Text",
-        };
-        let pane_info = pane_status(ws, view.id);
-        (mode, file_name, cursor_info, dirty.to_string(), pane_info)
-    } else {
-        ("", String::new(), String::new(), String::new(), String::new())
-    };
 
-    let ascent = ctx.measure_text("M", font).map(|m| m.ascent).unwrap_or(font.size * 0.8);
-    let descent = ctx.measure_text("M", font).map(|m| m.descent).unwrap_or(font.size * 0.2);
+    let ascent = ctx
+        .measure_text("M", font)
+        .map(|m| m.ascent)
+        .unwrap_or(font.size * 0.8);
+    let descent = ctx
+        .measure_text("M", font)
+        .map(|m| m.descent)
+        .unwrap_or(font.size * 0.2);
     let baseline = baseline_in_rect(bar_top, STATUS_H, ascent, descent);
 
     let mode_text = format!(" {} ", mode);
-    let mode_w = ctx.measure_text(&mode_text, font).map(|m| m.advance).unwrap_or(font.size * 4.0);
-    ctx.draw_rect(Rect::new(8.0, bar_top + 4.0, mode_w + 8.0, STATUS_H - 8.0), &solid(STATUS_MODE_BG))?;
-    ctx.draw_text_with_font(&mode_text, Point::new(12.0, baseline), font, &solid(STATUSBAR_FG))?;
+    let mode_w = ctx
+        .measure_text(&mode_text, font)
+        .map(|m| m.advance)
+        .unwrap_or(font.size * 4.0);
+    ctx.draw_rect(
+        Rect::new(8.0, bar_top + 4.0, mode_w + 8.0, STATUS_H - 8.0),
+        &solid(palette().status_mode_bg),
+    )?;
+    ctx.draw_text_with_font(
+        &mode_text,
+        Point::new(12.0, baseline),
+        font,
+        &solid(palette().statusbar_fg),
+    )?;
 
     let left = format!("  {}{}    {}", file_name, dirty, cursor_info);
-    ctx.draw_text_with_font(&left, Point::new(16.0 + mode_w, baseline), font, &solid(STATUSBAR_FG))?;
+    ctx.draw_text_with_font(
+        &left,
+        Point::new(16.0 + mode_w, baseline),
+        font,
+        &solid(palette().statusbar_fg),
+    )?;
 
     // Live modifier indicator, far right: a lit pill per *held* logical modifier.
     let mut x = width - 12.0;
     if mods.any() {
-        let labels = [("Shift", mods.shift), ("Super", mods.super_), ("Meta", mods.meta), ("Ctrl", mods.control)];
+        let labels = [
+            ("Shift", mods.shift),
+            ("Super", mods.super_),
+            ("Meta", mods.meta),
+            ("Ctrl", mods.control),
+        ];
         for (label, active) in labels {
             if !active {
                 continue;
             }
-            let w = ctx.measure_text(label, font).map(|m| m.advance).unwrap_or(label.len() as f32 * font.size * 0.6);
+            let w = ctx
+                .measure_text(label, font)
+                .map(|m| m.advance)
+                .unwrap_or(label.len() as f32 * font.size * 0.6);
             x -= w + 12.0;
-            fill_round_rect(ctx, Rect::new(x, bar_top + 4.0, w + 12.0, STATUS_H - 8.0), 5.0, STATUS_MODE_BG)?;
-            ctx.draw_text_with_font(label, Point::new(x + 6.0, baseline), font, &solid(PALETTE_PROMPT))?;
+            fill_round_rect(
+                ctx,
+                Rect::new(x, bar_top + 4.0, w + 12.0, STATUS_H - 8.0),
+                5.0,
+                palette().status_mode_bg,
+            )?;
+            ctx.draw_text_with_font(
+                label,
+                Point::new(x + 6.0, baseline),
+                font,
+                &solid(palette().picker_prompt),
+            )?;
             x -= 6.0; // gap between pills
         }
     }
 
     // Encoding / pane info, left of the modifier indicator.
-    let right = if pane_info.is_empty() { "UTF-8".to_string() } else { format!("{}  UTF-8", pane_info) };
-    let right_w = ctx.measure_text(&right, font).map(|m| m.advance).unwrap_or(right.len() as f32 * font.size * 0.6);
+    let right = if pane_info.is_empty() {
+        "UTF-8".to_string()
+    } else {
+        format!("{}  UTF-8", pane_info)
+    };
+    let right_w = ctx
+        .measure_text(&right, font)
+        .map(|m| m.advance)
+        .unwrap_or(right.len() as f32 * font.size * 0.6);
     let right_x = (x - right_w - 12.0).max(16.0 + mode_w);
-    ctx.draw_text_with_font(&right, Point::new(right_x, baseline), font, &solid(STATUSBAR_DIM))?;
+    ctx.draw_text_with_font(
+        &right,
+        Point::new(right_x, baseline),
+        font,
+        &solid(palette().statusbar_dim),
+    )?;
 
     Ok(())
 }
@@ -1515,18 +2031,141 @@ fn gutter_width(line_count: usize, char_w: f32, mode: LineNumbers) -> f32 {
     GUTTER_MIN_W.max((digits as f32 + 2.0) * char_w + PAD)
 }
 
+fn point_in_rect(rect: Rect, x: f32, y: f32) -> bool {
+    x >= rect.x && y >= rect.y && x < rect.x + rect.width && y < rect.y + rect.height
+}
+
+fn pane_at(tree: &PaneTree, rect: Rect, x: f32, y: f32) -> Option<(ViewId, Rect)> {
+    if !point_in_rect(rect, x, y) {
+        return None;
+    }
+    match tree {
+        PaneTree::Leaf { view_id } => Some((*view_id, rect)),
+        PaneTree::Split {
+            axis,
+            ratio,
+            first,
+            second,
+        } => {
+            let (first_rect, second_rect, _) = split_rect(rect, *axis, *ratio);
+            pane_at(first, first_rect, x, y).or_else(|| pane_at(second, second_rect, x, y))
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_editor_click(
+    ws: &mut Workspace,
+    config: &Config,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    char_w: f32,
+    extend_selection: bool,
+) -> bool {
+    let editor_rect = Rect::new(0.0, 0.0, width, (height - STATUS_H).max(0.0));
+    let target = ws
+        .panes
+        .as_ref()
+        .and_then(|tree| pane_at(tree, editor_rect, x, y))
+        .or_else(|| ws.active_view_id.map(|id| (id, editor_rect)));
+    let Some((view_id, rect)) = target else {
+        return false;
+    };
+    let Some(buffer_id) = ws.views.get(&view_id).map(|view| view.buffer_id) else {
+        return false;
+    };
+    let Some(buf) = ws.buffers.get(&buffer_id) else {
+        return false;
+    };
+    if matches!(buf.kind, BufferKind::Image(_) | BufferKind::Terminal) {
+        ws.active_view_id = Some(view_id);
+        return true;
+    }
+
+    let line_count = buf.line_count();
+    if line_count == 0 {
+        return false;
+    }
+    let line_numbers = match buf.kind {
+        BufferKind::Search | BufferKind::References => LineNumbers::Off,
+        _ => ws
+            .buffer_local(buffer_id)
+            .and_then(|local| local.line_numbers)
+            .unwrap_or(config.editor.line_numbers),
+    };
+    let line_h = (config.editor.font_size * config.editor.line_height).max(1.0);
+    let scroll = ws
+        .views
+        .get(&view_id)
+        .map(|view| view.scroll_line)
+        .unwrap_or(0);
+    let relative_y = (y - rect.y - EDITOR_TOP_PAD).max(0.0);
+    let line = (scroll + (relative_y / line_h).floor() as usize).min(line_count - 1);
+    let gutter_w = gutter_width(line_count, char_w.max(1.0), line_numbers);
+    let text_x = rect.x + gutter_w + PAD;
+    let raw_col = if x <= text_x {
+        0
+    } else {
+        ((x - text_x) / char_w.max(1.0)).round() as usize
+    };
+    let line_text = buf.line(line).unwrap_or_default();
+    let mut col = raw_col.min(line_text.len());
+    while col > 0 && !line_text.is_char_boundary(col) {
+        col -= 1;
+    }
+    let new_pos = ozone_buffer::Pos::new(line, col);
+
+    let Some(view) = ws.views.get_mut(&view_id) else {
+        return false;
+    };
+    let old_pos = view.cursor;
+    view.cursor = new_pos;
+    view.col_memory = col;
+    view.selection = if extend_selection && old_pos != new_pos {
+        let (start, end) = if old_pos <= new_pos {
+            (old_pos, new_pos)
+        } else {
+            (new_pos, old_pos)
+        };
+        Some(ozone_buffer::Span { start, end })
+    } else {
+        None
+    };
+    ws.active_view_id = Some(view_id);
+    ws.emit(EditorEvent::CursorMoved {
+        view_id,
+        pos: new_pos,
+    });
+    true
+}
+
 /// Collect the on-screen rect of every terminal-buffer leaf in a pane tree,
 /// mirroring `draw_pane_tree`'s geometry so the PTY can be sized to its pane.
-fn collect_term_rects(ws: &Workspace, tree: &PaneTree, rect: Rect, out: &mut Vec<(BufferId, Rect)>) {
+fn collect_term_rects(
+    ws: &Workspace,
+    tree: &PaneTree,
+    rect: Rect,
+    out: &mut Vec<(BufferId, Rect)>,
+) {
     match tree {
         PaneTree::Leaf { view_id } => {
             if let Some(bid) = ws.views.get(view_id).map(|v| v.buffer_id)
-                && matches!(ws.buffers.get(&bid).map(|b| &b.kind), Some(BufferKind::Terminal))
+                && matches!(
+                    ws.buffers.get(&bid).map(|b| &b.kind),
+                    Some(BufferKind::Terminal)
+                )
             {
                 out.push((bid, rect));
             }
         }
-        PaneTree::Split { axis, ratio, first, second } => {
+        PaneTree::Split {
+            axis,
+            ratio,
+            first,
+            second,
+        } => {
             let (fr, sr, _) = split_rect(rect, *axis, *ratio);
             collect_term_rects(ws, first, fr, out);
             collect_term_rects(ws, second, sr, out);
@@ -1575,16 +2214,32 @@ fn split_rect(rect: Rect, axis: SplitAxis, ratio: f32) -> (Rect, Rect, Rect) {
     }
 }
 
-fn draw_cursor(ctx: &mut dyn DrawingContext, x: f32, line_top: f32, line_h: f32, char_w: f32, style: CursorStyle) -> AureaResult<()> {
+fn draw_cursor(
+    ctx: &mut dyn DrawingContext,
+    x: f32,
+    line_top: f32,
+    line_h: f32,
+    char_w: f32,
+    style: CursorStyle,
+) -> AureaResult<()> {
     match style {
         CursorStyle::Bar => {
-            ctx.draw_rect(Rect::new(x, line_top + 1.0, 2.0, line_h - 1.0), &solid(CURSOR_BG))?;
+            ctx.draw_rect(
+                Rect::new(x, line_top + 1.0, 2.0, line_h - 1.0),
+                &solid(palette().cursor),
+            )?;
         }
         CursorStyle::Block => {
-            ctx.draw_rect(Rect::new(x, line_top + 2.0, char_w.max(6.0), line_h - 3.0), &solid(CURSOR_BG))?;
+            ctx.draw_rect(
+                Rect::new(x, line_top + 2.0, char_w.max(6.0), line_h - 3.0),
+                &solid(palette().cursor),
+            )?;
         }
         CursorStyle::Underline => {
-            ctx.draw_rect(Rect::new(x, line_top + line_h - 3.0, char_w.max(6.0), 2.0), &solid(CURSOR_BG))?;
+            ctx.draw_rect(
+                Rect::new(x, line_top + line_h - 3.0, char_w.max(6.0), 2.0),
+                &solid(palette().cursor),
+            )?;
         }
     }
     Ok(())
@@ -1617,4 +2272,61 @@ fn pane_status(ws: &Workspace, active: ViewId) -> String {
 
 fn max_scroll_line(line_count: usize, page_height: usize) -> usize {
     line_count.saturating_sub(page_height.max(1))
+}
+
+#[cfg(test)]
+mod mouse_tests {
+    use super::*;
+
+    fn text_workspace(text: &str) -> Workspace {
+        let mut ws = Workspace::new();
+        ws.active_buffer_mut().unwrap().set_text(text);
+        ws
+    }
+
+    #[test]
+    fn click_places_cursor_using_view_coordinates() {
+        let mut ws = text_workspace("alpha\nbravo\ncharlie");
+        let mut config = Config::default_config();
+        config.editor.line_numbers = LineNumbers::Off;
+        config.editor.font_size = 10.0;
+        config.editor.line_height = 2.0;
+
+        assert!(handle_editor_click(
+            &mut ws,
+            &config,
+            PAD + 3.0 * 8.0,
+            EDITOR_TOP_PAD + 1.2 * 20.0,
+            800.0,
+            600.0,
+            8.0,
+            false,
+        ));
+        assert_eq!(
+            ws.active_view().unwrap().cursor,
+            ozone_buffer::Pos::new(1, 3)
+        );
+    }
+
+    #[test]
+    fn shift_click_creates_ordered_selection() {
+        let mut ws = text_workspace("abcdef");
+        let mut config = Config::default_config();
+        config.editor.line_numbers = LineNumbers::Off;
+        ws.active_view_mut().unwrap().cursor = ozone_buffer::Pos::new(0, 5);
+
+        assert!(handle_editor_click(
+            &mut ws,
+            &config,
+            PAD + 2.0 * 8.0,
+            EDITOR_TOP_PAD,
+            800.0,
+            600.0,
+            8.0,
+            true,
+        ));
+        let selection = ws.active_view().unwrap().selection.unwrap();
+        assert_eq!(selection.start, ozone_buffer::Pos::new(0, 2));
+        assert_eq!(selection.end, ozone_buffer::Pos::new(0, 5));
+    }
 }

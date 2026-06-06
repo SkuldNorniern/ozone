@@ -25,6 +25,11 @@ jump_list_size = 100
 [theme]
 name = "catppuccin-mocha"
 
+[ui]
+# Mouse interaction is deliberately opt-in. When enabled, clicking focuses a
+# pane and places the cursor; Shift-click extends the selection.
+mouse = false
+
 # Keybindings are parsed now; runtime layering/chords are wired in the next
 # editor phase. Defaults still live in code until then.
 [[keymap]]

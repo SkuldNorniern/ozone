@@ -11,3 +11,4 @@ ozone-config = { workspace = true }
 ozone-term   = { workspace = true }
 aurea        = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+toml.workspace = true
