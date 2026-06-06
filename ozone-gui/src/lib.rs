@@ -1020,6 +1020,24 @@ pub(crate) fn apply_ui_intents(
                 let items = buffer_picker_items(ws, mru);
                 *palette = Some(PickerState::new("buffer:", items));
             }
+            UiIntent::ThemePicker => {
+                *palette = Some(PickerState::new("theme:", theme_picker_items()));
+            }
+            UiIntent::SetTheme { name } => {
+                if theme::activate(&name) {
+                    notifications.push(
+                        ozone_editor::NotifyLevel::Success,
+                        format!("Theme: {name}"),
+                        None,
+                    );
+                } else {
+                    notifications.push(
+                        ozone_editor::NotifyLevel::Error,
+                        format!("Theme not found or invalid: {name}"),
+                        None,
+                    );
+                }
+            }
             UiIntent::SearchStart => open_search(ws, search, false),
             UiIntent::SearchReplace => open_search(ws, search, true),
             UiIntent::Input { prompt, command } => {

@@ -29,6 +29,10 @@ pub enum UiIntent {
     FilePicker,
     /// Open the open-buffer picker (most-recently-used).
     BufferPicker,
+    /// Open the installed-theme picker.
+    ThemePicker,
+    /// Activate a theme by installed name or explicit TOML path.
+    SetTheme { name: String },
     /// Start incremental in-buffer search.
     SearchStart,
     /// Start in-buffer search with the replace field shown.

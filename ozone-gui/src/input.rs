@@ -22,7 +22,12 @@ impl ActiveMods {
         // Reuse the keymap's physical→logical resolution.
         let phys = PhysicalMods::new(m.ctrl, m.alt, m.shift, m.meta);
         let ks = KeyStroke::from_physical(phys, Key::Space, map);
-        Self { control: ks.control, meta: ks.meta, super_: ks.super_, shift: ks.shift }
+        Self {
+            control: ks.control,
+            meta: ks.meta,
+            super_: ks.super_,
+            shift: ks.shift,
+        }
     }
     pub(crate) fn any(&self) -> bool {
         self.control || self.meta || self.super_ || self.shift
@@ -33,7 +38,11 @@ impl ActiveMods {
 /// release (the OS key-state query lags the event), which left the indicator
 /// stuck "on". When the event key is itself a modifier, force that bit to match
 /// `pressed`; otherwise trust the snapshot.
-pub(crate) fn corrected_mods(mut m: aurea::Modifiers, key: aurea::KeyCode, pressed: bool) -> aurea::Modifiers {
+pub(crate) fn corrected_mods(
+    mut m: aurea::Modifiers,
+    key: aurea::KeyCode,
+    pressed: bool,
+) -> aurea::Modifiers {
     use aurea::KeyCode::*;
     match key {
         Control => m.ctrl = pressed,
@@ -48,7 +57,10 @@ pub(crate) fn corrected_mods(mut m: aurea::Modifiers, key: aurea::KeyCode, press
 /// Map a key + modifiers to the bytes a PTY shell expects, or `None` to let the
 /// key fall through to the editor keymap (so Ctrl+Tab, M-x, pane focus still work
 /// while a terminal is focused). The shell's line discipline handles echo/editing.
-pub(crate) fn terminal_key_bytes(key: aurea::KeyCode, mods: aurea::Modifiers) -> Option<&'static str> {
+pub(crate) fn terminal_key_bytes(
+    key: aurea::KeyCode,
+    mods: aurea::Modifiers,
+) -> Option<&'static str> {
     use aurea::KeyCode::*;
     if mods.alt {
         return None; // leave Alt (M-x etc.) to the editor
@@ -82,7 +94,11 @@ pub(crate) fn terminal_key_bytes(key: aurea::KeyCode, mods: aurea::Modifiers) ->
 
 /// Convert a platform key + physical modifiers into a logical [`KeyStroke`] via
 /// the modifier map. Returns `None` for keys with no token (modifiers, unknown).
-pub(crate) fn keystroke_from(key: aurea::KeyCode, mods: aurea::Modifiers, map: &ModifierMap) -> Option<KeyStroke> {
+pub(crate) fn keystroke_from(
+    key: aurea::KeyCode,
+    mods: aurea::Modifiers,
+    map: &ModifierMap,
+) -> Option<KeyStroke> {
     let k = keycode_key(key)?;
     let phys = PhysicalMods::new(mods.ctrl, mods.alt, mods.shift, mods.meta);
     Some(KeyStroke::from_physical(phys, k, map))
@@ -440,7 +456,12 @@ mod tests {
 
     #[test]
     fn modifier_events_override_stale_native_snapshot() {
-        let mods = aurea::Modifiers { ctrl: false, alt: false, shift: false, meta: false };
+        let mods = aurea::Modifiers {
+            ctrl: false,
+            alt: false,
+            shift: false,
+            meta: false,
+        };
 
         assert!(corrected_mods(mods, aurea::KeyCode::Control, true).ctrl);
 
@@ -450,9 +471,17 @@ mod tests {
 
     #[test]
     fn terminal_keys_preserve_editor_shortcuts() {
-        let control = aurea::Modifiers { ctrl: true, alt: false, shift: false, meta: false };
+        let control = aurea::Modifiers {
+            ctrl: true,
+            alt: false,
+            shift: false,
+            meta: false,
+        };
 
-        assert_eq!(terminal_key_bytes(aurea::KeyCode::C, control), Some("\u{3}"));
+        assert_eq!(
+            terminal_key_bytes(aurea::KeyCode::C, control),
+            Some("\u{3}")
+        );
         assert_eq!(terminal_key_bytes(aurea::KeyCode::P, control), None);
     }
 

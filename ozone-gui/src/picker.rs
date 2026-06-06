@@ -220,6 +220,18 @@ pub(crate) fn select_picker_items(items: Vec<ozone_editor::SelectItem>) -> Vec<P
         .collect()
 }
 
+pub(crate) fn theme_picker_items() -> Vec<PickerItem> {
+    crate::theme::available_themes()
+        .into_iter()
+        .map(|theme| PickerItem {
+            haystack: format!("{} {}", theme.name, theme.id).to_lowercase(),
+            display: theme.name,
+            detail: theme.id.clone(),
+            action: PickerAction::RunCommandArg("theme.set".to_string(), Some(theme.id)),
+        })
+        .collect()
+}
+
 /// Handle a key while the picker is open. Letters arrive via TextInput;
 /// this covers navigation/commit/cancel. Returns whether a redraw is needed.
 pub(crate) fn handle_palette_key(

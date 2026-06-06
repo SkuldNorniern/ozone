@@ -23,7 +23,7 @@ auto_format  = false
 jump_list_size = 100
 
 [theme]
-name = "catppuccin-mocha"
+name = "brewery-stout"
 
 [ui]
 # Mouse interaction is deliberately opt-in. When enabled, clicking focuses a

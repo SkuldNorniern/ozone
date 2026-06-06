@@ -3,13 +3,34 @@
 //! `config.toml` selects a theme by name or path. The palette lives in a
 //! separate TOML file; missing files and invalid fields retain safe defaults.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock, RwLockReadGuard};
 
 use aurea::render::{Color, Paint, PaintStyle};
 use ozone_syntax::TokenKind;
 
-static THEME: OnceLock<Theme> = OnceLock::new();
+static THEME: OnceLock<RwLock<Theme>> = OnceLock::new();
+const BUNDLED_THEMES: [(&str, &str); 3] = [
+    (
+        "brewery-stout",
+        include_str!("../../themes/brewery-stout.toml"),
+    ),
+    (
+        "brewery-wine",
+        include_str!("../../themes/brewery-wine.toml"),
+    ),
+    (
+        "catppuccin-mocha",
+        include_str!("../../themes/catppuccin-mocha.toml"),
+    ),
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ThemeInfo {
+    pub id: String,
+    pub name: String,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SyntaxTheme {
@@ -141,10 +162,8 @@ impl Default for Theme {
 impl Theme {
     fn load(selection: &str) -> Self {
         let mut theme = Self::default();
-        let Some(path) = resolve_theme_path(selection) else {
-            return theme;
-        };
-        let Ok(text) = std::fs::read_to_string(path) else {
+        let text = resolve_theme_text(selection);
+        let Some(text) = text.as_deref() else {
             return theme;
         };
         let Ok(table) = text.parse::<toml::Table>() else {
@@ -202,15 +221,112 @@ impl Theme {
         apply(lsp, "hint", &mut self.notify_success);
         apply(lsp, "warning", &mut self.notify_warn);
         apply(lsp, "error", &mut self.notify_error);
+
+        if let Some(ansi) = table
+            .get("terminal")
+            .and_then(toml::Value::as_table)
+            .and_then(|terminal| terminal.get("ansi"))
+            .and_then(toml::Value::as_array)
+            && ansi.len() == 16
+        {
+            for (target, value) in self.terminal_ansi.iter_mut().zip(ansi) {
+                if let Some(color) = value.as_str().and_then(parse_hex_color) {
+                    *target = color;
+                }
+            }
+        }
     }
 }
 
 pub(crate) fn initialize(selection: &str) {
-    let _ = THEME.set(Theme::load(selection));
+    let store = THEME.get_or_init(|| RwLock::new(Theme::default()));
+    *store
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Theme::load(selection);
 }
 
-pub(crate) fn palette() -> &'static Theme {
-    THEME.get_or_init(Theme::default)
+pub(crate) fn activate(selection: &str) -> bool {
+    let Some(text) = resolve_theme_text(selection) else {
+        return false;
+    };
+    let Ok(table) = text.parse::<toml::Table>() else {
+        return false;
+    };
+    let mut theme = Theme::default();
+    theme.apply_table(&table);
+    let store = THEME.get_or_init(|| RwLock::new(Theme::default()));
+    *store
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = theme;
+    true
+}
+
+pub(crate) fn palette() -> RwLockReadGuard<'static, Theme> {
+    THEME
+        .get_or_init(|| RwLock::new(Theme::default()))
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+pub(crate) fn available_themes() -> Vec<ThemeInfo> {
+    let mut themes = BTreeMap::<String, ThemeInfo>::new();
+    for (id, text) in BUNDLED_THEMES {
+        let name = theme_name(text).unwrap_or_else(|| id.to_string());
+        themes.insert(
+            id.to_string(),
+            ThemeInfo {
+                id: id.to_string(),
+                name,
+            },
+        );
+    }
+    for directory in theme_directories() {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
+                continue;
+            }
+            let Some(id) = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            let name = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|text| theme_name(&text))
+                .unwrap_or_else(|| id.clone());
+            themes.insert(id.clone(), ThemeInfo { id, name });
+        }
+    }
+    themes.into_values().collect()
+}
+
+fn resolve_theme_text(selection: &str) -> Option<String> {
+    if let Some(path) = resolve_theme_path(selection)
+        && let Ok(text) = std::fs::read_to_string(path)
+    {
+        return Some(text);
+    }
+    let id = Path::new(selection).file_stem()?.to_str()?;
+    BUNDLED_THEMES
+        .iter()
+        .find(|(bundled_id, _)| *bundled_id == id)
+        .map(|(_, text)| (*text).to_string())
+}
+
+fn theme_name(text: &str) -> Option<String> {
+    text.parse::<toml::Table>()
+        .ok()?
+        .get("meta")?
+        .as_table()?
+        .get("name")?
+        .as_str()
+        .map(str::to_string)
 }
 
 fn resolve_theme_path(selection: &str) -> Option<PathBuf> {
@@ -223,24 +339,29 @@ fn resolve_theme_path(selection: &str) -> Option<PathBuf> {
     } else {
         PathBuf::from(format!("{selection}.toml"))
     };
-    if let Some(config_path) = ozone_config::Config::user_config_path()
-        && let Some(config_dir) = config_path.parent()
-    {
-        let path = config_dir.join("themes").join(&file_name);
+    for directory in theme_directories() {
+        let path = directory.join(&file_name);
         if path.is_file() {
             return Some(path);
         }
+    }
+    None
+}
+
+fn theme_directories() -> Vec<PathBuf> {
+    let mut directories = Vec::new();
+    if let Some(config_path) = ozone_config::Config::user_config_path()
+        && let Some(config_dir) = config_path.parent()
+    {
+        directories.push(config_dir.join("themes"));
     }
     if let Ok(executable) = std::env::current_exe()
         && let Some(executable_dir) = executable.parent()
     {
-        let path = executable_dir.join("themes").join(&file_name);
-        if path.is_file() {
-            return Some(path);
-        }
+        directories.push(executable_dir.join("themes"));
     }
-    let bundled = PathBuf::from("themes").join(file_name);
-    bundled.is_file().then_some(bundled)
+    directories.push(PathBuf::from("themes"));
+    directories
 }
 
 fn apply(table: Option<&toml::Table>, key: &str, target: &mut Color) {
@@ -347,5 +468,27 @@ mod tests {
             .unwrap();
         theme.apply_table(&table);
         assert_eq!(theme.background, before);
+    }
+
+    #[test]
+    fn bundled_brewery_themes_are_discoverable() {
+        let ids: Vec<String> = available_themes()
+            .into_iter()
+            .map(|theme| theme.id)
+            .collect();
+        assert!(ids.iter().any(|id| id == "brewery-stout"));
+        assert!(ids.iter().any(|id| id == "brewery-wine"));
+        assert!(resolve_theme_text("brewery-stout").is_some());
+    }
+
+    #[test]
+    fn terminal_palette_accepts_sixteen_colors() {
+        let mut theme = Theme::default();
+        let table = include_str!("../../themes/brewery-stout.toml")
+            .parse::<toml::Table>()
+            .unwrap();
+        theme.apply_table(&table);
+        assert_eq!(theme.terminal_ansi[0], parse_hex_color("#493c57").unwrap());
+        assert_eq!(theme.terminal_ansi[15], parse_hex_color("#e4e3df").unwrap());
     }
 }

@@ -414,6 +414,16 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
     reg.register("buffer.picker", "Switch to an open buffer (fuzzy picker)", |ctx| {
         ctx.workspace.request_ui(UiIntent::BufferPicker);
     });
+    reg.register("theme.select", "Select an installed color theme", |ctx| {
+        ctx.workspace.request_ui(UiIntent::ThemePicker);
+    });
+    reg.register("theme.set", "Activate a color theme", |ctx| {
+        if let Some(name) = ctx.arg.as_deref().map(str::trim).filter(|name| !name.is_empty()) {
+            ctx.workspace.request_ui(UiIntent::SetTheme { name: name.to_string() });
+        } else {
+            ctx.workspace.request_ui(UiIntent::ThemePicker);
+        }
+    });
     reg.register("search.start", "Incremental search in the buffer", |ctx| {
         ctx.workspace.request_ui(UiIntent::SearchStart);
     });

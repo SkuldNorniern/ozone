@@ -1,0 +1,62 @@
+[meta]
+name = "Brewery Stout"
+dark = true
+author = "SkuldNorniern"
+license = "MIT"
+source = "https://github.com/SkuldNorniern/Brewery"
+
+[ui]
+background = "#2b2533"
+gutter = "#232136"
+foreground = "#efefe4"
+line_number = "#7e728c"
+line_number_active = "#e4e3df"
+border = "#493c57"
+cursor = "#56526e"
+cursor_line = "#393552b0"
+selection = "#44415ae6"
+active_pane_border = "#74bdaf"
+bracket_match = "#b194bb70"
+scrollbar_thumb = "#7e728cb4"
+statusbar_bg = "#232136"
+statusbar_fg = "#b5bd68"
+statusbar_dim = "#74bdaf"
+status_mode_bg = "#393552"
+scrim = "#17121c90"
+picker_bg = "#232136"
+picker_border = "#493c57"
+picker_input_bg = "#1d1824"
+picker_selection = "#44415a"
+picker_fg = "#efefe4"
+picker_detail = "#7e728c"
+picker_prompt = "#b194bb"
+search_match = "#be936566"
+search_match_active = "#bb5372a0"
+
+[syntax]
+default = "#efefe4"
+keyword = "#b194bb"
+keyword_control = "#bb5372"
+type = "#74bdaf"
+string = "#b5bd68"
+comment = "#7e728c"
+number = "#be9365"
+macro = "#6667ab"
+attribute = "#b194bb"
+lifetime = "#bb5372"
+function = "#74bdaf"
+operator = "#e4e3df"
+
+[lsp]
+error = "#bb5372"
+warning = "#be9365"
+info = "#74bdaf"
+hint = "#b5bd68"
+
+[terminal]
+ansi = [
+  "#493c57", "#784856", "#737848", "#786148",
+  "#487870", "#674878", "#484878", "#766c78",
+  "#7e728c", "#bb5372", "#b5bd68", "#be9365",
+  "#74bdaf", "#b194bb", "#6667ab", "#e4e3df",
+]

@@ -167,7 +167,7 @@ impl Config {
     pub fn default_config() -> Self {
         Self {
             editor: EditorConfig::default(),
-            theme: "catppuccin-mocha".to_string(),
+            theme: "brewery-stout".to_string(),
             ui: UiConfig::default(),
             keymaps: Vec::new(),
             autocmds: Vec::new(),
@@ -452,7 +452,7 @@ mod tests {
     fn empty_string_yields_defaults() {
         let c = Config::parse_str("");
         assert_eq!(c.editor.font_size, 14.0);
-        assert_eq!(c.theme, "catppuccin-mocha");
+        assert_eq!(c.theme, "brewery-stout");
     }
 
     #[test]

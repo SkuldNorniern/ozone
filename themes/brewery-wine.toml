@@ -1,0 +1,62 @@
+[meta]
+name = "Brewery Wine"
+dark = true
+author = "SkuldNorniern"
+license = "MIT"
+source = "https://github.com/SkuldNorniern/Brewery"
+
+[ui]
+background = "#211b1d"
+gutter = "#23171d"
+foreground = "#eae5e0"
+line_number = "#715763"
+line_number_active = "#f7e6ec"
+border = "#3f2730"
+cursor = "#ba6b88"
+cursor_line = "#3a2630b0"
+selection = "#4b3542e6"
+active_pane_border = "#d77bab"
+bracket_match = "#e89ebd70"
+scrollbar_thumb = "#715763b4"
+statusbar_bg = "#23171d"
+statusbar_fg = "#d78298"
+statusbar_dim = "#d77bab"
+status_mode_bg = "#3a2630"
+scrim = "#120d0f90"
+picker_bg = "#23171d"
+picker_border = "#4b3542"
+picker_input_bg = "#1a1115"
+picker_selection = "#4b3542"
+picker_fg = "#eae5e0"
+picker_detail = "#bca3ab"
+picker_prompt = "#e89ebd"
+search_match = "#e299a666"
+search_match_active = "#cc697fa0"
+
+[syntax]
+default = "#eae5e0"
+keyword = "#e89ebd"
+keyword_control = "#cc697f"
+type = "#d77bab"
+string = "#d78298"
+comment = "#715763"
+number = "#e299a6"
+macro = "#f3c1d7"
+attribute = "#e89ebd"
+lifetime = "#cc697f"
+function = "#d77bab"
+operator = "#e4c0d0"
+
+[lsp]
+error = "#cc697f"
+warning = "#e299a6"
+info = "#d77bab"
+hint = "#d78298"
+
+[terminal]
+ansi = [
+  "#3f2730", "#8e4558", "#875b6b", "#b26e7f",
+  "#a84f81", "#ba6792", "#c98aaf", "#e4c0d0",
+  "#715763", "#cc697f", "#d78298", "#e299a6",
+  "#d77bab", "#e89ebd", "#f3c1d7", "#f7e6ec",
+]
