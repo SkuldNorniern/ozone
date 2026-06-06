@@ -26,6 +26,7 @@ use aurea::{AureaResult, Element, Window, WindowEvent};
 
 mod input;
 mod minibuffer;
+mod notify;
 mod picker;
 mod popup;
 mod search;
@@ -33,6 +34,7 @@ mod theme;
 mod whichkey;
 use input::*;
 use minibuffer::*;
+use notify::*;
 use ozone_buffer::{BufferId, BufferKind};
 use ozone_config::{Config, CursorStyle, FiletypeConfig, LineNumbers};
 use ozone_editor::commands::register_defaults;
@@ -143,6 +145,8 @@ impl OzoneGui {
         let palette: Arc<Mutex<Option<PickerState>>> = Arc::new(Mutex::new(None));
         let search: Arc<Mutex<Option<SearchState>>> = Arc::new(Mutex::new(None));
         let minibuffer: Arc<Mutex<Option<Minibuffer>>> = Arc::new(Mutex::new(None));
+        // Notification toasts: a single controller owns the list + expiry.
+        let notifications: Arc<Mutex<Notifications>> = Arc::new(Mutex::new(Notifications::new()));
 
         let raw_canvas = Canvas::new(W, H, RendererBackend::Cpu)?;
         let workspace_for_draw = self.workspace.clone();
@@ -150,12 +154,14 @@ impl OzoneGui {
         let palette_for_draw = palette.clone();
         let search_for_draw = search.clone();
         let minibuffer_for_draw = minibuffer.clone();
+        let notifications_for_draw = notifications.clone();
 
         raw_canvas.set_draw_callback(move |ctx| {
             // Keep the same lock order as input handling: overlays, then workspace.
             let pal = lock(palette_for_draw.as_ref());
             let srch = lock(search_for_draw.as_ref());
             let mb = lock(minibuffer_for_draw.as_ref());
+            let notes = lock(notifications_for_draw.as_ref());
             let mut ws = lock(workspace_for_draw.as_ref());
 
             // Repaint callback: terminal colour grids + PTY sizing are driven
@@ -169,6 +175,11 @@ impl OzoneGui {
                 let f = editor_font(&config_for_draw);
                 let (cw, ch) = (ctx.width() as f32, ctx.height() as f32);
                 draw_minibuffer(ctx, m, &f, cw, ch, STATUS_H)?;
+            }
+            if !notes.is_empty() {
+                let f = editor_font(&config_for_draw);
+                let (cw, ch) = (ctx.width() as f32, ctx.height() as f32);
+                notes.draw(ctx, &f, cw, ch)?;
             }
             Ok(())
         })?;
@@ -275,13 +286,14 @@ impl OzoneGui {
                         let mut pal = lock(palette.as_ref());
                         let mut srch = lock(search.as_ref());
                         let mut mb = lock(minibuffer.as_ref());
+                        let mut notes = lock(notifications.as_ref());
                         if mb.is_some() {
                             let mut ws = lock(self.workspace.as_ref());
                             if handle_minibuffer_key(key, &mut mb, &mut ws, &self.commands, &self.autocmds) {
                                 needs_redraw = true;
                             }
                             // Submitting may queue another intent (e.g. re-prompt).
-                            if apply_ui_intents(&mut ws, &self.commands, &mut pal, &mut srch, &mut mb, &buffer_mru) {
+                            if apply_ui_intents(&mut ws, &self.commands, &mut pal, &mut srch, &mut mb, &mut notes, &buffer_mru) {
                                 needs_redraw = true;
                             }
                         } else if pal.is_some() {
@@ -291,7 +303,7 @@ impl OzoneGui {
                             }
                             // A palette selection may itself request an overlay
                             // (e.g. running search.start from the palette).
-                            if apply_ui_intents(&mut ws, &self.commands, &mut pal, &mut srch, &mut mb, &buffer_mru) {
+                            if apply_ui_intents(&mut ws, &self.commands, &mut pal, &mut srch, &mut mb, &mut notes, &buffer_mru) {
                                 needs_redraw = true;
                             }
                         } else if srch.is_some() {
@@ -323,6 +335,7 @@ impl OzoneGui {
                                 &mut pal,
                                 &mut srch,
                                 &mut mb,
+                                &mut notes,
                                 &buffer_mru,
                             );
                             if r {
@@ -547,6 +560,11 @@ impl OzoneGui {
             }
 
             // Update window title when active file changes
+            // Expire stale notification toasts; repaint when the stack changes.
+            if lock(notifications.as_ref()).tick() {
+                needs_redraw = true;
+            }
+
             {
                 let ws = lock(self.workspace.as_ref());
                 let title = window_title(&ws);
@@ -560,6 +578,7 @@ impl OzoneGui {
                 let pal = lock(palette.as_ref());
                 let srch = lock(search.as_ref());
                 let mb = lock(minibuffer.as_ref());
+                let notes = lock(notifications.as_ref());
                 let mut ws = lock(self.workspace.as_ref());
                 let mut canvas = lock(canvas_arc.as_ref());
                 let config = self.config.clone();
@@ -588,6 +607,11 @@ impl OzoneGui {
                         let f = editor_font(&config);
                         let (cw, ch) = (ctx.width() as f32, ctx.height() as f32);
                         draw_which_key(ctx, &wk_prefix, &wk_entries, &f, cw, ch)?;
+                    }
+                    if !notes.is_empty() {
+                        let f = editor_font(&config);
+                        let (cw, ch) = (ctx.width() as f32, ctx.height() as f32);
+                        notes.draw(ctx, &f, cw, ch)?;
                     }
                     Ok(())
                 })?;
@@ -640,6 +664,7 @@ fn handle_key(
     palette: &mut Option<PickerState>,
     search: &mut Option<SearchState>,
     minibuffer: &mut Option<Minibuffer>,
+    notifications: &mut Notifications,
     mru: &[BufferId],
 ) -> bool {
     use aurea::KeyCode::*;
@@ -676,7 +701,7 @@ fn handle_key(
                 // Everything is a command: run it, then perform any frontend
                 // action it requested (open palette / picker / search overlay).
                 run_cmd(&cmd, ws, reg, autocmds);
-                apply_ui_intents(ws, reg, palette, search, minibuffer, mru);
+                apply_ui_intents(ws, reg, palette, search, minibuffer, notifications, mru);
                 return true;
             }
             KeymapOutcome::Pending => {
@@ -780,6 +805,7 @@ pub(crate) fn apply_ui_intents(
     palette: &mut Option<PickerState>,
     search: &mut Option<SearchState>,
     minibuffer: &mut Option<Minibuffer>,
+    notifications: &mut Notifications,
     mru: &[BufferId],
 ) -> bool {
     let intents = ws.drain_ui_intents();
@@ -803,6 +829,9 @@ pub(crate) fn apply_ui_intents(
             }
             UiIntent::Select { prompt, items } => {
                 *palette = Some(PickerState::new(prompt, select_picker_items(items)));
+            }
+            UiIntent::Notify { level, text, timeout_ms } => {
+                notifications.push(level, text, timeout_ms);
             }
         }
     }

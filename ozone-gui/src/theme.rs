@@ -36,6 +36,23 @@ pub(crate) const PALETTE_PROMPT: Color = Color::rgb(203, 166, 247);
 pub(crate) const SEARCH_MATCH: Color = Color::rgba(249, 226, 175, 70); // yellow, all matches
 pub(crate) const SEARCH_CURRENT: Color = Color::rgba(250, 179, 135, 150); // peach, current match
 
+// --- notifications (toasts) ---
+pub(crate) const NOTIFY_INFO: Color = Color::rgb(137, 180, 250); // blue
+pub(crate) const NOTIFY_SUCCESS: Color = Color::rgb(166, 227, 161); // green
+pub(crate) const NOTIFY_WARN: Color = Color::rgb(249, 226, 175); // yellow
+pub(crate) const NOTIFY_ERROR: Color = Color::rgb(243, 139, 168); // red
+
+/// Accent colour for a notification severity (left stripe + title).
+pub(crate) fn notify_accent(level: ozone_editor::NotifyLevel) -> Color {
+    use ozone_editor::NotifyLevel::*;
+    match level {
+        Info => NOTIFY_INFO,
+        Success => NOTIFY_SUCCESS,
+        Warn => NOTIFY_WARN,
+        Error => NOTIFY_ERROR,
+    }
+}
+
 /// Catppuccin Mocha syntax token colours.
 pub(crate) fn token_color(kind: TokenKind) -> Color {
     match kind {

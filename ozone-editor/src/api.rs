@@ -27,7 +27,7 @@ use crate::events::EditorEvent;
 use crate::options::OptionValue;
 use crate::pane::{FocusDirection, SplitAxis};
 use crate::search;
-use crate::ui::UiIntent;
+use crate::ui::{NotifyLevel, UiIntent};
 use crate::view::ViewId;
 use crate::workspace::Workspace;
 
@@ -247,6 +247,16 @@ impl<'a> EditorApi<'a> {
     pub fn request_ui(&mut self, intent: UiIntent) {
         self.ws.request_ui(intent);
     }
+
+    /// Post a transient notification (toast) with the frontend's default
+    /// timeout. The plugin/command-facing `vim.notify` entry point.
+    pub fn notify(&mut self, level: NotifyLevel, text: impl Into<String>) {
+        self.ws.request_ui(UiIntent::Notify {
+            level,
+            text: text.into(),
+            timeout_ms: None,
+        });
+    }
 }
 
 #[cfg(test)]
@@ -282,6 +292,22 @@ mod tests {
         let mut api = EditorApi::new(&mut ws);
         api.insert("ab ab ab");
         assert_eq!(api.find("ab", false), vec![0, 3, 6]);
+    }
+
+    #[test]
+    fn notify_queues_a_ui_intent() {
+        let mut ws = Workspace::new();
+        let mut api = EditorApi::new(&mut ws);
+        api.notify(NotifyLevel::Error, "boom");
+        let intents = ws.drain_ui_intents();
+        assert_eq!(
+            intents,
+            vec![UiIntent::Notify {
+                level: NotifyLevel::Error,
+                text: "boom".to_string(),
+                timeout_ms: None,
+            }]
+        );
     }
 
     #[test]

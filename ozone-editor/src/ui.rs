@@ -10,6 +10,16 @@
 //! This keeps `ozone-editor` free of any windowing dependency while exposing a
 //! stable, command-driven extension point for the frontend.
 
+/// Severity of a [`UiIntent::Notify`] message — drives the toast's colour and,
+/// later, filtering/log level. Mirrors the usual `vim.log.levels` set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotifyLevel {
+    Info,
+    Success,
+    Warn,
+    Error,
+}
+
 /// A frontend action requested by a command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UiIntent {
@@ -31,6 +41,10 @@ pub enum UiIntent {
     /// command (with optional argument). The vim.ui.select pattern — lets any
     /// command or plugin build a custom picker without its own widget.
     Select { prompt: String, items: Vec<SelectItem> },
+    /// Post a transient notification (toast). `timeout_ms` is how long it stays
+    /// before auto-dismissing; `None` uses the frontend default. The vim.notify
+    /// / Emacs `message` surface — the frontend owns the popup list and timing.
+    Notify { level: NotifyLevel, text: String, timeout_ms: Option<u64> },
 }
 
 /// One row of a [`UiIntent::Select`] list. Choosing it runs `command` with

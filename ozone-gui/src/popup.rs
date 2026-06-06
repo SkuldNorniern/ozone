@@ -1,11 +1,14 @@
-//! Reusable floating-panel (popup / overlay) primitives.
+//! Reusable floating-panel (popup / overlay) primitives — the shared base every
+//! small popup draws on.
 //!
 //! Every overlay — the fuzzy picker, the find/replace bar, the modifier pills,
-//! and future which-key / completion / hover popups — is the same shape: a
-//! rounded, bordered panel (optionally over a dimmed scrim), positioned either
-//! centred or anchored to an edge. This module owns those primitives so the
-//! drawing is defined once and overlays just lay out their content inside a
-//! [`Rect`].
+//! the [which-key panel](crate::whichkey), the [notification toasts](crate::notify),
+//! and future completion / hover popups — is the same shape: a rounded, bordered
+//! panel (optionally over a dimmed scrim), positioned either centred or anchored
+//! to an edge. This module owns those primitives so the drawing is defined once
+//! and each overlay just lays out its content inside a [`Rect`]. Stateful popups
+//! that own a list + lifetime (like notifications) keep their controller in their
+//! own module and call back here only to draw.
 
 use aurea::AureaResult;
 use aurea::render::{Color, DrawingContext, Point, Rect};

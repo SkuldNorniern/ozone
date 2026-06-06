@@ -16,7 +16,7 @@ pub use autocmd::{Autocommand, AutocommandRegistry};
 pub use brackets::matching_bracket;
 pub use commands::{CommandContext, CommandRegistry};
 pub use events::{EditorEvent, EventKind};
-pub use ui::{SelectItem, UiIntent};
+pub use ui::{NotifyLevel, SelectItem, UiIntent};
 pub use keymap::{Key, KeyStroke, Keymap, KeymapOutcome, ModifierMap, PhysicalModifier, PhysicalMods, stroke_label};
 pub use options::{BufferLocal, OptionValue};
 pub use pane::{FocusDirection, PaneTree, SplitAxis};

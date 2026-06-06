@@ -167,6 +167,12 @@ impl Workspace {
         self.ui_intents.drain(..).collect()
     }
 
+    /// Post a transient notification toast with the frontend's default timeout.
+    /// Convenience over [`request_ui`](Self::request_ui); see [`EditorApi::notify`].
+    pub fn notify(&mut self, level: crate::ui::NotifyLevel, text: impl Into<String>) {
+        self.request_ui(UiIntent::Notify { level, text: text.into(), timeout_ms: None });
+    }
+
     /// Buffer-local option overrides for `id`, if any have been set.
     pub fn buffer_local(&self, id: BufferId) -> Option<&BufferLocal> {
         self.buffer_options.get(&id)

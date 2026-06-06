@@ -5,9 +5,26 @@ use ozone_buffer::{BufferId, BufferKind, Pos};
 
 use crate::events::EditorEvent;
 use crate::pane::{FocusDirection, SplitAxis};
-use crate::ui::UiIntent;
+use crate::ui::{NotifyLevel, UiIntent};
 use crate::view::ViewId;
 use crate::workspace::Workspace;
+
+/// A short display name for a buffer (file name, or its virtual-kind label).
+fn buffer_display_name(ws: &Workspace, id: BufferId) -> String {
+    match ws.buffers.get(&id).map(|b| &b.kind) {
+        Some(BufferKind::File(p)) => p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("?")
+            .to_string(),
+        Some(BufferKind::Scratch) => "*scratch*".to_string(),
+        Some(BufferKind::Search) => "*files*".to_string(),
+        Some(BufferKind::References) => "*references*".to_string(),
+        Some(BufferKind::Terminal) => "*terminal*".to_string(),
+        Some(BufferKind::Image(_)) => "*image*".to_string(),
+        None => "?".to_string(),
+    }
+}
 
 /// Everything a command needs to act on the editor state.
 pub struct CommandContext<'a> {
@@ -365,14 +382,24 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
     // --- file ---
 
     reg.register("file.save", "Save the current buffer", |ctx| {
-        let _ = ctx.workspace.save_buffer(ctx.buffer_id);
+        let id = ctx.buffer_id;
+        let name = buffer_display_name(ctx.workspace, id);
+        match ctx.workspace.save_buffer(id) {
+            Ok(()) => ctx.workspace.notify(NotifyLevel::Success, format!("Saved {name}")),
+            Err(e) => ctx.workspace.notify(NotifyLevel::Error, format!("Save failed: {e}")),
+        }
     });
 
     reg.register("file.save-all", "Save all dirty buffers", |ctx| {
         let ids: Vec<_> = ctx.workspace.buffers.keys().copied().collect();
+        let mut saved = 0usize;
         for id in ids {
-            let _ = ctx.workspace.save_buffer(id);
+            match ctx.workspace.save_buffer(id) {
+                Ok(()) => saved += 1,
+                Err(e) => ctx.workspace.notify(NotifyLevel::Error, format!("Save failed: {e}")),
+            }
         }
+        ctx.workspace.notify(NotifyLevel::Success, format!("Saved {saved} buffer(s)"));
     });
 
     // Frontend-driven overlays. These are real commands (so they work from
