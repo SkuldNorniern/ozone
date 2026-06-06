@@ -10,9 +10,9 @@ use aurea::AureaResult;
 use aurea::render::{DrawingContext, Font, Point};
 use ozone_editor::Workspace;
 
+use crate::baseline_in_rect;
 use crate::popup::{draw_panel, top_right_rect};
 use crate::theme::{PALETTE_DESC, PALETTE_FG, PALETTE_PROMPT, solid};
-use crate::baseline_in_rect;
 
 pub(crate) struct SearchState {
     pub(crate) query: String,
@@ -28,14 +28,7 @@ pub(crate) struct SearchState {
 
 impl SearchState {
     pub(crate) fn new(case_sensitive: bool) -> Self {
-        Self {
-            query: String::new(),
-            matches: Vec::new(),
-            current: 0,
-            case_sensitive,
-            replace: None,
-            focus_replace: false,
-        }
+        Self { query: String::new(), matches: Vec::new(), current: 0, case_sensitive, replace: None, focus_replace: false }
     }
 
     /// Turn on replace mode (keeps the existing query). Typing stays on the
@@ -72,10 +65,7 @@ pub(crate) fn search_recompute(s: &mut SearchState, ws: &Workspace) {
 
 /// Point `current` at the first match at/after the cursor (wrapping).
 pub(crate) fn search_select_from_cursor(s: &mut SearchState, ws: &Workspace) {
-    let from = ws
-        .active_view()
-        .and_then(|v| ws.buffers.get(&v.buffer_id).map(|b| b.pos_to_offset(v.cursor)))
-        .unwrap_or(0);
+    let from = ws.active_view().and_then(|v| ws.buffers.get(&v.buffer_id).map(|b| b.pos_to_offset(v.cursor))).unwrap_or(0);
     if let Some(i) = ozone_editor::search::first_match_from(&s.matches, from) {
         s.current = i;
     }
@@ -83,7 +73,9 @@ pub(crate) fn search_select_from_cursor(s: &mut SearchState, ws: &Workspace) {
 
 /// Move the cursor to the current match and scroll it into view.
 pub(crate) fn search_jump(s: &SearchState, ws: &mut Workspace) {
-    let Some(off) = s.current_offset() else { return };
+    let Some(off) = s.current_offset() else {
+        return;
+    };
     let pos = ws.active_buffer().map(|b| b.offset_to_pos(off));
     if let (Some(pos), Some(view)) = (pos, ws.active_view_mut()) {
         view.cursor = pos;
@@ -95,7 +87,9 @@ pub(crate) fn search_jump(s: &SearchState, ws: &mut Workspace) {
 /// Replace the `qbytes`-long match at byte offset `off` with `repl` in the
 /// active buffer. (Literal matches keep the query's byte length.)
 fn replace_at(ws: &mut Workspace, off: usize, qbytes: usize, repl: &str) {
-    let Some(buf) = ws.active_buffer_mut() else { return };
+    let Some(buf) = ws.active_buffer_mut() else {
+        return;
+    };
     if qbytes > 0 {
         let _ = buf.delete_at(off, qbytes);
     }
@@ -107,7 +101,9 @@ fn replace_at(ws: &mut Workspace, off: usize, qbytes: usize, repl: &str) {
 
 /// Replace the current match, then recompute and move to the next.
 pub(crate) fn search_replace_current(s: &mut SearchState, ws: &mut Workspace) {
-    let Some(off) = s.current_offset() else { return };
+    let Some(off) = s.current_offset() else {
+        return;
+    };
     let qbytes = s.query.len();
     if qbytes == 0 {
         return;
@@ -138,14 +134,11 @@ pub(crate) fn search_replace_all(s: &mut SearchState, ws: &mut Workspace) {
 }
 
 /// Handle a key while search is active. Returns whether a redraw is needed.
-pub(crate) fn handle_search_key(
-    key: aurea::KeyCode,
-    mods: aurea::Modifiers,
-    search: &mut Option<SearchState>,
-    ws: &mut Workspace,
-) -> bool {
+pub(crate) fn handle_search_key(key: aurea::KeyCode, mods: aurea::Modifiers, search: &mut Option<SearchState>, ws: &mut Workspace) -> bool {
     use aurea::KeyCode::*;
-    let Some(s) = search.as_mut() else { return false };
+    let Some(s) = search.as_mut() else {
+        return false;
+    };
     let in_replace = s.replace.is_some();
     match key {
         Escape => {
@@ -220,12 +213,7 @@ pub(crate) fn search_input_text(s: &mut SearchState, text: &str, ws: &Workspace)
 
 /// Top-right find bar: `find: <query>   (i/n)`, with a second `replace:` line
 /// when in replace mode. The focused input is marked.
-pub(crate) fn draw_search_bar(
-    ctx: &mut dyn DrawingContext,
-    s: &SearchState,
-    font: &Font,
-    width: f32,
-) -> AureaResult<()> {
+pub(crate) fn draw_search_bar(ctx: &mut dyn DrawingContext, s: &SearchState, font: &Font, width: f32) -> AureaResult<()> {
     let line_h = (font.size * 1.7).max(18.0);
     let m = ctx.measure_text("M", font).ok();
     let ascent = m.as_ref().map(|x| x.ascent).unwrap_or(font.size * 0.8);
@@ -239,9 +227,7 @@ pub(crate) fn draw_search_bar(
     let find_text = format!("find: {}{}", s.query, count);
     let replace_text = s.replace.as_ref().map(|r| format!("replace: {r}"));
 
-    let measure = |ctx: &mut dyn DrawingContext, t: &str| {
-        ctx.measure_text(t, font).map(|m| m.advance).unwrap_or(t.len() as f32 * font.size * 0.6)
-    };
+    let measure = |ctx: &mut dyn DrawingContext, t: &str| ctx.measure_text(t, font).map(|m| m.advance).unwrap_or(t.len() as f32 * font.size * 0.6);
     let find_w = measure(ctx, &find_text);
     let repl_w = replace_text.as_ref().map(|t| measure(ctx, t)).unwrap_or(0.0);
     let hint_w = if s.replace.is_some() { measure(ctx, "Tab switch · Enter one · ^Enter all") } else { 0.0 };

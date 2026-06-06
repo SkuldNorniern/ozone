@@ -27,4 +27,22 @@ pub enum UiIntent {
     /// typed text as its argument. The vim.ui.input / Emacs minibuffer pattern;
     /// lets commands (and plugins) take free-form input without a bespoke UI.
     Input { prompt: String, command: String },
+    /// Open a fuzzy picker over caller-supplied `items`; choosing one runs its
+    /// command (with optional argument). The vim.ui.select pattern — lets any
+    /// command or plugin build a custom picker without its own widget.
+    Select { prompt: String, items: Vec<SelectItem> },
+}
+
+/// One row of a [`UiIntent::Select`] list. Choosing it runs `command` with
+/// `arg` (if any).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectItem {
+    /// Primary text shown in the list.
+    pub label: String,
+    /// Secondary text (right-aligned, dim); empty to omit.
+    pub detail: String,
+    /// Command run on commit.
+    pub command: String,
+    /// Optional argument passed to the command.
+    pub arg: Option<String>,
 }

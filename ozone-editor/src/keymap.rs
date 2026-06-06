@@ -259,6 +259,26 @@ impl KeyStroke {
     }
 }
 
+/// Human-readable label for a single stroke (`"C-x"`, `"M-g"`, `"Enter"`),
+/// Emacs-style modifier prefixes. For which-key / chord display.
+pub fn stroke_label(stroke: &KeyStroke) -> String {
+    let mut s = String::new();
+    if stroke.control {
+        s.push_str("C-");
+    }
+    if stroke.meta {
+        s.push_str("M-");
+    }
+    if stroke.super_ {
+        s.push_str("s-");
+    }
+    if stroke.shift {
+        s.push_str("S-");
+    }
+    s.push_str(&stroke.key.label());
+    s
+}
+
 /// Parse a full chord string like `"ctrl+k ctrl+s"` into its strokes.
 pub fn parse_chord(keys: &str) -> Option<Vec<KeyStroke>> {
     let strokes: Vec<KeyStroke> = keys.split_whitespace().filter_map(KeyStroke::parse).collect();
@@ -400,6 +420,50 @@ impl Keymap {
         }
     }
 
+    /// Possible continuations of a pending chord prefix, for a which-key popup.
+    ///
+    /// Given the strokes already typed, returns one entry per *distinct next
+    /// stroke* that could extend `pending` into a binding: the next stroke's
+    /// label and either the command it runs (when that stroke completes a
+    /// binding) or `+prefix` (when it only leads to longer bindings). Highest
+    /// layer wins on ties; results are sorted by label for a stable display.
+    pub fn continuations(
+        &self,
+        pending: &[KeyStroke],
+        filetype: Option<&str>,
+    ) -> Vec<(String, String)> {
+        use std::collections::BTreeMap;
+        // next-stroke label -> (best layer seen, description)
+        let mut next: BTreeMap<String, (Layer, String)> = BTreeMap::new();
+        for b in &self.bindings {
+            if !Self::applies(b, filetype) || b.chord.len() <= pending.len() {
+                continue;
+            }
+            if b.chord[..pending.len()] != *pending {
+                continue;
+            }
+            let stroke = &b.chord[pending.len()];
+            let label = stroke_label(stroke);
+            // A binding that ends right here names a command; a longer one is a
+            // further prefix (group).
+            let desc = if b.chord.len() == pending.len() + 1 {
+                b.command.clone()
+            } else {
+                "+prefix".to_string()
+            };
+            next.entry(label)
+                .and_modify(|(layer, d)| {
+                    // Prefer a concrete command over a group, then higher layer.
+                    if b.layer > *layer || (*d == "+prefix" && desc != "+prefix") {
+                        *layer = b.layer;
+                        *d = desc.clone();
+                    }
+                })
+                .or_insert((b.layer, desc));
+        }
+        next.into_iter().map(|(k, (_, d))| (k, d)).collect()
+    }
+
     /// Resolve `pending + stroke` against the keymap for the active filetype.
     pub fn resolve(
         &self,
@@ -532,6 +596,34 @@ mod tests {
             km.resolve(&[], &s('p').with_control(), None),
             KeymapOutcome::Execute("command.palette".to_string())
         );
+    }
+
+    #[test]
+    fn continuations_list_next_strokes() {
+        let mut km = Keymap::new();
+        km.bind_default("ctrl+k ctrl+s", "file.save-all");
+        km.bind_default("ctrl+k ctrl+w", "pane.close");
+        km.bind_default("ctrl+k r", "file.reload"); // 2-stroke group? no, completes
+        // Pending C-k: three next strokes, each completing a binding.
+        let pending = vec![s('k').with_control()];
+        let cont = km.continuations(&pending, None);
+        assert_eq!(cont.len(), 3);
+        // Key::label uppercases printable chars (used for chord display).
+        assert!(cont.iter().any(|(k, c)| k == "C-S" && c == "file.save-all"));
+        assert!(cont.iter().any(|(k, c)| k == "C-W" && c == "pane.close"));
+        // No pending prefix and an empty match → empty.
+        assert!(km.continuations(&[s('z').with_control()], None).is_empty());
+        assert_eq!(stroke_label(&s('x').with_control()), "C-X");
+        assert_eq!(stroke_label(&KeyStroke::key(Key::Enter).with_meta()), "M-Enter");
+    }
+
+    #[test]
+    fn continuations_mark_longer_chains_as_prefix() {
+        let mut km = Keymap::new();
+        km.bind_default("ctrl+k ctrl+x ctrl+s", "deep.command");
+        let pending = vec![s('k').with_control()];
+        let cont = km.continuations(&pending, None);
+        assert_eq!(cont, vec![("C-X".to_string(), "+prefix".to_string())]);
     }
 
     #[test]

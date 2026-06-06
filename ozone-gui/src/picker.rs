@@ -9,14 +9,15 @@ use ozone_config::Config;
 use ozone_editor::{AutocommandRegistry, CommandRegistry, Workspace};
 
 use crate::popup::{centered_rect, draw_panel, draw_scrim, fill_round_rect};
-use crate::theme::{
-    PALETTE_DESC, PALETTE_FG, PALETTE_INPUT_BG, PALETTE_PROMPT, PALETTE_SEL, solid,
-};
-use crate::{baseline_in_rect, dispatch_autocmds, editor_font, run_cmd};
+use crate::theme::{PALETTE_DESC, PALETTE_FG, PALETTE_INPUT_BG, PALETTE_PROMPT, PALETTE_SEL, solid};
+use crate::{baseline_in_rect, dispatch_autocmds, editor_font, run_cmd, run_cmd_with_arg};
 
 /// What committing a picker item does.
+#[derive(Clone)]
 pub(crate) enum PickerAction {
     RunCommand(String),
+    /// Run a command with an argument (caller-supplied Select items).
+    RunCommandArg(String, Option<String>),
     OpenFile(std::path::PathBuf),
     SwitchBuffer(BufferId),
 }
@@ -45,26 +46,14 @@ pub(crate) struct PickerState {
 
 impl PickerState {
     pub(crate) fn new(prompt: impl Into<String>, all: Vec<PickerItem>) -> Self {
-        let mut s = Self {
-            prompt: prompt.into(),
-            query: String::new(),
-            all,
-            filtered: Vec::new(),
-            selected: 0,
-        };
+        let mut s = Self { prompt: prompt.into(), query: String::new(), all, filtered: Vec::new(), selected: 0 };
         s.refilter();
         s
     }
 
     fn refilter(&mut self) {
         let q = self.query.to_lowercase();
-        self.filtered = self
-            .all
-            .iter()
-            .enumerate()
-            .filter(|(_, item)| subsequence_match(&item.haystack, &q))
-            .map(|(i, _)| i)
-            .collect();
+        self.filtered = self.all.iter().enumerate().filter(|(_, item)| subsequence_match(&item.haystack, &q)).map(|(i, _)| i).collect();
         if self.selected >= self.filtered.len() {
             self.selected = self.filtered.len().saturating_sub(1);
         }
@@ -118,12 +107,7 @@ pub(crate) fn command_picker_items(reg: &CommandRegistry) -> Vec<PickerItem> {
         .map(|n| {
             let display = reg.display_name(n);
             let haystack = format!("{} {}", display, n).to_lowercase();
-            PickerItem {
-                display,
-                detail: reg.description(n).unwrap_or("").to_string(),
-                haystack,
-                action: PickerAction::RunCommand(n.to_string()),
-            }
+            PickerItem { display, detail: reg.description(n).unwrap_or("").to_string(), haystack, action: PickerAction::RunCommand(n.to_string()) }
         })
         .collect();
     v.sort_by(|a, b| a.display.cmp(&b.display));
@@ -137,12 +121,7 @@ pub(crate) fn file_picker_items() -> Vec<PickerItem> {
     };
     ozone_editor::commands::collect_workspace_files(&base, 5000)
         .into_iter()
-        .map(|rel| PickerItem {
-            haystack: rel.to_lowercase(),
-            display: rel.clone(),
-            detail: String::new(),
-            action: PickerAction::OpenFile(base.join(&rel)),
-        })
+        .map(|rel| PickerItem { haystack: rel.to_lowercase(), display: rel.clone(), detail: String::new(), action: PickerAction::OpenFile(base.join(&rel)) })
         .collect()
 }
 
@@ -156,7 +135,9 @@ pub(crate) fn buffer_picker_items(ws: &Workspace, mru: &[BufferId]) -> Vec<Picke
         if Some(id) == active {
             return;
         }
-        let Some(buf) = ws.buffers.get(&id) else { return };
+        let Some(buf) = ws.buffers.get(&id) else {
+            return;
+        };
         let (name, detail) = match &buf.kind {
             BufferKind::File(p) | BufferKind::Image(p) => {
                 let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("?").to_string();
@@ -187,6 +168,17 @@ pub(crate) fn buffer_picker_items(ws: &Workspace, mru: &[BufferId]) -> Vec<Picke
     items
 }
 
+/// Build picker items from caller-supplied [`SelectItem`]s (the `Select` intent).
+pub(crate) fn select_picker_items(items: Vec<ozone_editor::SelectItem>) -> Vec<PickerItem> {
+    items
+        .into_iter()
+        .map(|it| {
+            let haystack = format!("{} {}", it.label, it.detail).to_lowercase();
+            PickerItem { display: it.label, detail: it.detail, haystack, action: PickerAction::RunCommandArg(it.command, it.arg) }
+        })
+        .collect()
+}
+
 /// Handle a key while the picker is open. Letters arrive via TextInput;
 /// this covers navigation/commit/cancel. Returns whether a redraw is needed.
 pub(crate) fn handle_palette_key(
@@ -197,7 +189,9 @@ pub(crate) fn handle_palette_key(
     autocmds: &AutocommandRegistry,
 ) -> bool {
     use aurea::KeyCode::*;
-    let Some(p) = palette.as_mut() else { return false };
+    let Some(p) = palette.as_mut() else {
+        return false;
+    };
     match key {
         Escape => {
             *palette = None;
@@ -205,14 +199,14 @@ pub(crate) fn handle_palette_key(
         }
         Enter => {
             // Clone the chosen action, then close before performing it.
-            let action = p.selected_item().map(|item| match &item.action {
-                PickerAction::RunCommand(c) => PickerAction::RunCommand(c.clone()),
-                PickerAction::OpenFile(path) => PickerAction::OpenFile(path.clone()),
-                PickerAction::SwitchBuffer(id) => PickerAction::SwitchBuffer(*id),
-            });
+            let action = p.selected_item().map(|item| item.action.clone());
             *palette = None;
             match action {
                 Some(PickerAction::RunCommand(cmd)) => run_cmd(&cmd, ws, reg, autocmds),
+                Some(PickerAction::RunCommandArg(cmd, arg)) => match arg {
+                    Some(arg) => run_cmd_with_arg(&cmd, arg, ws, reg, autocmds),
+                    None => run_cmd(&cmd, ws, reg, autocmds),
+                },
                 Some(PickerAction::OpenFile(path)) => {
                     let _ = ws.open_file(path);
                     dispatch_autocmds(ws, reg, autocmds);
@@ -242,11 +236,7 @@ pub(crate) fn handle_palette_key(
 }
 
 /// Render the picker overlay: a centered rounded panel with prompt + result list.
-pub(crate) fn draw_palette(
-    ctx: &mut dyn DrawingContext,
-    p: &PickerState,
-    config: &Config,
-) -> AureaResult<()> {
+pub(crate) fn draw_palette(ctx: &mut dyn DrawingContext, p: &PickerState, config: &Config) -> AureaResult<()> {
     let w = ctx.width() as f32;
     let h = ctx.height() as f32;
     let font = editor_font(config);
@@ -257,9 +247,7 @@ pub(crate) fn draw_palette(
     let m = ctx.measure_text("M", &font).ok();
     let ascent = m.as_ref().map(|x| x.ascent).unwrap_or(font.size * 0.8);
     let descent = m.as_ref().map(|x| x.descent).unwrap_or(font.size * 0.2);
-    let measure = |ctx: &mut dyn DrawingContext, s: &str| {
-        ctx.measure_text(s, &font).map(|m| m.advance).unwrap_or(s.len() as f32 * font.size * 0.6)
-    };
+    let measure = |ctx: &mut dyn DrawingContext, s: &str| ctx.measure_text(s, &font).map(|m| m.advance).unwrap_or(s.len() as f32 * font.size * 0.6);
 
     // Dim the editor behind the panel.
     draw_scrim(ctx, w, h)?;
@@ -328,8 +316,7 @@ mod tests {
             .map(|n| PickerItem {
                 display: ozone_editor::commands::pretty_command_name(n),
                 detail: String::new(),
-                haystack: format!("{} {}", ozone_editor::commands::pretty_command_name(n), n)
-                    .to_lowercase(),
+                haystack: format!("{} {}", ozone_editor::commands::pretty_command_name(n), n).to_lowercase(),
                 action: PickerAction::RunCommand(n.to_string()),
             })
             .collect()

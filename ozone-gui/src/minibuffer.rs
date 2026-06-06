@@ -25,21 +25,12 @@ impl Minibuffer {
 }
 
 /// Bottom-anchored prompt bar: `<prompt> <input>|`.
-pub(crate) fn draw_minibuffer(
-    ctx: &mut dyn DrawingContext,
-    mb: &Minibuffer,
-    font: &Font,
-    width: f32,
-    height: f32,
-    status_h: f32,
-) -> AureaResult<()> {
+pub(crate) fn draw_minibuffer(ctx: &mut dyn DrawingContext, mb: &Minibuffer, font: &Font, width: f32, height: f32, status_h: f32) -> AureaResult<()> {
     let line_h = (font.size * 1.7).max(18.0);
     let m = ctx.measure_text("M", font).ok();
     let ascent = m.as_ref().map(|x| x.ascent).unwrap_or(font.size * 0.8);
     let descent = m.as_ref().map(|x| x.descent).unwrap_or(font.size * 0.2);
-    let measure = |ctx: &mut dyn DrawingContext, t: &str| {
-        ctx.measure_text(t, font).map(|m| m.advance).unwrap_or(t.len() as f32 * font.size * 0.6)
-    };
+    let measure = |ctx: &mut dyn DrawingContext, t: &str| ctx.measure_text(t, font).map(|m| m.advance).unwrap_or(t.len() as f32 * font.size * 0.6);
 
     let pad = 10.0;
     let bh = line_h + 8.0;
