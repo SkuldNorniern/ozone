@@ -1,19 +1,25 @@
+pub mod api;
 pub mod autocmd;
 pub mod brackets;
 pub mod commands;
 pub mod events;
 pub mod keymap;
+pub mod options;
 pub mod pane;
 pub mod search;
+pub mod ui;
 pub mod view;
 pub mod workspace;
 
+pub use api::EditorApi;
 pub use autocmd::{Autocommand, AutocommandRegistry};
 pub use brackets::matching_bracket;
 pub use commands::{CommandContext, CommandRegistry};
 pub use events::{EditorEvent, EventKind};
+pub use ui::UiIntent;
 pub use keymap::{Key, KeyStroke, Keymap, KeymapOutcome, ModifierMap, PhysicalModifier, PhysicalMods};
-pub use pane::{PaneTree, SplitAxis};
+pub use options::{BufferLocal, OptionValue};
+pub use pane::{FocusDirection, PaneTree, SplitAxis};
 pub use search::find_matches;
 pub use view::{View, ViewId};
 pub use workspace::{IndentConfig, Workspace};

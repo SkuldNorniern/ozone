@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use ozone_buffer::{Buffer, BufferId, BufferKind, Pos};
 
 use crate::events::EditorEvent;
+use crate::options::{BufferLocal, OptionValue};
 use crate::pane::{FocusDirection, PaneTree, SplitAxis};
+use crate::ui::UiIntent;
 use crate::view::{View, ViewId};
 
 /// A point in the jump list: which buffer and where in it.
@@ -53,7 +55,10 @@ pub struct Workspace {
     pub active_view_id: Option<ViewId>,
     pub panes: Option<PaneTree>,
     pub indent: IndentConfig,
+    /// Per-buffer setting overrides (`[[filetype]]`, autocommands, plugins).
+    buffer_options: HashMap<BufferId, BufferLocal>,
     events: Vec<EditorEvent>,
+    ui_intents: Vec<UiIntent>,
     jumps: JumpList,
 }
 
@@ -65,7 +70,9 @@ impl Workspace {
             active_view_id: None,
             panes: None,
             indent: IndentConfig::default(),
+            buffer_options: HashMap::new(),
             events: Vec::new(),
+            ui_intents: Vec::new(),
             jumps: JumpList::default(),
         };
         // Always have a *scratch* buffer open.
@@ -148,6 +155,53 @@ impl Workspace {
 
     pub fn drain_events(&mut self) -> Vec<EditorEvent> {
         self.events.drain(..).collect()
+    }
+
+    /// Queue a frontend action (see [`UiIntent`]). Commands use this to drive
+    /// overlays without depending on the GUI; the frontend drains it each frame.
+    pub fn request_ui(&mut self, intent: UiIntent) {
+        self.ui_intents.push(intent);
+    }
+
+    pub fn drain_ui_intents(&mut self) -> Vec<UiIntent> {
+        self.ui_intents.drain(..).collect()
+    }
+
+    /// Buffer-local option overrides for `id`, if any have been set.
+    pub fn buffer_local(&self, id: BufferId) -> Option<&BufferLocal> {
+        self.buffer_options.get(&id)
+    }
+
+    /// Mutable buffer-local overrides for `id`, creating an empty set if needed.
+    pub fn buffer_local_mut(&mut self, id: BufferId) -> &mut BufferLocal {
+        self.buffer_options.entry(id).or_default()
+    }
+
+    /// Set one buffer-local option by name (config / plugin surface).
+    pub fn set_local(&mut self, id: BufferId, key: &str, value: OptionValue) {
+        self.buffer_options.entry(id).or_default().set(key, value);
+    }
+
+    /// Effective indent settings for a buffer: buffer-local overrides layered
+    /// over the global default.
+    pub fn indent_for(&self, id: BufferId) -> IndentConfig {
+        let mut cfg = self.indent;
+        if let Some(local) = self.buffer_options.get(&id) {
+            if let Some(w) = local.tab_width {
+                cfg.width = w;
+            }
+            if let Some(soft) = local.soft_tabs {
+                cfg.soft_tabs = soft;
+            }
+        }
+        cfg
+    }
+
+    /// Indent settings for the active buffer (falls back to global).
+    pub fn active_indent(&self) -> IndentConfig {
+        self.active_view()
+            .map(|v| self.indent_for(v.buffer_id))
+            .unwrap_or(self.indent)
     }
 
     pub fn save_buffer(&mut self, id: BufferId) -> std::io::Result<()> {
@@ -432,6 +486,7 @@ impl Workspace {
             .unwrap_or(false);
         if should_remove {
             self.buffers.remove(&buffer_id);
+            self.buffer_options.remove(&buffer_id);
         }
     }
 }
@@ -619,6 +674,26 @@ mod tests {
         let mut ws = Workspace::new();
         assert!(!ws.jump_back());
         assert!(!ws.jump_forward());
+    }
+
+    #[test]
+    fn buffer_local_overrides_indent() {
+        use crate::options::OptionValue;
+        let mut ws = Workspace::new();
+        ws.indent = IndentConfig { width: 4, soft_tabs: true };
+        let bid = ws.active_buffer().unwrap().id;
+        // Global default applies until overridden.
+        assert_eq!(ws.indent_for(bid).width, 4);
+        ws.set_local(bid, "tab_width", OptionValue::Int(2));
+        ws.set_local(bid, "soft_tabs", OptionValue::Bool(false));
+        let eff = ws.indent_for(bid);
+        assert_eq!(eff.width, 2);
+        assert!(!eff.soft_tabs);
+        // A second, untouched buffer keeps the global default.
+        let other = ozone_buffer::Buffer::from_text("x");
+        let oid = other.id;
+        ws.buffers.insert(oid, other);
+        assert_eq!(ws.indent_for(oid).width, 4);
     }
 
     #[test]

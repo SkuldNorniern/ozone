@@ -1,0 +1,26 @@
+//! UI intents: requests a command makes for the frontend to act on.
+//!
+//! Some actions — opening the command palette, a fuzzy picker, or the
+//! find/replace bar — are *frontend* concerns (they manage overlay widgets and
+//! input focus), but they must still be reachable as ordinary commands so they
+//! work from keymaps, the palette, autocommands, and (later) plugins.
+//!
+//! The bridge is a queue: a command calls [`Workspace::request_ui`] with a
+//! [`UiIntent`]; the GUI drains the queue each frame and performs the action.
+//! This keeps `ozone-editor` free of any windowing dependency while exposing a
+//! stable, command-driven extension point for the frontend.
+
+/// A frontend action requested by a command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UiIntent {
+    /// Open the command palette (fuzzy list of all commands).
+    CommandPalette,
+    /// Open the workspace file picker.
+    FilePicker,
+    /// Open the open-buffer picker (most-recently-used).
+    BufferPicker,
+    /// Start incremental in-buffer search.
+    SearchStart,
+    /// Start in-buffer search with the replace field shown.
+    SearchReplace,
+}

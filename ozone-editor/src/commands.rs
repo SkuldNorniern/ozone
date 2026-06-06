@@ -5,6 +5,7 @@ use ozone_buffer::{BufferId, BufferKind, Pos};
 
 use crate::events::EditorEvent;
 use crate::pane::{FocusDirection, SplitAxis};
+use crate::ui::UiIntent;
 use crate::view::ViewId;
 use crate::workspace::Workspace;
 
@@ -259,7 +260,7 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
 
     reg.register("edit.insert-newline", "Insert a newline, preserving indentation", |ctx| {
         let cursor = ctx.workspace.views.get(&ctx.view_id).unwrap().cursor;
-        let indent_unit = ctx.workspace.indent.unit();
+        let indent_unit = ctx.workspace.indent_for(ctx.buffer_id).unit();
 
         // Smart indent: copy the current line's leading whitespace, and add one
         // level when the text before the cursor ends with an opening bracket.
@@ -345,23 +346,24 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
         }
     });
 
-    reg.register(
-        "file.picker",
-        "List workspace files in a picker buffer (Enter opens, Esc closes)",
-        |ctx| {
-            let entries = match std::env::current_dir() {
-                Ok(dir) => collect_workspace_files(&dir, 5000),
-                Err(_) => Vec::new(),
-            };
-            let content = if entries.is_empty() {
-                "No files found.\n".to_string()
-            } else {
-                // One relative path per line so a line maps directly to a file.
-                format!("{}\n", entries.join("\n"))
-            };
-            ctx.workspace.open_virtual_buffer(BufferKind::Search, content);
-        },
-    );
+    // Frontend-driven overlays. These are real commands (so they work from
+    // keymaps, the palette, autocommands, and plugins), but the actual widget is
+    // a GUI concern, so each just queues a `UiIntent` the frontend acts on.
+    reg.register("command.palette", "Open the command palette", |ctx| {
+        ctx.workspace.request_ui(UiIntent::CommandPalette);
+    });
+    reg.register("file.picker", "Open the workspace file picker", |ctx| {
+        ctx.workspace.request_ui(UiIntent::FilePicker);
+    });
+    reg.register("buffer.picker", "Switch to an open buffer (fuzzy picker)", |ctx| {
+        ctx.workspace.request_ui(UiIntent::BufferPicker);
+    });
+    reg.register("search.start", "Incremental search in the buffer", |ctx| {
+        ctx.workspace.request_ui(UiIntent::SearchStart);
+    });
+    reg.register("search.replace", "Search and replace in the buffer", |ctx| {
+        ctx.workspace.request_ui(UiIntent::SearchReplace);
+    });
 
     reg.register(
         "picker.open-selection",
