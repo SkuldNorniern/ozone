@@ -18,6 +18,7 @@ pub(crate) enum PickerAction {
     RunCommand(String),
     /// Run a command with an argument (caller-supplied Select items).
     RunCommandArg(String, Option<String>),
+    ApplyTheme(String),
     OpenFile(std::path::PathBuf),
     SwitchBuffer(BufferId),
 }
@@ -227,7 +228,7 @@ pub(crate) fn theme_picker_items() -> Vec<PickerItem> {
             haystack: format!("{} {}", theme.name, theme.id).to_lowercase(),
             display: theme.name,
             detail: theme.id.clone(),
-            action: PickerAction::RunCommandArg("theme.set".to_string(), Some(theme.id)),
+            action: PickerAction::ApplyTheme(theme.id),
         })
         .collect()
 }
@@ -260,6 +261,9 @@ pub(crate) fn handle_palette_key(
                     Some(arg) => run_cmd_with_arg(&cmd, arg, ws, reg, autocmds),
                     None => run_cmd(&cmd, ws, reg, autocmds),
                 },
+                Some(PickerAction::ApplyTheme(name)) => {
+                    crate::theme::activate(&name);
+                }
                 Some(PickerAction::OpenFile(path)) => {
                     let _ = ws.open_file(path);
                     dispatch_autocmds(ws, reg, autocmds);

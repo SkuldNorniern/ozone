@@ -31,8 +31,6 @@ pub enum UiIntent {
     BufferPicker,
     /// Open the installed-theme picker.
     ThemePicker,
-    /// Activate a theme by installed name or explicit TOML path.
-    SetTheme { name: String },
     /// Start incremental in-buffer search.
     SearchStart,
     /// Start in-buffer search with the replace field shown.
@@ -44,11 +42,18 @@ pub enum UiIntent {
     /// Open a fuzzy picker over caller-supplied `items`; choosing one runs its
     /// command (with optional argument). The vim.ui.select pattern — lets any
     /// command or plugin build a custom picker without its own widget.
-    Select { prompt: String, items: Vec<SelectItem> },
+    Select {
+        prompt: String,
+        items: Vec<SelectItem>,
+    },
     /// Post a transient notification (toast). `timeout_ms` is how long it stays
     /// before auto-dismissing; `None` uses the frontend default. The vim.notify
     /// / Emacs `message` surface — the frontend owns the popup list and timing.
-    Notify { level: NotifyLevel, text: String, timeout_ms: Option<u64> },
+    Notify {
+        level: NotifyLevel,
+        text: String,
+        timeout_ms: Option<u64>,
+    },
 }
 
 /// One row of a [`UiIntent::Select`] list. Choosing it runs `command` with

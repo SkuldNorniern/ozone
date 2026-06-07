@@ -26,22 +26,26 @@ fn decode_image(path: &std::path::Path) -> Option<Image> {
 use aurea::render::{Canvas, DrawingContext, Font, Image, Point, Rect, RendererBackend};
 use aurea::{AureaResult, Element, MouseButton, Window, WindowEvent};
 
+mod actions;
 mod input;
 mod minibuffer;
+mod mouse;
 mod notify;
 mod picker;
 mod popup;
 mod search;
 mod theme;
 mod whichkey;
+pub(crate) use actions::*;
 use input::*;
 use minibuffer::*;
+use mouse::MouseState;
 use notify::*;
 use ozone_buffer::{BufferId, BufferKind};
 use ozone_config::{Config, CursorStyle, FiletypeConfig, LineNumbers};
 use ozone_editor::commands::register_defaults;
 use ozone_editor::{
-    AutocommandRegistry, CommandContext, CommandRegistry, EditorEvent, IndentConfig, KeyStroke,
+    AutocommandRegistry, CommandRegistry, EditorEvent, IndentConfig, KeyStroke,
     Keymap, KeymapOutcome, ModifierMap, PaneTree, SplitAxis, UiIntent, ViewId, Workspace,
     matching_bracket,
 };
@@ -254,9 +258,9 @@ impl OzoneGui {
         // Live physical modifier state, updated on every key press/release, for
         // the status-bar modifier indicator.
         let mut live_mods = aurea::Modifiers::default();
-        // Mouse button events do not carry coordinates, so retain the most
-        // recent move position for click dispatch and editor hit testing.
-        let mut mouse_pos: Option<(f32, f32)> = None;
+        // Pointer state for the run loop (last position now; the unified
+        // pointer model from docs/aurea-pointer-roadmap.md will grow here).
+        let mut mouse = MouseState::default();
 
         // --------------- event loop ---------------
         loop {
@@ -475,7 +479,7 @@ impl OzoneGui {
                     }
 
                     WindowEvent::MouseMove { x, y } => {
-                        mouse_pos = Some((x as f32, y as f32));
+                        mouse.moved(x as f32, y as f32);
                         if self.config.ui.mouse {
                             let canvas = lock(canvas_arc.as_ref());
                             let _ = canvas.handle_hover(x as f32, y as f32);
@@ -486,10 +490,11 @@ impl OzoneGui {
                         button: MouseButton::Left,
                         pressed: true,
                         modifiers,
+                        x,
+                        y,
+                        ..
                     } if self.config.ui.mouse => {
-                        let Some((x, y)) = mouse_pos else {
-                            continue;
-                        };
+                        let (x, y) = (x as f32, y as f32);
                         {
                             // Sparse Canvas controls can opt into Aurea's
                             // InteractiveId callback system.
@@ -525,7 +530,7 @@ impl OzoneGui {
                     WindowEvent::MouseWheel { delta_y, .. } => {
                         let mut ws = lock(self.workspace.as_ref());
                         if self.config.ui.mouse
-                            && let Some((x, y)) = mouse_pos
+                            && let Some((x, y)) = mouse.pos()
                         {
                             let (width, height) = {
                                 let canvas = lock(canvas_arc.as_ref());
@@ -1023,21 +1028,6 @@ pub(crate) fn apply_ui_intents(
             UiIntent::ThemePicker => {
                 *palette = Some(PickerState::new("theme:", theme_picker_items()));
             }
-            UiIntent::SetTheme { name } => {
-                if theme::activate(&name) {
-                    notifications.push(
-                        ozone_editor::NotifyLevel::Success,
-                        format!("Theme: {name}"),
-                        None,
-                    );
-                } else {
-                    notifications.push(
-                        ozone_editor::NotifyLevel::Error,
-                        format!("Theme not found or invalid: {name}"),
-                        None,
-                    );
-                }
-            }
             UiIntent::SearchStart => open_search(ws, search, false),
             UiIntent::SearchReplace => open_search(ws, search, true),
             UiIntent::Input { prompt, command } => {
@@ -1075,198 +1065,6 @@ fn open_search(ws: &mut Workspace, search: &mut Option<SearchState>, replace: bo
     search_recompute(&mut s, ws);
     search_select_from_cursor(&mut s, ws);
     *search = Some(s);
-}
-
-pub(crate) fn run_cmd(
-    name: &str,
-    ws: &mut Workspace,
-    reg: &CommandRegistry,
-    autocmds: &AutocommandRegistry,
-) {
-    if name == "file.save" {
-        if let Some(buffer_id) = ws.active_view().map(|view| view.buffer_id) {
-            run_pre_save_autocmds(buffer_id, ws, reg, autocmds);
-        }
-    } else if name == "file.save-all" {
-        let ids: Vec<_> = ws.buffers.keys().copied().collect();
-        for id in ids {
-            run_pre_save_autocmds(id, ws, reg, autocmds);
-        }
-    }
-
-    execute_command(name, ws, reg);
-    dispatch_autocmds(ws, reg, autocmds);
-}
-
-fn execute_command(name: &str, ws: &mut Workspace, reg: &CommandRegistry) {
-    execute_command_arg(name, None, ws, reg);
-}
-
-fn execute_command_arg(name: &str, arg: Option<String>, ws: &mut Workspace, reg: &CommandRegistry) {
-    if let Some(ctx) = CommandContext::new(ws) {
-        let mut ctx = ctx.with_arg(arg);
-        reg.execute(name, &mut ctx);
-    }
-    if let Some(view) = ws.active_view_mut() {
-        view.scroll_to_cursor(view.page_height.max(1));
-    }
-}
-
-/// Handle a key while the minibuffer prompt is open. Letters arrive via
-/// TextInput; this covers submit/cancel/erase. Returns whether to redraw.
-fn handle_minibuffer_key(
-    key: aurea::KeyCode,
-    minibuffer: &mut Option<Minibuffer>,
-    ws: &mut Workspace,
-    reg: &CommandRegistry,
-    autocmds: &AutocommandRegistry,
-) -> bool {
-    use aurea::KeyCode::*;
-    let Some(mb) = minibuffer.as_mut() else {
-        return false;
-    };
-    match key {
-        Escape => {
-            *minibuffer = None;
-            true
-        }
-        Enter => {
-            let (cmd, input) = (mb.command.clone(), mb.input.clone());
-            *minibuffer = None;
-            run_cmd_with_arg(&cmd, input, ws, reg, autocmds);
-            true
-        }
-        Backspace => {
-            mb.input.pop();
-            true
-        }
-        _ => false,
-    }
-}
-
-/// Run a command with a string argument (minibuffer submit), then dispatch
-/// autocommands. Mirrors `run_cmd` but passes `arg` to the command.
-pub(crate) fn run_cmd_with_arg(
-    name: &str,
-    arg: String,
-    ws: &mut Workspace,
-    reg: &CommandRegistry,
-    autocmds: &AutocommandRegistry,
-) {
-    execute_command_arg(name, Some(arg), ws, reg);
-    dispatch_autocmds(ws, reg, autocmds);
-}
-
-fn run_pre_save_autocmds(
-    buffer_id: BufferId,
-    ws: &mut Workspace,
-    reg: &CommandRegistry,
-    autocmds: &AutocommandRegistry,
-) {
-    let path = ws.buffers.get(&buffer_id).and_then(|buf| match &buf.kind {
-        BufferKind::File(path) => Some(path.clone()),
-        _ => None,
-    });
-    let Some(path) = path else {
-        return;
-    };
-
-    let event = EditorEvent::BufferPreSave {
-        id: buffer_id,
-        path,
-    };
-    let commands: Vec<String> = autocmds
-        .matching_commands(&event)
-        .into_iter()
-        .map(str::to_string)
-        .collect();
-    for command in commands {
-        if command == "file.save" || command == "file.save-all" {
-            continue;
-        }
-        execute_command(&command, ws, reg);
-    }
-}
-
-pub(crate) fn dispatch_autocmds(
-    ws: &mut Workspace,
-    reg: &CommandRegistry,
-    autocmds: &AutocommandRegistry,
-) {
-    const MAX_AUTOCMD_ROUNDS: usize = 16;
-
-    for _ in 0..MAX_AUTOCMD_ROUNDS {
-        let events = ws.drain_events();
-        if events.is_empty() {
-            break;
-        }
-
-        let commands: Vec<String> = events
-            .iter()
-            .flat_map(|event| autocmds.matching_commands(event))
-            .map(str::to_string)
-            .collect();
-
-        if commands.is_empty() {
-            continue;
-        }
-
-        for command in commands {
-            if command == "file.save" || command == "file.save-all" {
-                continue;
-            }
-            execute_command(&command, ws, reg);
-        }
-    }
-}
-
-fn insert_text_raw(text: &str, ws: &mut Workspace) -> bool {
-    let filtered: String = text.chars().filter(|c| !c.is_control()).collect();
-    if filtered.is_empty() {
-        return false;
-    }
-
-    let Some(view) = ws.active_view() else {
-        return false;
-    };
-    let cursor = view.cursor;
-    let buf_id = view.buffer_id;
-
-    // Virtual/read-only surfaces (pickers, terminal placeholder) reject edits.
-    if matches!(
-        ws.buffers.get(&buf_id).map(|b| &b.kind),
-        Some(
-            BufferKind::Search
-                | BufferKind::References
-                | BufferKind::Terminal
-                | BufferKind::Image(_)
-        )
-    ) {
-        return false;
-    }
-
-    if let Some(buf) = ws.buffers.get_mut(&buf_id) {
-        let delta = buf.insert(cursor, &filtered);
-        // Cursor columns are byte offsets (see Pos docs); advance by the inserted
-        // byte length, not the char count, or multi-byte input desyncs the cursor
-        // from the buffer offset.
-        let bytes = filtered.len();
-        let cursor_event = ws.active_view_mut().map(|view| {
-            view.cursor.col += bytes;
-            view.col_memory = view.cursor.col;
-            view.scroll_to_cursor(view.page_height.max(1));
-            EditorEvent::CursorMoved {
-                view_id: view.id,
-                pos: view.cursor,
-            }
-        });
-        if let Some(event) = cursor_event {
-            ws.emit(event);
-        }
-        ws.emit(EditorEvent::BufferChanged { id: buf_id, delta });
-        return true;
-    }
-    false
 }
 
 // ---------------------------------------------------------------------------

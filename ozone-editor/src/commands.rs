@@ -39,7 +39,12 @@ impl<'a> CommandContext<'a> {
     pub fn new(workspace: &'a mut Workspace) -> Option<Self> {
         let view_id = workspace.active_view_id?;
         let buffer_id = workspace.views.get(&view_id)?.buffer_id;
-        Some(Self { view_id, buffer_id, workspace, arg: None })
+        Some(Self {
+            view_id,
+            buffer_id,
+            workspace,
+            arg: None,
+        })
     }
 
     /// Set the command argument (consumed by commands that take input).
@@ -59,12 +64,21 @@ pub struct CommandRegistry {
 
 impl CommandRegistry {
     pub fn new() -> Self {
-        Self { commands: HashMap::new(), descriptions: HashMap::new() }
+        Self {
+            commands: HashMap::new(),
+            descriptions: HashMap::new(),
+        }
     }
 
-    pub fn register(&mut self, name: &str, description: &str, f: impl Fn(&mut CommandContext) + Send + Sync + 'static) {
+    pub fn register(
+        &mut self,
+        name: &str,
+        description: &str,
+        f: impl Fn(&mut CommandContext) + Send + Sync + 'static,
+    ) {
         self.commands.insert(name.to_string(), Box::new(f));
-        self.descriptions.insert(name.to_string(), description.to_string());
+        self.descriptions
+            .insert(name.to_string(), description.to_string());
     }
 
     /// Returns true if the command existed.
@@ -122,36 +136,44 @@ impl Default for CommandRegistry {
 pub fn register_defaults(reg: &mut CommandRegistry) {
     // --- cursor movement ---
 
-    reg.register("cursor.move-left", "Move cursor one character left", |ctx| {
-        let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
-        let old = view.cursor;
-        view.selection = None;
-        if view.cursor.col > 0 {
-            view.cursor.col -= 1;
-        } else if view.cursor.line > 0 {
-            view.cursor.line -= 1;
-            let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
-            view.cursor.col = buf.line_len(view.cursor.line);
-        }
-        view.col_memory = view.cursor.col;
-        emit_cursor_moved(ctx, old);
-    });
+    reg.register(
+        "cursor.move-left",
+        "Move cursor one character left",
+        |ctx| {
+            let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+            let old = view.cursor;
+            view.selection = None;
+            if view.cursor.col > 0 {
+                view.cursor.col -= 1;
+            } else if view.cursor.line > 0 {
+                view.cursor.line -= 1;
+                let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
+                view.cursor.col = buf.line_len(view.cursor.line);
+            }
+            view.col_memory = view.cursor.col;
+            emit_cursor_moved(ctx, old);
+        },
+    );
 
-    reg.register("cursor.move-right", "Move cursor one character right", |ctx| {
-        let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
-        let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
-        let old = view.cursor;
-        view.selection = None;
-        let line_len = buf.line_len(view.cursor.line);
-        if view.cursor.col < line_len {
-            view.cursor.col += 1;
-        } else if view.cursor.line + 1 < buf.line_count() {
-            view.cursor.line += 1;
-            view.cursor.col = 0;
-        }
-        view.col_memory = view.cursor.col;
-        emit_cursor_moved(ctx, old);
-    });
+    reg.register(
+        "cursor.move-right",
+        "Move cursor one character right",
+        |ctx| {
+            let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
+            let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+            let old = view.cursor;
+            view.selection = None;
+            let line_len = buf.line_len(view.cursor.line);
+            if view.cursor.col < line_len {
+                view.cursor.col += 1;
+            } else if view.cursor.line + 1 < buf.line_count() {
+                view.cursor.line += 1;
+                view.cursor.col = 0;
+            }
+            view.col_memory = view.cursor.col;
+            emit_cursor_moved(ctx, old);
+        },
+    );
 
     reg.register("cursor.move-up", "Move cursor one line up", |ctx| {
         let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
@@ -221,13 +243,21 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
         emit_cursor_moved(ctx, old);
     });
 
-    reg.register("view.jump-back", "Jump to the previous cursor location", |ctx| {
-        ctx.workspace.jump_back();
-    });
+    reg.register(
+        "view.jump-back",
+        "Jump to the previous cursor location",
+        |ctx| {
+            ctx.workspace.jump_back();
+        },
+    );
 
-    reg.register("view.jump-forward", "Jump to the next cursor location", |ctx| {
-        ctx.workspace.jump_forward();
-    });
+    reg.register(
+        "view.jump-forward",
+        "Jump to the next cursor location",
+        |ctx| {
+            ctx.workspace.jump_forward();
+        },
+    );
 
     reg.register("edit.goto-line", "Go to a line number", |ctx| {
         // No argument yet: prompt for one (re-invokes this command with the text).
@@ -238,8 +268,16 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
             });
             return;
         };
-        let Ok(n) = arg.trim().parse::<usize>() else { return };
-        let last = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap().line_count().saturating_sub(1);
+        let Ok(n) = arg.trim().parse::<usize>() else {
+            return;
+        };
+        let last = ctx
+            .workspace
+            .buffers
+            .get(&ctx.buffer_id)
+            .unwrap()
+            .line_count()
+            .saturating_sub(1);
         let line = n.saturating_sub(1).min(last); // 1-based input
         ctx.workspace.push_jump();
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
@@ -252,89 +290,122 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
 
     // --- editing ---
 
-    reg.register("edit.delete-char-backward", "Delete character before cursor", |ctx| {
-        let view = ctx.workspace.views.get(&ctx.view_id).unwrap();
-        let cursor = view.cursor;
-        let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
-
-        if cursor.col > 0 {
-            let offset = buf.pos_to_offset(cursor) - 1;
-            let buf = ctx.workspace.buffers.get_mut(&ctx.buffer_id).unwrap();
-            let delta = buf.delete_at(offset, 1);
-            let cursor = {
-                let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
-                view.cursor.col -= 1;
-                view.col_memory = view.cursor.col;
-                view.cursor
-            };
-            if let Some(delta) = delta {
-                ctx.workspace.emit(EditorEvent::BufferChanged { id: ctx.buffer_id, delta });
-            }
-            ctx.workspace.emit(EditorEvent::CursorMoved { view_id: ctx.view_id, pos: cursor });
-        } else if cursor.line > 0 {
-            // Join with previous line
-            let prev_line_len = buf.line_len(cursor.line - 1);
-            let offset = buf.pos_to_offset(Pos::new(cursor.line - 1, prev_line_len));
-            let buf = ctx.workspace.buffers.get_mut(&ctx.buffer_id).unwrap();
-            let delta = buf.delete_at(offset, 1); // delete the '\n'
-            let cursor = {
-                let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
-                view.cursor = Pos::new(cursor.line - 1, prev_line_len);
-                view.col_memory = view.cursor.col;
-                view.cursor
-            };
-            if let Some(delta) = delta {
-                ctx.workspace.emit(EditorEvent::BufferChanged { id: ctx.buffer_id, delta });
-            }
-            ctx.workspace.emit(EditorEvent::CursorMoved { view_id: ctx.view_id, pos: cursor });
-        }
-    });
-
-    reg.register("edit.delete-char-forward", "Delete character after cursor", |ctx| {
-        let view = ctx.workspace.views.get(&ctx.view_id).unwrap();
-        let cursor = view.cursor;
-        let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
-        let offset = buf.pos_to_offset(cursor);
-        let total = buf.text().len();
-        if offset < total {
-            let buf = ctx.workspace.buffers.get_mut(&ctx.buffer_id).unwrap();
-            if let Some(delta) = buf.delete_at(offset, 1) {
-                ctx.workspace.emit(EditorEvent::BufferChanged { id: ctx.buffer_id, delta });
-            }
-        }
-    });
-
-    reg.register("edit.insert-newline", "Insert a newline, preserving indentation", |ctx| {
-        let cursor = ctx.workspace.views.get(&ctx.view_id).unwrap().cursor;
-        let indent_unit = ctx.workspace.indent_for(ctx.buffer_id).unit();
-
-        // Smart indent: copy the current line's leading whitespace, and add one
-        // level when the text before the cursor ends with an opening bracket.
-        let indent = {
+    reg.register(
+        "edit.delete-char-backward",
+        "Delete character before cursor",
+        |ctx| {
+            let view = ctx.workspace.views.get(&ctx.view_id).unwrap();
+            let cursor = view.cursor;
             let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
-            let line_text = buf.line(cursor.line).unwrap_or_default();
-            let lead = leading_whitespace(&line_text);
-            let before = &line_text[..cursor.col.min(line_text.len())];
-            let opens_block = before.trim_end().ends_with(['{', '(', '[']);
-            if opens_block {
-                format!("{lead}{indent_unit}")
-            } else {
-                lead.to_string()
-            }
-        };
 
-        let insert = format!("\n{indent}");
-        let buf = ctx.workspace.buffers.get_mut(&ctx.buffer_id).unwrap();
-        let delta = buf.insert(cursor, &insert);
-        let cursor = {
-            let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
-            view.cursor = Pos::new(cursor.line + 1, indent.len());
-            view.col_memory = view.cursor.col;
-            view.cursor
-        };
-        ctx.workspace.emit(EditorEvent::BufferChanged { id: ctx.buffer_id, delta });
-        ctx.workspace.emit(EditorEvent::CursorMoved { view_id: ctx.view_id, pos: cursor });
-    });
+            if cursor.col > 0 {
+                let offset = buf.pos_to_offset(cursor) - 1;
+                let buf = ctx.workspace.buffers.get_mut(&ctx.buffer_id).unwrap();
+                let delta = buf.delete_at(offset, 1);
+                let cursor = {
+                    let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+                    view.cursor.col -= 1;
+                    view.col_memory = view.cursor.col;
+                    view.cursor
+                };
+                if let Some(delta) = delta {
+                    ctx.workspace.emit(EditorEvent::BufferChanged {
+                        id: ctx.buffer_id,
+                        delta,
+                    });
+                }
+                ctx.workspace.emit(EditorEvent::CursorMoved {
+                    view_id: ctx.view_id,
+                    pos: cursor,
+                });
+            } else if cursor.line > 0 {
+                // Join with previous line
+                let prev_line_len = buf.line_len(cursor.line - 1);
+                let offset = buf.pos_to_offset(Pos::new(cursor.line - 1, prev_line_len));
+                let buf = ctx.workspace.buffers.get_mut(&ctx.buffer_id).unwrap();
+                let delta = buf.delete_at(offset, 1); // delete the '\n'
+                let cursor = {
+                    let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+                    view.cursor = Pos::new(cursor.line - 1, prev_line_len);
+                    view.col_memory = view.cursor.col;
+                    view.cursor
+                };
+                if let Some(delta) = delta {
+                    ctx.workspace.emit(EditorEvent::BufferChanged {
+                        id: ctx.buffer_id,
+                        delta,
+                    });
+                }
+                ctx.workspace.emit(EditorEvent::CursorMoved {
+                    view_id: ctx.view_id,
+                    pos: cursor,
+                });
+            }
+        },
+    );
+
+    reg.register(
+        "edit.delete-char-forward",
+        "Delete character after cursor",
+        |ctx| {
+            let view = ctx.workspace.views.get(&ctx.view_id).unwrap();
+            let cursor = view.cursor;
+            let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
+            let offset = buf.pos_to_offset(cursor);
+            let total = buf.text().len();
+            if offset < total {
+                let buf = ctx.workspace.buffers.get_mut(&ctx.buffer_id).unwrap();
+                if let Some(delta) = buf.delete_at(offset, 1) {
+                    ctx.workspace.emit(EditorEvent::BufferChanged {
+                        id: ctx.buffer_id,
+                        delta,
+                    });
+                }
+            }
+        },
+    );
+
+    reg.register(
+        "edit.insert-newline",
+        "Insert a newline, preserving indentation",
+        |ctx| {
+            let cursor = ctx.workspace.views.get(&ctx.view_id).unwrap().cursor;
+            let indent_unit = ctx.workspace.indent_for(ctx.buffer_id).unit();
+
+            // Smart indent: copy the current line's leading whitespace, and add one
+            // level when the text before the cursor ends with an opening bracket.
+            let indent = {
+                let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
+                let line_text = buf.line(cursor.line).unwrap_or_default();
+                let lead = leading_whitespace(&line_text);
+                let before = &line_text[..cursor.col.min(line_text.len())];
+                let opens_block = before.trim_end().ends_with(['{', '(', '[']);
+                if opens_block {
+                    format!("{lead}{indent_unit}")
+                } else {
+                    lead.to_string()
+                }
+            };
+
+            let insert = format!("\n{indent}");
+            let buf = ctx.workspace.buffers.get_mut(&ctx.buffer_id).unwrap();
+            let delta = buf.insert(cursor, &insert);
+            let cursor = {
+                let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+                view.cursor = Pos::new(cursor.line + 1, indent.len());
+                view.col_memory = view.cursor.col;
+                view.cursor
+            };
+            ctx.workspace.emit(EditorEvent::BufferChanged {
+                id: ctx.buffer_id,
+                delta,
+            });
+            ctx.workspace.emit(EditorEvent::CursorMoved {
+                view_id: ctx.view_id,
+                pos: cursor,
+            });
+        },
+    );
 
     reg.register("edit.undo", "Undo last edit", |ctx| {
         let buf = ctx.workspace.buffers.get_mut(&ctx.buffer_id).unwrap();
@@ -358,26 +429,33 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
         }
     });
 
-    reg.register("edit.trim-trailing-whitespace", "Trim trailing spaces and tabs", |ctx| {
-        let ranges = {
-            let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
-            trailing_whitespace_ranges(&buf.text())
-        };
-        if ranges.is_empty() {
-            return;
-        }
-
-        let mut deltas = Vec::new();
-        let buf = ctx.workspace.buffers.get_mut(&ctx.buffer_id).unwrap();
-        for (offset, len) in ranges.into_iter().rev() {
-            if let Some(delta) = buf.delete_at(offset, len) {
-                deltas.push(delta);
+    reg.register(
+        "edit.trim-trailing-whitespace",
+        "Trim trailing spaces and tabs",
+        |ctx| {
+            let ranges = {
+                let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
+                trailing_whitespace_ranges(&buf.text())
+            };
+            if ranges.is_empty() {
+                return;
             }
-        }
-        for delta in deltas {
-            ctx.workspace.emit(EditorEvent::BufferChanged { id: ctx.buffer_id, delta });
-        }
-    });
+
+            let mut deltas = Vec::new();
+            let buf = ctx.workspace.buffers.get_mut(&ctx.buffer_id).unwrap();
+            for (offset, len) in ranges.into_iter().rev() {
+                if let Some(delta) = buf.delete_at(offset, len) {
+                    deltas.push(delta);
+                }
+            }
+            for delta in deltas {
+                ctx.workspace.emit(EditorEvent::BufferChanged {
+                    id: ctx.buffer_id,
+                    delta,
+                });
+            }
+        },
+    );
 
     // --- file ---
 
@@ -385,8 +463,12 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
         let id = ctx.buffer_id;
         let name = buffer_display_name(ctx.workspace, id);
         match ctx.workspace.save_buffer(id) {
-            Ok(()) => ctx.workspace.notify(NotifyLevel::Success, format!("Saved {name}")),
-            Err(e) => ctx.workspace.notify(NotifyLevel::Error, format!("Save failed: {e}")),
+            Ok(()) => ctx
+                .workspace
+                .notify(NotifyLevel::Success, format!("Saved {name}")),
+            Err(e) => ctx
+                .workspace
+                .notify(NotifyLevel::Error, format!("Save failed: {e}")),
         }
     });
 
@@ -396,10 +478,13 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
         for id in ids {
             match ctx.workspace.save_buffer(id) {
                 Ok(()) => saved += 1,
-                Err(e) => ctx.workspace.notify(NotifyLevel::Error, format!("Save failed: {e}")),
+                Err(e) => ctx
+                    .workspace
+                    .notify(NotifyLevel::Error, format!("Save failed: {e}")),
             }
         }
-        ctx.workspace.notify(NotifyLevel::Success, format!("Saved {saved} buffer(s)"));
+        ctx.workspace
+            .notify(NotifyLevel::Success, format!("Saved {saved} buffer(s)"));
     });
 
     // Frontend-driven overlays. These are real commands (so they work from
@@ -411,25 +496,26 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
     reg.register("file.picker", "Open the workspace file picker", |ctx| {
         ctx.workspace.request_ui(UiIntent::FilePicker);
     });
-    reg.register("buffer.picker", "Switch to an open buffer (fuzzy picker)", |ctx| {
-        ctx.workspace.request_ui(UiIntent::BufferPicker);
-    });
+    reg.register(
+        "buffer.picker",
+        "Switch to an open buffer (fuzzy picker)",
+        |ctx| {
+            ctx.workspace.request_ui(UiIntent::BufferPicker);
+        },
+    );
     reg.register("theme.select", "Select an installed color theme", |ctx| {
         ctx.workspace.request_ui(UiIntent::ThemePicker);
-    });
-    reg.register("theme.set", "Activate a color theme", |ctx| {
-        if let Some(name) = ctx.arg.as_deref().map(str::trim).filter(|name| !name.is_empty()) {
-            ctx.workspace.request_ui(UiIntent::SetTheme { name: name.to_string() });
-        } else {
-            ctx.workspace.request_ui(UiIntent::ThemePicker);
-        }
     });
     reg.register("search.start", "Incremental search in the buffer", |ctx| {
         ctx.workspace.request_ui(UiIntent::SearchStart);
     });
-    reg.register("search.replace", "Search and replace in the buffer", |ctx| {
-        ctx.workspace.request_ui(UiIntent::SearchReplace);
-    });
+    reg.register(
+        "search.replace",
+        "Search and replace in the buffer",
+        |ctx| {
+            ctx.workspace.request_ui(UiIntent::SearchReplace);
+        },
+    );
 
     reg.register(
         "picker.open-selection",
@@ -443,16 +529,12 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
             if !is_picker {
                 return;
             }
-            let line = ctx
-                .workspace
-                .views
-                .get(&ctx.view_id)
-                .and_then(|view| {
-                    ctx.workspace
-                        .buffers
-                        .get(&ctx.buffer_id)
-                        .and_then(|buf| buf.line(view.cursor.line))
-                });
+            let line = ctx.workspace.views.get(&ctx.view_id).and_then(|view| {
+                ctx.workspace
+                    .buffers
+                    .get(&ctx.buffer_id)
+                    .and_then(|buf| buf.line(view.cursor.line))
+            });
             let Some(line) = line else { return };
             let rel = line.trim();
             if rel.is_empty() {
@@ -474,38 +556,51 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
         },
     );
 
-    reg.register("terminal.open", "Open a terminal buffer placeholder", |ctx| {
-        ctx.workspace.open_virtual_buffer(
-            BufferKind::Terminal,
-            "Terminal\n--------\nProcess-backed terminal buffers are planned next.\n".to_string(),
-        );
-    });
+    reg.register(
+        "terminal.open",
+        "Open a terminal buffer placeholder",
+        |ctx| {
+            ctx.workspace.open_virtual_buffer(
+                BufferKind::Terminal,
+                "Terminal\n--------\nProcess-backed terminal buffers are planned next.\n"
+                    .to_string(),
+            );
+        },
+    );
 
     // --- word movement ---
 
-    reg.register("cursor.word-forward", "Move cursor to start of next word", |ctx| {
-        let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
-        let view = ctx.workspace.views.get(&ctx.view_id).unwrap();
-        let pos = word_forward(buf, view.cursor);
-        let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
-        let old = view.cursor;
-        view.selection = None;
-        view.cursor = pos;
-        view.col_memory = pos.col;
-        emit_cursor_moved(ctx, old);
-    });
+    reg.register(
+        "cursor.word-forward",
+        "Move cursor to start of next word",
+        |ctx| {
+            let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
+            let view = ctx.workspace.views.get(&ctx.view_id).unwrap();
+            let pos = word_forward(buf, view.cursor);
+            let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+            let old = view.cursor;
+            view.selection = None;
+            view.cursor = pos;
+            view.col_memory = pos.col;
+            emit_cursor_moved(ctx, old);
+        },
+    );
 
-    reg.register("cursor.word-backward", "Move cursor to start of previous word", |ctx| {
-        let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
-        let view = ctx.workspace.views.get(&ctx.view_id).unwrap();
-        let pos = word_backward(buf, view.cursor);
-        let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
-        let old = view.cursor;
-        view.selection = None;
-        view.cursor = pos;
-        view.col_memory = pos.col;
-        emit_cursor_moved(ctx, old);
-    });
+    reg.register(
+        "cursor.word-backward",
+        "Move cursor to start of previous word",
+        |ctx| {
+            let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
+            let view = ctx.workspace.views.get(&ctx.view_id).unwrap();
+            let pos = word_backward(buf, view.cursor);
+            let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+            let old = view.cursor;
+            view.selection = None;
+            view.cursor = pos;
+            view.col_memory = pos.col;
+            emit_cursor_moved(ctx, old);
+        },
+    );
 
     // --- page movement ---
 
@@ -550,21 +645,37 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
 
     // --- panes ---
 
-    reg.register("buffer.next", "Switch the active pane to the next buffer", |ctx| {
-        ctx.workspace.cycle_buffer(true);
-    });
+    reg.register(
+        "buffer.next",
+        "Switch the active pane to the next buffer",
+        |ctx| {
+            ctx.workspace.cycle_buffer(true);
+        },
+    );
 
-    reg.register("buffer.previous", "Switch the active pane to the previous buffer", |ctx| {
-        ctx.workspace.cycle_buffer(false);
-    });
+    reg.register(
+        "buffer.previous",
+        "Switch the active pane to the previous buffer",
+        |ctx| {
+            ctx.workspace.cycle_buffer(false);
+        },
+    );
 
-    reg.register("pane.split-right", "Split the active pane vertically", |ctx| {
-        ctx.workspace.split_active_pane(SplitAxis::Vertical);
-    });
+    reg.register(
+        "pane.split-right",
+        "Split the active pane vertically",
+        |ctx| {
+            ctx.workspace.split_active_pane(SplitAxis::Vertical);
+        },
+    );
 
-    reg.register("pane.split-down", "Split the active pane horizontally", |ctx| {
-        ctx.workspace.split_active_pane(SplitAxis::Horizontal);
-    });
+    reg.register(
+        "pane.split-down",
+        "Split the active pane horizontally",
+        |ctx| {
+            ctx.workspace.split_active_pane(SplitAxis::Horizontal);
+        },
+    );
 
     reg.register("pane.close", "Close the active pane", |ctx| {
         ctx.workspace.close_view(ctx.view_id);
@@ -601,8 +712,7 @@ fn max_scroll_line(line_count: usize, page_height: usize) -> usize {
 
 /// Names skipped when walking the workspace for the file picker.
 fn is_ignored_name(name: &str) -> bool {
-    matches!(name, "target" | "node_modules" | ".git" | ".hg" | ".svn")
-        || name.starts_with('.')
+    matches!(name, "target" | "node_modules" | ".git" | ".hg" | ".svn") || name.starts_with('.')
 }
 
 /// Recursively collect file paths under `base`, relative and `/`-separated,
@@ -645,7 +755,10 @@ fn emit_cursor_moved(ctx: &mut CommandContext, old: Pos) {
         return;
     };
     if view.cursor != old {
-        ctx.workspace.emit(EditorEvent::CursorMoved { view_id: ctx.view_id, pos: view.cursor });
+        ctx.workspace.emit(EditorEvent::CursorMoved {
+            view_id: ctx.view_id,
+            pos: view.cursor,
+        });
     }
 }
 
@@ -751,11 +864,15 @@ mod tests {
         let mut reg = CommandRegistry::new();
         register_defaults(&mut reg);
         // 1-based line 3 -> index 2.
-        let mut ctx = CommandContext::new(&mut ws).unwrap().with_arg(Some("3".to_string()));
+        let mut ctx = CommandContext::new(&mut ws)
+            .unwrap()
+            .with_arg(Some("3".to_string()));
         assert!(reg.execute("edit.goto-line", &mut ctx));
         assert_eq!(ws.active_view().unwrap().cursor.line, 2);
         // Out-of-range clamps to last line.
-        let mut ctx = CommandContext::new(&mut ws).unwrap().with_arg(Some("999".to_string()));
+        let mut ctx = CommandContext::new(&mut ws)
+            .unwrap()
+            .with_arg(Some("999".to_string()));
         reg.execute("edit.goto-line", &mut ctx);
         assert_eq!(ws.active_view().unwrap().cursor.line, 4);
     }
@@ -785,7 +902,10 @@ mod tests {
         let mut ws = Workspace::new();
         let buf_id = ws.active_buffer().unwrap().id;
         let view_id = ws.active_view_id.unwrap();
-        ws.buffers.get_mut(&buf_id).unwrap().insert(Pos::new(0, 0), content);
+        ws.buffers
+            .get_mut(&buf_id)
+            .unwrap()
+            .insert(Pos::new(0, 0), content);
         ws.views.get_mut(&view_id).unwrap().cursor = Pos::new(0, cursor_col);
         let mut ctx = super::CommandContext::new(&mut ws).unwrap();
         reg.execute("edit.insert-newline", &mut ctx);
@@ -863,7 +983,9 @@ fn word_backward(buf: &ozone_buffer::Buffer, pos: Pos) -> Pos {
         let bytes = line_text.as_bytes();
 
         if col == 0 {
-            if line == 0 { return Pos::zero(); }
+            if line == 0 {
+                return Pos::zero();
+            }
             line -= 1;
             col = buf.line_len(line);
             continue;
