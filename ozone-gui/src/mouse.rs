@@ -66,25 +66,37 @@ pub(crate) fn handle_editor_click(
     height: f32,
     char_w: f32,
     extend_selection: bool,
+    click_count: u8,
 ) -> bool {
     if let Some((view_id, new_pos)) =
         editor_text_position_at(ws, config, x, y, width, height, char_w, None)
     {
-        let Some(view) = ws.views.get_mut(&view_id) else {
-            return false;
+        let old_pos = ws.views.get(&view_id).map(|view| view.cursor);
+        let selection = match (click_count, old_pos) {
+            (3.., _) => line_span_at(ws, view_id, new_pos),
+            (2, _) => word_span_at(ws, view_id, new_pos),
+            (_, Some(old_pos)) if extend_selection && old_pos != new_pos => {
+                Some(ordered_span(old_pos, new_pos))
+            }
+            _ => None,
         };
-        let old_pos = view.cursor;
-        view.cursor = new_pos;
-        view.col_memory = new_pos.col;
-        view.selection = if extend_selection && old_pos != new_pos {
-            Some(ordered_span(old_pos, new_pos))
-        } else {
-            None
+        let final_cursor = {
+            let Some(view) = ws.views.get_mut(&view_id) else {
+                return false;
+            };
+            view.cursor = new_pos;
+            view.col_memory = new_pos.col;
+            view.selection = selection;
+            if let Some(selection) = view.selection {
+                view.cursor = selection.end;
+                view.col_memory = selection.end.col;
+            }
+            view.cursor
         };
         ws.active_view_id = Some(view_id);
         ws.emit(EditorEvent::CursorMoved {
             view_id,
-            pos: new_pos,
+            pos: final_cursor,
         });
         return true;
     }
@@ -229,6 +241,45 @@ fn ordered_span(a: Pos, b: Pos) -> Span {
     Span { start, end }
 }
 
+fn word_span_at(ws: &Workspace, view_id: ViewId, pos: Pos) -> Option<Span> {
+    let buffer_id = ws.views.get(&view_id)?.buffer_id;
+    let line = ws.buffers.get(&buffer_id)?.line(pos.line)?;
+    if line.is_empty() {
+        return None;
+    }
+    let bytes = line.as_bytes();
+    let mut col = pos.col.min(bytes.len());
+    while col > 0 && !line.is_char_boundary(col) {
+        col -= 1;
+    }
+    let mut anchor = col;
+    if anchor == bytes.len() || !is_word_byte(bytes[anchor]) {
+        if anchor == 0 || !is_word_byte(bytes[anchor - 1]) {
+            return None;
+        }
+        anchor -= 1;
+    }
+    let mut start = anchor;
+    while start > 0 && is_word_byte(bytes[start - 1]) {
+        start -= 1;
+    }
+    let mut end = anchor + 1;
+    while end < bytes.len() && is_word_byte(bytes[end]) {
+        end += 1;
+    }
+    Some(Span::new(Pos::new(pos.line, start), Pos::new(pos.line, end)))
+}
+
+fn line_span_at(ws: &Workspace, view_id: ViewId, pos: Pos) -> Option<Span> {
+    let buffer_id = ws.views.get(&view_id)?.buffer_id;
+    let len = ws.buffers.get(&buffer_id)?.line_len(pos.line);
+    Some(Span::new(Pos::new(pos.line, 0), Pos::new(pos.line, len)))
+}
+
+fn is_word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,6 +307,7 @@ mod tests {
             600.0,
             8.0,
             false,
+            1,
         ));
         assert_eq!(
             ws.active_view().unwrap().cursor,
@@ -279,10 +331,63 @@ mod tests {
             600.0,
             8.0,
             true,
+            1,
         ));
         let selection = ws.active_view().unwrap().selection.unwrap();
         assert_eq!(selection.start, ozone_buffer::Pos::new(0, 2));
         assert_eq!(selection.end, ozone_buffer::Pos::new(0, 5));
+    }
+
+    #[test]
+    fn double_click_selects_word() {
+        let mut ws = text_workspace("alpha beta_2!");
+        let mut config = Config::default_config();
+        config.editor.line_numbers = LineNumbers::Off;
+
+        assert!(handle_editor_click(
+            &mut ws,
+            &config,
+            PAD + 8.0 * 8.0,
+            EDITOR_TOP_PAD,
+            800.0,
+            600.0,
+            8.0,
+            false,
+            2,
+        ));
+        let view = ws.active_view().unwrap();
+        assert_eq!(view.cursor, ozone_buffer::Pos::new(0, 12));
+        assert_eq!(
+            view.selection.unwrap(),
+            ozone_buffer::Span::new(ozone_buffer::Pos::new(0, 6), ozone_buffer::Pos::new(0, 12))
+        );
+    }
+
+    #[test]
+    fn triple_click_selects_line() {
+        let mut ws = text_workspace("alpha\nbravo");
+        let mut config = Config::default_config();
+        config.editor.line_numbers = LineNumbers::Off;
+        config.editor.font_size = 10.0;
+        config.editor.line_height = 2.0;
+
+        assert!(handle_editor_click(
+            &mut ws,
+            &config,
+            PAD + 2.0 * 8.0,
+            EDITOR_TOP_PAD + 1.2 * 20.0,
+            800.0,
+            600.0,
+            8.0,
+            false,
+            3,
+        ));
+        let view = ws.active_view().unwrap();
+        assert_eq!(view.cursor, ozone_buffer::Pos::new(1, 5));
+        assert_eq!(
+            view.selection.unwrap(),
+            ozone_buffer::Span::new(ozone_buffer::Pos::new(1, 0), ozone_buffer::Pos::new(1, 5))
+        );
     }
 
     #[test]

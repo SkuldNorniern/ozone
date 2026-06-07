@@ -487,6 +487,7 @@ impl OzoneGui {
                         modifiers,
                         x,
                         y,
+                        click_count,
                         ..
                     } if self.config.ui.mouse => {
                         let (x, y) = (x as f32, y as f32);
@@ -516,6 +517,7 @@ impl OzoneGui {
                                 height,
                                 measured_char_w,
                                 modifiers.shift,
+                                click_count,
                             ) {
                                 let text_like = ws.active_buffer().is_some_and(|buf| {
                                     !matches!(
