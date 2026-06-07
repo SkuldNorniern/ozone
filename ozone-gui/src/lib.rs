@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::os::raw::c_void;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use ozone_term::Terminal;
@@ -10,30 +9,7 @@ pub(crate) type TermCells = HashMap<BufferId, Vec<Vec<ozone_term::Cell>>>;
 /// Decoded images by buffer. `None` = decode failed (shown as an error label).
 pub(crate) type ImageCache = HashMap<BufferId, Option<Image>>;
 
-/// Live terminal sessions plus the per-terminal caches the run loop keeps in
-/// lockstep: the latest colour grid, the last PTY grid size pushed, and the last
-/// output version rendered. Grouped so they are created and pruned together.
-struct Terminals {
-    sessions: HashMap<BufferId, Terminal>,
-    failed: std::collections::HashSet<BufferId>,
-    cells: TermCells,
-    sizes: HashMap<BufferId, (u16, u16)>,
-    versions: HashMap<BufferId, u64>,
-}
-
-impl Terminals {
-    fn new() -> Self {
-        Self {
-            sessions: HashMap::new(),
-            failed: std::collections::HashSet::new(),
-            cells: TermCells::new(),
-            sizes: HashMap::new(),
-            versions: HashMap::new(),
-        }
-    }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -50,6 +26,7 @@ use aurea::render::{Canvas, Font, Image, Rect, RendererBackend};
 use aurea::{AureaResult, Element, MouseButton, Window, WindowEvent};
 
 mod actions;
+mod canvas;
 mod components;
 mod input;
 mod keys;
@@ -60,69 +37,29 @@ mod notify;
 mod picker;
 mod render;
 mod search;
+mod terminals;
 mod theme;
 mod whichkey;
 pub(crate) use actions::*;
+use canvas::{SendableCanvas, SharedCanvas};
 use input::*;
 use keys::*;
 pub(crate) use layout::*;
 use minibuffer::*;
-use mouse::MouseState;
+use mouse::{MouseState, handle_editor_click};
 use notify::*;
 use ozone_buffer::{BufferId, BufferKind};
-use ozone_config::{Config, LineNumbers};
+use ozone_config::Config;
 use ozone_editor::commands::register_defaults;
 use ozone_editor::{
-    AutocommandRegistry, CommandRegistry, EditorEvent, IndentConfig, KeyStroke,
-    Keymap, ModifierMap, PaneTree, Workspace,
+    AutocommandRegistry, CommandRegistry, IndentConfig, KeyStroke, Keymap, ModifierMap, Workspace,
 };
 use ozone_syntax::Filetype;
 use picker::*;
 use render::draw_editor;
 use search::*;
+use terminals::{Terminals, collect_term_rects, rect_to_grid};
 use whichkey::*;
-
-// ---------------------------------------------------------------------------
-// SendableCanvas + SharedCanvas wrappers
-// ---------------------------------------------------------------------------
-
-struct SendableCanvas(Canvas);
-unsafe impl Send for SendableCanvas {}
-unsafe impl Sync for SendableCanvas {}
-impl std::ops::Deref for SendableCanvas {
-    type Target = Canvas;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-impl std::ops::DerefMut for SendableCanvas {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-impl Element for SendableCanvas {
-    fn handle(&self) -> *mut c_void {
-        self.0.handle()
-    }
-    unsafe fn invalidate_platform(&self, rect: Option<aurea::render::Rect>) {
-        unsafe { Element::invalidate_platform(&self.0, rect) }
-    }
-}
-
-struct SharedCanvas(Arc<Mutex<SendableCanvas>>);
-impl Element for SharedCanvas {
-    fn handle(&self) -> *mut c_void {
-        lock(self.0.as_ref()).handle()
-    }
-    unsafe fn invalidate_platform(&self, rect: Option<aurea::render::Rect>) {
-        let g = lock(self.0.as_ref());
-        unsafe { Element::invalidate_platform(&*g, rect) }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Public entry point
-// ---------------------------------------------------------------------------
 
 pub struct OzoneGui {
     workspace: Arc<Mutex<Workspace>>,
@@ -859,197 +796,3 @@ pub(crate) fn editor_font(config: &Config) -> Font {
     Font::new(&config.editor.font, config.editor.font_size)
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-#[allow(clippy::too_many_arguments)]
-fn handle_editor_click(
-    ws: &mut Workspace,
-    config: &Config,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    char_w: f32,
-    extend_selection: bool,
-) -> bool {
-    let editor_rect = Rect::new(0.0, 0.0, width, (height - STATUS_H).max(0.0));
-    let target = ws
-        .panes
-        .as_ref()
-        .and_then(|tree| pane_at(tree, editor_rect, x, y))
-        .or_else(|| ws.active_view_id.map(|id| (id, editor_rect)));
-    let Some((view_id, rect)) = target else {
-        return false;
-    };
-    let Some(buffer_id) = ws.views.get(&view_id).map(|view| view.buffer_id) else {
-        return false;
-    };
-    let Some(buf) = ws.buffers.get(&buffer_id) else {
-        return false;
-    };
-    if matches!(buf.kind, BufferKind::Image(_) | BufferKind::Terminal) {
-        ws.active_view_id = Some(view_id);
-        return true;
-    }
-
-    let line_count = buf.line_count();
-    if line_count == 0 {
-        return false;
-    }
-    let line_numbers = match buf.kind {
-        BufferKind::Search | BufferKind::References => LineNumbers::Off,
-        _ => ws
-            .buffer_local(buffer_id)
-            .and_then(|local| local.line_numbers)
-            .unwrap_or(config.editor.line_numbers),
-    };
-    let line_h = (config.editor.font_size * config.editor.line_height).max(1.0);
-    let scroll = ws
-        .views
-        .get(&view_id)
-        .map(|view| view.scroll_line)
-        .unwrap_or(0);
-    let relative_y = (y - rect.y - EDITOR_TOP_PAD).max(0.0);
-    let line = (scroll + (relative_y / line_h).floor() as usize).min(line_count - 1);
-    let gutter_w = gutter_width(line_count, char_w.max(1.0), line_numbers);
-    let text_x = rect.x + gutter_w + PAD;
-    let raw_col = if x <= text_x {
-        0
-    } else {
-        ((x - text_x) / char_w.max(1.0)).round() as usize
-    };
-    let line_text = buf.line(line).unwrap_or_default();
-    let mut col = raw_col.min(line_text.len());
-    while col > 0 && !line_text.is_char_boundary(col) {
-        col -= 1;
-    }
-    let new_pos = ozone_buffer::Pos::new(line, col);
-
-    let Some(view) = ws.views.get_mut(&view_id) else {
-        return false;
-    };
-    let old_pos = view.cursor;
-    view.cursor = new_pos;
-    view.col_memory = col;
-    view.selection = if extend_selection && old_pos != new_pos {
-        let (start, end) = if old_pos <= new_pos {
-            (old_pos, new_pos)
-        } else {
-            (new_pos, old_pos)
-        };
-        Some(ozone_buffer::Span { start, end })
-    } else {
-        None
-    };
-    ws.active_view_id = Some(view_id);
-    ws.emit(EditorEvent::CursorMoved {
-        view_id,
-        pos: new_pos,
-    });
-    true
-}
-
-/// Collect the on-screen rect of every terminal-buffer leaf in a pane tree,
-/// mirroring `draw_pane_tree`'s geometry so the PTY can be sized to its pane.
-fn collect_term_rects(
-    ws: &Workspace,
-    tree: &PaneTree,
-    rect: Rect,
-    out: &mut Vec<(BufferId, Rect)>,
-) {
-    match tree {
-        PaneTree::Leaf { view_id } => {
-            if let Some(bid) = ws.views.get(view_id).map(|v| v.buffer_id)
-                && matches!(
-                    ws.buffers.get(&bid).map(|b| &b.kind),
-                    Some(BufferKind::Terminal)
-                )
-            {
-                out.push((bid, rect));
-            }
-        }
-        PaneTree::Split {
-            axis,
-            ratio,
-            first,
-            second,
-        } => {
-            let (fr, sr, _) = split_rect(rect, *axis, *ratio);
-            collect_term_rects(ws, first, fr, out);
-            collect_term_rects(ws, second, sr, out);
-        }
-    }
-}
-
-/// Convert a pane rect to a terminal cell grid `(cols, rows)`, matching the
-/// renderer's text origin (left `PAD`, right scrollbar, `EDITOR_TOP_PAD`) and
-/// its real measured cell width `char_w`.
-fn rect_to_grid(rect: Rect, config: &Config, char_w: f32) -> (u16, u16) {
-    let cw = char_w.max(1.0);
-    let lh = (config.editor.font_size * config.editor.line_height).max(1.0);
-    let usable_w = (rect.width - PAD - 6.0).max(0.0);
-    let usable_h = (rect.height - EDITOR_TOP_PAD).max(0.0);
-    let cols = (usable_w / cw).clamp(8.0, 1000.0) as u16;
-    let rows = (usable_h / lh).clamp(2.0, 1000.0) as u16;
-    (cols, rows)
-}
-
-
-#[cfg(test)]
-mod mouse_tests {
-    use super::*;
-
-    fn text_workspace(text: &str) -> Workspace {
-        let mut ws = Workspace::new();
-        ws.active_buffer_mut().unwrap().set_text(text);
-        ws
-    }
-
-    #[test]
-    fn click_places_cursor_using_view_coordinates() {
-        let mut ws = text_workspace("alpha\nbravo\ncharlie");
-        let mut config = Config::default_config();
-        config.editor.line_numbers = LineNumbers::Off;
-        config.editor.font_size = 10.0;
-        config.editor.line_height = 2.0;
-
-        assert!(handle_editor_click(
-            &mut ws,
-            &config,
-            PAD + 3.0 * 8.0,
-            EDITOR_TOP_PAD + 1.2 * 20.0,
-            800.0,
-            600.0,
-            8.0,
-            false,
-        ));
-        assert_eq!(
-            ws.active_view().unwrap().cursor,
-            ozone_buffer::Pos::new(1, 3)
-        );
-    }
-
-    #[test]
-    fn shift_click_creates_ordered_selection() {
-        let mut ws = text_workspace("abcdef");
-        let mut config = Config::default_config();
-        config.editor.line_numbers = LineNumbers::Off;
-        ws.active_view_mut().unwrap().cursor = ozone_buffer::Pos::new(0, 5);
-
-        assert!(handle_editor_click(
-            &mut ws,
-            &config,
-            PAD + 2.0 * 8.0,
-            EDITOR_TOP_PAD,
-            800.0,
-            600.0,
-            8.0,
-            true,
-        ));
-        let selection = ws.active_view().unwrap().selection.unwrap();
-        assert_eq!(selection.start, ozone_buffer::Pos::new(0, 2));
-        assert_eq!(selection.end, ozone_buffer::Pos::new(0, 5));
-    }
-}
