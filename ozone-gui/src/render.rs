@@ -194,6 +194,9 @@ fn draw_view(
     if let Some(view) = ws.views.get_mut(&view_id) {
         view.page_height = visible;
         view.scroll_line = view.scroll_line.min(max_scroll_line(line_count, visible));
+        if view.scroll_line >= max_scroll_line(line_count, visible) {
+            view.scroll_y = 0.0;
+        }
     }
     sync_bracket_decorations(ws, view_id);
 
@@ -238,6 +241,7 @@ fn draw_view(
         .unwrap_or(config.editor.word_wrap);
 
     let scroll = view.scroll_line;
+    let scroll_y = view.scroll_y;
     let visible = visible + 1;
     let gutter_w = gutter_width(line_count, metrics.char_w, line_numbers);
     let text_x = rect.x + gutter_w + PAD;
@@ -312,7 +316,7 @@ fn draw_view(
                 break;
             }
 
-        let line_top = content_top + i as f32 * line_h;
+        let line_top = content_top - scroll_y + i as f32 * line_h;
         if line_top >= content_top + content_h || line_top >= rect.y + rect.height {
             break;
         }
@@ -580,7 +584,7 @@ fn draw_view(
         let thumb_h = (track_h * viewport_lines / line_count as f32).clamp(24.0, track_h);
         let max_scroll = max_scroll_line(line_count, viewport_lines as usize);
         let t = if max_scroll > 0 {
-            (scroll as f32 / max_scroll as f32).clamp(0.0, 1.0)
+            ((scroll as f32 + scroll_y / line_h) / max_scroll as f32).clamp(0.0, 1.0)
         } else {
             0.0
         };

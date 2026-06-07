@@ -91,8 +91,13 @@ pub(crate) fn handle_editor_click(
         .get(&view_id)
         .map(|view| view.scroll_line)
         .unwrap_or(0);
+    let scroll_y = ws
+        .views
+        .get(&view_id)
+        .map(|view| view.scroll_y)
+        .unwrap_or(0.0);
     let relative_y = (y - rect.y - EDITOR_TOP_PAD).max(0.0);
-    let line = (scroll + (relative_y / line_h).floor() as usize).min(line_count - 1);
+    let line = (scroll + ((relative_y + scroll_y) / line_h).floor() as usize).min(line_count - 1);
     let gutter_w = gutter_width(line_count, char_w.max(1.0), line_numbers);
     let text_x = rect.x + gutter_w + PAD;
     let raw_col = if x <= text_x {

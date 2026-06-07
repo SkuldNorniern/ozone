@@ -518,15 +518,13 @@ impl OzoneGui {
                             })
                             .unwrap_or(0);
                         if let Some(view) = ws.active_view_mut() {
-                            let lines = (delta_y.abs() * 3.0).round() as usize;
-                            if lines > 0 {
-                                if delta_y > 0.0 {
-                                    view.scroll_line = view.scroll_line.saturating_sub(lines);
-                                } else {
-                                    view.scroll_line =
-                                        view.scroll_line.saturating_add(lines).min(max_scroll);
-                                }
-                            }
+                            let line_h =
+                                self.config.editor.font_size * self.config.editor.line_height;
+                            view.scroll_by_pixels(
+                                -(delta_y as f32) * line_h * 3.0,
+                                line_h,
+                                max_scroll,
+                            );
                         }
                         needs_redraw = true;
                     }

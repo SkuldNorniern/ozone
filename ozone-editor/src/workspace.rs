@@ -343,6 +343,7 @@ impl Workspace {
             view.cursor.col = view.cursor.col.min(line_len);
             view.col_memory = view.cursor.col;
             view.scroll_line = 0;
+            view.scroll_y = 0.0;
             Some((view.id, view.cursor))
         } else {
             None

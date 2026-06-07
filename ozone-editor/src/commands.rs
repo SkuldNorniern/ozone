@@ -232,6 +232,7 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
         view.cursor = Pos::zero();
         view.col_memory = 0;
         view.scroll_line = 0;
+        view.scroll_y = 0.0;
         emit_cursor_moved(ctx, old);
     });
 
@@ -747,6 +748,7 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
         view.cursor.col = view.cursor.col.min(buf.line_len(view.cursor.line));
         view.col_memory = view.cursor.col;
         view.scroll_line = (view.scroll_line + page).min(max_scroll_line(line_count, page));
+        view.scroll_y = 0.0;
         emit_cursor_moved(ctx, old);
     });
 
@@ -759,6 +761,7 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
         view.cursor.col = view.cursor.col.min(buf.line_len(view.cursor.line));
         view.col_memory = view.cursor.col;
         view.scroll_line = view.scroll_line.saturating_sub(page);
+        view.scroll_y = 0.0;
         emit_cursor_moved(ctx, old);
     });
 
@@ -769,11 +772,13 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
         let max = max_scroll_line(buf.line_count(), view.page_height);
         view.scroll_line = (view.scroll_line + 1).min(max);
+        view.scroll_y = 0.0;
     });
 
     reg.register("view.scroll-up", "Scroll view up one line", |ctx| {
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
         view.scroll_line = view.scroll_line.saturating_sub(1);
+        view.scroll_y = 0.0;
     });
 
     // --- panes ---
