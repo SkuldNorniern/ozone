@@ -253,7 +253,8 @@ fn open_search(ws: &mut Workspace, search: &mut Option<SearchState>, replace: bo
     }
     // Record the pre-search position so the jump list can return to it.
     ws.push_jump();
-    let mut s = SearchState::new(false);
+    let namespace = ws.decorations_mut().namespace();
+    let mut s = SearchState::new(false, namespace);
     if replace {
         s.enable_replace();
     }

@@ -339,6 +339,7 @@ impl OzoneGui {
                         } else if srch.is_some() {
                             let mut ws = lock(self.workspace.as_ref());
                             if handle_search_key(key, modifiers, &mut srch, &mut ws) {
+                                dispatch_autocmds(&mut ws, &self.commands, &self.autocmds);
                                 needs_redraw = true;
                             }
                         } else if let Some((term_id, bytes)) =
@@ -412,7 +413,7 @@ impl OzoneGui {
                                 let mut ws = lock(self.workspace.as_ref());
                                 // Typed text edits the query or the replacement,
                                 // depending on focus; query edits re-search + jump.
-                                if search_input_text(s, &text, &ws) {
+                                if search_input_text(s, &text, &mut ws) {
                                     if !s.focus_replace {
                                         search_jump(s, &mut ws);
                                     }
@@ -795,4 +796,3 @@ fn window_title(ws: &Workspace) -> String {
 pub(crate) fn editor_font(config: &Config) -> Font {
     Font::new(&config.editor.font, config.editor.font_size)
 }
-

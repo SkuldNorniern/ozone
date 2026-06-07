@@ -8,7 +8,8 @@
 
 use aurea::AureaResult;
 use aurea::render::{DrawingContext, Font, Point};
-use ozone_editor::Workspace;
+use ozone_buffer::BufferId;
+use ozone_editor::{DecorationKind, EditorEvent, HlRole, NamespaceId, Workspace};
 
 use crate::baseline_in_rect;
 use crate::components::{draw_panel, top_right_rect};
@@ -24,10 +25,12 @@ pub(crate) struct SearchState {
     pub(crate) replace: Option<String>,
     /// In replace mode, whether typed text edits the replacement (vs the query).
     pub(crate) focus_replace: bool,
+    namespace: NamespaceId,
+    buffer_id: Option<BufferId>,
 }
 
 impl SearchState {
-    pub(crate) fn new(case_sensitive: bool) -> Self {
+    pub(crate) fn new(case_sensitive: bool, namespace: NamespaceId) -> Self {
         Self {
             query: String::new(),
             matches: Vec::new(),
@@ -35,6 +38,8 @@ impl SearchState {
             case_sensitive,
             replace: None,
             focus_replace: false,
+            namespace,
+            buffer_id: None,
         }
     }
 
@@ -62,11 +67,58 @@ impl SearchState {
 }
 
 /// Recompute matches for the active buffer from the current query.
-pub(crate) fn search_recompute(s: &mut SearchState, ws: &Workspace) {
-    let text = ws.active_buffer().map(|b| b.text()).unwrap_or_default();
+pub(crate) fn search_recompute(s: &mut SearchState, ws: &mut Workspace) {
+    let Some((buffer_id, text)) = ws.active_buffer().map(|b| (b.id, b.text())) else {
+        close_search(s, ws);
+        s.buffer_id = None;
+        s.matches.clear();
+        s.current = 0;
+        return;
+    };
+    if let Some(previous) = s.buffer_id
+        && previous != buffer_id
+    {
+        ws.decorations_mut()
+            .clear_namespace_in(previous, s.namespace);
+    }
+    s.buffer_id = Some(buffer_id);
     s.matches = ozone_editor::find_matches(&text, &s.query, s.case_sensitive);
     if s.current >= s.matches.len() {
         s.current = 0;
+    }
+    sync_search_decorations(s, ws);
+}
+
+fn sync_search_decorations(s: &SearchState, ws: &mut Workspace) {
+    let Some(buffer_id) = s.buffer_id else {
+        return;
+    };
+    ws.decorations_mut()
+        .clear_namespace_in(buffer_id, s.namespace);
+    let width = s.query.len();
+    if width == 0 {
+        return;
+    }
+    for (index, &start) in s.matches.iter().enumerate() {
+        let role = if index == s.current {
+            HlRole::SearchCurrent
+        } else {
+            HlRole::Search
+        };
+        ws.decorations_mut().add(
+            buffer_id,
+            s.namespace,
+            start,
+            start + width,
+            DecorationKind::Highlight(role),
+        );
+    }
+}
+
+fn close_search(s: &SearchState, ws: &mut Workspace) {
+    if let Some(buffer_id) = s.buffer_id {
+        ws.decorations_mut()
+            .clear_namespace_in(buffer_id, s.namespace);
     }
 }
 
@@ -101,15 +153,26 @@ pub(crate) fn search_jump(s: &SearchState, ws: &mut Workspace) {
 /// Replace the `qbytes`-long match at byte offset `off` with `repl` in the
 /// active buffer. (Literal matches keep the query's byte length.)
 fn replace_at(ws: &mut Workspace, off: usize, qbytes: usize, repl: &str) {
-    let Some(buf) = ws.active_buffer_mut() else {
+    let Some(buffer_id) = ws.active_buffer().map(|buffer| buffer.id) else {
         return;
     };
-    if qbytes > 0 {
-        let _ = buf.delete_at(off, qbytes);
+    let mut deltas = Vec::new();
+    if let Some(buf) = ws.buffers.get_mut(&buffer_id) {
+        if qbytes > 0
+            && let Some(delta) = buf.delete_at(off, qbytes)
+        {
+            deltas.push(delta);
+        }
+        if !repl.is_empty() {
+            let pos = buf.offset_to_pos(off);
+            deltas.push(buf.insert(pos, repl));
+        }
     }
-    if !repl.is_empty() {
-        let pos = buf.offset_to_pos(off);
-        buf.insert(pos, repl);
+    for delta in deltas {
+        ws.emit(EditorEvent::BufferChanged {
+            id: buffer_id,
+            delta,
+        });
     }
 }
 
@@ -161,6 +224,7 @@ pub(crate) fn handle_search_key(
     let in_replace = s.replace.is_some();
     match key {
         Escape => {
+            close_search(s, ws);
             *search = None;
             true
         }
@@ -176,11 +240,13 @@ pub(crate) fn handle_search_key(
         }
         Enter | Down => {
             s.next();
+            sync_search_decorations(s, ws);
             search_jump(s, ws);
             true
         }
         Up => {
             s.prev();
+            sync_search_decorations(s, ws);
             search_jump(s, ws);
             true
         }
@@ -208,7 +274,7 @@ pub(crate) fn handle_search_key(
 
 /// Append typed text to the focused input (query or replacement). Returns
 /// whether anything changed (caller recomputes/redraws).
-pub(crate) fn search_input_text(s: &mut SearchState, text: &str, ws: &Workspace) -> bool {
+pub(crate) fn search_input_text(s: &mut SearchState, text: &str, ws: &mut Workspace) -> bool {
     let mut changed = false;
     if s.replace.is_some() && s.focus_replace {
         if let Some(r) = s.replace.as_mut() {
@@ -348,13 +414,18 @@ mod tests {
         ws
     }
 
+    fn search_state(ws: &mut Workspace) -> SearchState {
+        let namespace = ws.decorations_mut().namespace();
+        SearchState::new(false, namespace)
+    }
+
     #[test]
     fn replace_all_replaces_every_match() {
         let mut ws = ws_with("foo bar foo baz foo");
-        let mut s = SearchState::new(false);
+        let mut s = search_state(&mut ws);
         s.query = "foo".into();
         s.replace = Some("X".into());
-        search_recompute(&mut s, &ws);
+        search_recompute(&mut s, &mut ws);
         assert_eq!(s.matches.len(), 3);
         search_replace_all(&mut s, &mut ws);
         assert_eq!(ws.active_buffer().unwrap().text(), "X bar X baz X");
@@ -364,10 +435,10 @@ mod tests {
     #[test]
     fn replace_current_replaces_one_then_recomputes() {
         let mut ws = ws_with("aa aa aa");
-        let mut s = SearchState::new(false);
+        let mut s = search_state(&mut ws);
         s.query = "aa".into();
         s.replace = Some("b".into());
-        search_recompute(&mut s, &ws);
+        search_recompute(&mut s, &mut ws);
         s.current = 0;
         search_replace_current(&mut s, &mut ws);
         assert_eq!(ws.active_buffer().unwrap().text(), "b aa aa");
@@ -377,12 +448,35 @@ mod tests {
     #[test]
     fn case_insensitive_replace_keeps_text_length_invariant() {
         let mut ws = ws_with("Foo FOO foo");
-        let mut s = SearchState::new(false); // case-insensitive
+        let mut s = search_state(&mut ws); // case-insensitive
         s.query = "foo".into();
         s.replace = Some("ba".into());
-        search_recompute(&mut s, &ws);
+        search_recompute(&mut s, &mut ws);
         assert_eq!(s.matches.len(), 3);
         search_replace_all(&mut s, &mut ws);
         assert_eq!(ws.active_buffer().unwrap().text(), "ba ba ba");
+    }
+
+    #[test]
+    fn recompute_publishes_search_decorations() {
+        let mut ws = ws_with("one two one");
+        let mut s = search_state(&mut ws);
+        s.query = "one".into();
+        search_recompute(&mut s, &mut ws);
+
+        let buffer = ws.active_buffer().unwrap().id;
+        let decorations = ws.decorations().all(buffer);
+        assert_eq!(decorations.len(), 2);
+        assert!(matches!(
+            decorations[0].kind,
+            DecorationKind::Highlight(HlRole::SearchCurrent)
+        ));
+        assert!(matches!(
+            decorations[1].kind,
+            DecorationKind::Highlight(HlRole::Search)
+        ));
+
+        close_search(&s, &mut ws);
+        assert!(ws.decorations().all(buffer).is_empty());
     }
 }

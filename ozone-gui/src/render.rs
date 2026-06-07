@@ -74,7 +74,6 @@ pub(crate) fn draw_editor(
             editor_rect,
             &font,
             metrics,
-            search,
             term_cells,
             images,
         )?;
@@ -87,7 +86,6 @@ pub(crate) fn draw_editor(
             editor_rect,
             &font,
             metrics,
-            search,
             term_cells,
             images,
         )?;
@@ -117,13 +115,12 @@ fn draw_pane_tree(
     rect: Rect,
     font: &Font,
     metrics: TextMetrics,
-    search: Option<&SearchState>,
     term_cells: &TermCells,
     images: &ImageCache,
 ) -> AureaResult<()> {
     match tree {
         PaneTree::Leaf { view_id } => draw_view(
-            ctx, ws, config, *view_id, rect, font, metrics, search, term_cells, images,
+            ctx, ws, config, *view_id, rect, font, metrics, term_cells, images,
         ),
         PaneTree::Split {
             axis,
@@ -133,7 +130,7 @@ fn draw_pane_tree(
         } => {
             let (first_rect, second_rect, divider) = split_rect(rect, *axis, *ratio);
             draw_pane_tree(
-                ctx, ws, config, first, first_rect, font, metrics, search, term_cells, images,
+                ctx, ws, config, first, first_rect, font, metrics, term_cells, images,
             )?;
             draw_pane_tree(
                 ctx,
@@ -143,7 +140,6 @@ fn draw_pane_tree(
                 second_rect,
                 font,
                 metrics,
-                search,
                 term_cells,
                 images,
             )?;
@@ -162,7 +158,6 @@ fn draw_view(
     rect: Rect,
     font: &Font,
     metrics: TextMetrics,
-    search: Option<&SearchState>,
     term_cells: &TermCells,
     images: &ImageCache,
 ) -> AureaResult<()> {
@@ -247,18 +242,6 @@ fn draw_view(
     } else {
         None
     };
-
-    // Search-match positions for the active pane (Pos, is_current).
-    let search_hits: Vec<(ozone_buffer::Pos, bool)> = match (is_active_pane, search) {
-        (true, Some(s)) if !s.query.is_empty() => s
-            .matches
-            .iter()
-            .enumerate()
-            .map(|(i, &off)| (buf.offset_to_pos(off), i == s.current))
-            .collect(),
-        _ => Vec::new(),
-    };
-    let search_qlen = search.map(|s| s.query.chars().count()).unwrap_or(0);
 
     let visible_start = buf.pos_to_offset(Pos::new(scroll, 0));
     let visible_end_line = (scroll + visible).min(line_count);
@@ -369,22 +352,6 @@ fn draw_view(
                         ),
                         &solid(decoration_highlight_color(*role)),
                     )?;
-                }
-            }
-        }
-
-        // Search match highlights (behind the glyphs).
-        if search_qlen > 0 {
-            for (pos, is_current) in &search_hits {
-                if pos.line == line_idx {
-                    let hx = text_x + pos.col as f32 * metrics.char_w;
-                    let hw = search_qlen as f32 * metrics.char_w;
-                    let col = if *is_current {
-                        palette().search_match_active
-                    } else {
-                        palette().search_match
-                    };
-                    ctx.draw_rect(Rect::new(hx, line_top + 1.0, hw, line_h - 2.0), &solid(col))?;
                 }
             }
         }
