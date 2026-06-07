@@ -47,7 +47,7 @@ use input::*;
 use keys::*;
 pub(crate) use layout::*;
 use minibuffer::*;
-use mouse::{MouseState, handle_editor_click};
+use mouse::{MouseState, handle_editor_click, handle_editor_drag};
 use notify::*;
 use ozone_buffer::{BufferId, BufferKind};
 use ozone_config::Config;
@@ -451,10 +451,33 @@ impl OzoneGui {
                     }
 
                     WindowEvent::MouseMove { x, y } => {
-                        mouse.moved(x as f32, y as f32);
+                        let (x, y) = (x as f32, y as f32);
+                        mouse.moved(x, y);
                         if self.config.ui.mouse {
-                            let canvas = lock(canvas_arc.as_ref());
-                            let _ = canvas.handle_hover(x as f32, y as f32);
+                            if let Some((view_id, anchor)) = mouse.selection_drag() {
+                                let (width, height) = {
+                                    let canvas = lock(canvas_arc.as_ref());
+                                    (canvas.width() as f32, canvas.height() as f32)
+                                };
+                                let mut ws = lock(self.workspace.as_ref());
+                                if handle_editor_drag(
+                                    &mut ws,
+                                    &self.config,
+                                    x,
+                                    y,
+                                    width,
+                                    height,
+                                    measured_char_w,
+                                    view_id,
+                                    anchor,
+                                ) {
+                                    needs_redraw = true;
+                                    cursor_activity = true;
+                                }
+                            } else {
+                                let canvas = lock(canvas_arc.as_ref());
+                                let _ = canvas.handle_hover(x, y);
+                            }
                         }
                     }
 
@@ -494,10 +517,39 @@ impl OzoneGui {
                                 measured_char_w,
                                 modifiers.shift,
                             ) {
+                                let text_like = ws.active_buffer().is_some_and(|buf| {
+                                    !matches!(
+                                        buf.kind,
+                                        BufferKind::Image(_) | BufferKind::Terminal
+                                    )
+                                });
+                                if text_like
+                                    && let Some(view) = ws.active_view()
+                                {
+                                    let anchor = view
+                                        .selection
+                                        .map(|span| {
+                                            if view.cursor == span.start {
+                                                span.end
+                                            } else {
+                                                span.start
+                                            }
+                                        })
+                                        .unwrap_or(view.cursor);
+                                    mouse.begin_selection_drag(view.id, anchor);
+                                }
                                 needs_redraw = true;
                                 cursor_activity = true;
                             }
                         }
+                    }
+
+                    WindowEvent::MouseButton {
+                        button: MouseButton::Left,
+                        pressed: false,
+                        ..
+                    } if self.config.ui.mouse => {
+                        mouse.end_selection_drag();
                     }
 
                     WindowEvent::MouseWheel { delta_y, .. } => {

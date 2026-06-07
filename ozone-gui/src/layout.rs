@@ -56,6 +56,22 @@ pub(crate) fn pane_at(tree: &PaneTree, rect: Rect, x: f32, y: f32) -> Option<(Vi
     }
 }
 
+/// The rect occupied by a specific leaf view.
+pub(crate) fn pane_rect(tree: &PaneTree, rect: Rect, target: ViewId) -> Option<Rect> {
+    match tree {
+        PaneTree::Leaf { view_id } => (*view_id == target).then_some(rect),
+        PaneTree::Split {
+            axis,
+            ratio,
+            first,
+            second,
+        } => {
+            let (first_rect, second_rect, _) = split_rect(rect, *axis, *ratio);
+            pane_rect(first, first_rect, target).or_else(|| pane_rect(second, second_rect, target))
+        }
+    }
+}
+
 /// Split `rect` by `axis`/`ratio` into `(first, second, divider)` rects.
 pub(crate) fn split_rect(rect: Rect, axis: SplitAxis, ratio: f32) -> (Rect, Rect, Rect) {
     let ratio = ratio.clamp(0.1, 0.9);
