@@ -277,6 +277,17 @@ impl Config {
         }
     }
 
+    /// Resolve the config path that [`Self::load_user`] would use.
+    pub fn resolved_config_path() -> Option<PathBuf> {
+        if let Some(path) = Self::user_config_path()
+            && path.exists()
+        {
+            return Some(path);
+        }
+        let local = PathBuf::from("config.toml");
+        local.exists().then_some(local)
+    }
+
     /// The platform user config path: `%APPDATA%\ozone\config.toml` on Windows,
     /// `$XDG_CONFIG_HOME/ozone/config.toml` (or `~/.config/...`) elsewhere.
     pub fn user_config_path() -> Option<PathBuf> {
@@ -290,11 +301,14 @@ impl Config {
         Some(base.join("ozone").join("config.toml"))
     }
 
-    /// Load the user config if present, otherwise defaults.
+    /// Load the user config if present, otherwise `./config.toml` if present,
+    /// otherwise defaults. The local fallback keeps `cargo run` from the repo
+    /// root aligned with the checked-in reference config.
     pub fn load_user() -> Self {
-        match Self::user_config_path() {
-            Some(path) if path.exists() => Self::load(&path),
-            _ => Self::default_config(),
+        if let Some(path) = Self::resolved_config_path() {
+            Self::load(&path)
+        } else {
+            Self::default_config()
         }
     }
 }
@@ -499,6 +513,24 @@ mod tests {
         let c = Config::parse_str("[editor]\nfont_size = 12\n");
         assert_eq!(c.editor.font_size, 12.0);
         assert_eq!(c.editor.tab_width, 4); // default preserved
+    }
+
+    #[test]
+    fn load_uses_requested_font_from_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "ozone-config-font-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[editor]\nfont = \"Cascadia Mono\"\nfont_size = 15\n").unwrap();
+
+        let c = Config::load(&path);
+        assert_eq!(c.editor.font, "Cascadia Mono");
+        assert_eq!(c.editor.font_size, 15.0);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
