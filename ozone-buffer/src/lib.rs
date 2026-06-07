@@ -208,20 +208,31 @@ impl Buffer {
 
     /// Undo the most recent edit. Returns the cursor position after undo, or None if nothing to undo.
     pub fn undo(&mut self) -> Option<Pos> {
+        self.undo_with_delta().map(|(pos, _)| pos)
+    }
+
+    /// Undo and return both the cursor position and the inverse delta applied.
+    pub fn undo_with_delta(&mut self) -> Option<(Pos, Delta)> {
         let delta = self.undo_stack.pop()?;
         let pos = self.invert_and_apply(&delta);
+        let applied = delta.inverse();
         self.redo_stack.push(delta);
         self.dirty = self.undo_stack.len() != self.save_marker;
-        Some(pos)
+        Some((pos, applied))
     }
 
     /// Redo the most recently undone edit.
     pub fn redo(&mut self) -> Option<Pos> {
+        self.redo_with_delta().map(|(pos, _)| pos)
+    }
+
+    /// Redo and return both the cursor position and the delta applied.
+    pub fn redo_with_delta(&mut self) -> Option<(Pos, Delta)> {
         let delta = self.redo_stack.pop()?;
         let pos = self.reapply(&delta);
-        self.undo_stack.push(delta);
+        self.undo_stack.push(delta.clone());
         self.dirty = true;
-        Some(pos)
+        Some((pos, delta))
     }
 
     fn push_undo(&mut self, delta: Delta) {

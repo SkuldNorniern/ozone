@@ -408,8 +408,16 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
     );
 
     reg.register("edit.undo", "Undo last edit", |ctx| {
-        let buf = ctx.workspace.buffers.get_mut(&ctx.buffer_id).unwrap();
-        if let Some(pos) = buf.undo() {
+        let result = ctx
+            .workspace
+            .buffers
+            .get_mut(&ctx.buffer_id)
+            .and_then(|buf| buf.undo_with_delta());
+        if let Some((pos, delta)) = result {
+            ctx.workspace.emit(EditorEvent::BufferChanged {
+                id: ctx.buffer_id,
+                delta,
+            });
             let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
             let old = view.cursor;
             view.cursor = pos;
@@ -419,8 +427,16 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
     });
 
     reg.register("edit.redo", "Redo last undone edit", |ctx| {
-        let buf = ctx.workspace.buffers.get_mut(&ctx.buffer_id).unwrap();
-        if let Some(pos) = buf.redo() {
+        let result = ctx
+            .workspace
+            .buffers
+            .get_mut(&ctx.buffer_id)
+            .and_then(|buf| buf.redo_with_delta());
+        if let Some((pos, delta)) = result {
+            ctx.workspace.emit(EditorEvent::BufferChanged {
+                id: ctx.buffer_id,
+                delta,
+            });
             let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
             let old = view.cursor;
             view.cursor = pos;

@@ -7,11 +7,14 @@
 //! current `Workspace` into a `DrawingContext`.
 
 use aurea::AureaResult;
-use aurea::render::{DrawingContext, Font, Image, Point, Rect};
+use aurea::render::{Color, DrawingContext, Font, Image, Point, Rect};
 
-use ozone_buffer::BufferKind;
+use ozone_buffer::{BufferKind, Pos};
 use ozone_config::{Config, CursorStyle, LineNumbers};
-use ozone_editor::{PaneTree, ViewId, Workspace, matching_bracket};
+use ozone_editor::{
+    Decoration, DecorationKind, HlRole, PaneTree, ViewId, VirtualPos, Workspace,
+    matching_bracket,
+};
 use ozone_syntax::{Filetype, ScanState, TokenKind, scan_line};
 
 use crate::input::ActiveMods;
@@ -257,6 +260,20 @@ fn draw_view(
     };
     let search_qlen = search.map(|s| s.query.chars().count()).unwrap_or(0);
 
+    let visible_start = buf.pos_to_offset(Pos::new(scroll, 0));
+    let visible_end_line = (scroll + visible).min(line_count);
+    let visible_end = if visible_end_line >= line_count {
+        buf.text().len().saturating_add(1)
+    } else {
+        buf.pos_to_offset(Pos::new(visible_end_line, 0))
+    };
+    let decorations: Vec<Decoration> = ws
+        .decorations()
+        .in_range(buffer_id, visible_start, visible_end)
+        .into_iter()
+        .cloned()
+        .collect();
+
     // Gutter strip
     if gutter_w > 0.0 {
         ctx.draw_rect(
@@ -289,6 +306,19 @@ fn draw_view(
         let baseline =
             baseline_in_rect(line_top, line_h, metrics.text_ascent, metrics.text_descent);
         let is_cursor = line_idx == view.cursor.line;
+        let line_text = buf.line(line_idx).unwrap_or_default();
+        let line_start = buf.pos_to_offset(Pos::new(line_idx, 0));
+        let line_end = line_start + line_text.len();
+        let line_decorations: Vec<&Decoration> = decorations
+            .iter()
+            .filter(|decoration| {
+                if decoration.start == decoration.end {
+                    decoration.start >= line_start && decoration.start <= line_end
+                } else {
+                    decoration.start < line_end && decoration.end > line_start
+                }
+            })
+            .collect();
 
         // Cursor-line highlight
         if is_cursor && is_active_pane {
@@ -322,6 +352,24 @@ fn draw_view(
                     Rect::new(sx, line_top + 1.0, sw, line_h - 2.0),
                     &solid(palette().selection),
                 )?;
+            }
+        }
+
+        for decoration in &line_decorations {
+            if let DecorationKind::Highlight(role) = &decoration.kind {
+                let start = decoration.start.max(line_start) - line_start;
+                let end = decoration.end.min(line_end) - line_start;
+                if end > start {
+                    ctx.draw_rect(
+                        Rect::new(
+                            text_x + start as f32 * metrics.char_w,
+                            line_top + 1.0,
+                            (end - start) as f32 * metrics.char_w,
+                            line_h - 2.0,
+                        ),
+                        &solid(decoration_highlight_color(*role)),
+                    )?;
+                }
             }
         }
 
@@ -378,6 +426,26 @@ fn draw_view(
             ctx.draw_text_with_font(&num, Point::new(num_x, baseline), font, &solid(ng))?;
         }
 
+        let gutter_signs: String = line_decorations
+            .iter()
+            .filter_map(|decoration| match &decoration.kind {
+                DecorationKind::GutterSign(sign)
+                    if decoration.start >= line_start && decoration.start <= line_end =>
+                {
+                    Some(sign.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        if !gutter_signs.is_empty() && gutter_w > 0.0 {
+            ctx.draw_text_with_font(
+                &gutter_signs,
+                Point::new(rect.x + 3.0, baseline),
+                font,
+                &solid(palette().picker_prompt),
+            )?;
+        }
+
         // Line content: terminal colour grid, or syntax-highlighted buffer text.
         if let Some(grid) = term_grid {
             if let Some(row) = grid.get(line_idx) {
@@ -392,11 +460,39 @@ fn draw_view(
                     font,
                 )?;
             }
-        } else if let Some(line_text) = buf.line(line_idx) {
+        } else {
             let (spans, new_state) = scan_line(ft, &line_text, scan_state);
             scan_state = new_state;
+            let inline_virtual: Vec<&Decoration> = line_decorations
+                .iter()
+                .copied()
+                .filter(|decoration| {
+                    let anchored_here =
+                        decoration.start >= line_start && decoration.start <= line_end;
+                    anchored_here
+                        && matches!(
+                        &decoration.kind,
+                        DecorationKind::VirtualText {
+                            pos: VirtualPos::Inline,
+                            ..
+                        }
+                    )
+                })
+                .collect();
 
-            if spans.is_empty() || ft == Filetype::Plain {
+            if !inline_virtual.is_empty() {
+                draw_line_with_inline_virtual_text(
+                    ctx,
+                    &line_text,
+                    &spans,
+                    &inline_virtual,
+                    line_start,
+                    text_x,
+                    baseline,
+                    metrics.char_w,
+                    font,
+                )?;
+            } else if spans.is_empty() || ft == Filetype::Plain {
                 ctx.draw_text_with_font(
                     &line_text,
                     Point::new(text_x, baseline),
@@ -413,6 +509,41 @@ fn draw_view(
                     metrics.char_w,
                     font,
                 )?;
+            }
+        }
+
+        for decoration in &line_decorations {
+            match &decoration.kind {
+                DecorationKind::Underline(role) => {
+                    let start = decoration.start.max(line_start) - line_start;
+                    let end = decoration.end.min(line_end) - line_start;
+                    if end > start {
+                        let y = line_top + line_h - 2.0;
+                        ctx.draw_line(
+                            text_x + start as f32 * metrics.char_w,
+                            y,
+                            text_x + end as f32 * metrics.char_w,
+                            y,
+                            &stroke(decoration_role_color(*role), 1.0),
+                        )?;
+                    }
+                }
+                DecorationKind::VirtualText {
+                    text,
+                    pos: VirtualPos::Eol,
+                    role,
+                } if decoration.start >= line_start && decoration.start <= line_end => {
+                    ctx.draw_text_with_font(
+                        text,
+                        Point::new(
+                            text_x + (line_text.len() + 1) as f32 * metrics.char_w,
+                            baseline,
+                        ),
+                        font,
+                        &solid(decoration_role_color(*role)),
+                    )?;
+                }
+                _ => {}
             }
         }
 
@@ -463,6 +594,98 @@ fn draw_view(
             Rect::new(rect.x, rect.y, rect.width, 2.0),
             &solid(palette().active_pane_border),
         )?;
+    }
+
+    Ok(())
+}
+
+fn decoration_role_color(role: HlRole) -> Color {
+    match role {
+        HlRole::Search => palette().search_match,
+        HlRole::SearchCurrent => palette().search_match_active,
+        HlRole::Bracket => palette().active_pane_border,
+        HlRole::Selection => palette().selection,
+        HlRole::Error => palette().notify_error,
+        HlRole::Warn => palette().notify_warn,
+        HlRole::Info => palette().notify_info,
+        HlRole::Hint => palette().picker_detail,
+    }
+}
+
+fn decoration_highlight_color(role: HlRole) -> Color {
+    let color = decoration_role_color(role);
+    Color::rgba(color.r, color.g, color.b, color.a.min(110))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_line_with_inline_virtual_text(
+    ctx: &mut dyn DrawingContext,
+    text: &str,
+    spans: &[ozone_syntax::TokenSpan],
+    decorations: &[&Decoration],
+    line_start: usize,
+    x0: f32,
+    baseline: f32,
+    char_w: f32,
+    font: &Font,
+) -> AureaResult<()> {
+    let mut decorations = decorations.to_vec();
+    decorations.sort_by_key(|decoration| decoration.start);
+    let mut decoration_index = 0usize;
+    let mut x = x0;
+
+    for (byte, ch) in text.char_indices() {
+        while let Some(decoration) = decorations.get(decoration_index)
+            && decoration.start.saturating_sub(line_start) <= byte
+        {
+            if let DecorationKind::VirtualText { text, role, .. } = &decoration.kind {
+                ctx.draw_text_with_font(
+                    text,
+                    Point::new(x, baseline),
+                    font,
+                    &solid(decoration_role_color(*role)),
+                )?;
+                x += ctx
+                    .measure_text(text, font)
+                    .map(|metrics| metrics.advance)
+                    .unwrap_or(text.chars().count() as f32 * char_w);
+            }
+            decoration_index += 1;
+        }
+
+        let mut encoded = [0u8; 4];
+        let glyph = ch.encode_utf8(&mut encoded);
+        let kind = spans
+            .iter()
+            .find(|span| byte >= span.start && byte < span.start + span.len)
+            .map(|span| span.kind)
+            .unwrap_or(TokenKind::Default);
+        ctx.draw_text_with_font(
+            glyph,
+            Point::new(x, baseline),
+            font,
+            &solid(token_color(kind)),
+        )?;
+        x += ctx
+            .measure_text(glyph, font)
+            .map(|metrics| metrics.advance)
+            .unwrap_or(char_w);
+    }
+
+    while let Some(decoration) = decorations.get(decoration_index) {
+        if let DecorationKind::VirtualText { text, role, .. } = &decoration.kind {
+            ctx.draw_text_with_font(
+                text,
+                Point::new(x, baseline),
+                font,
+                &solid(decoration_role_color(*role)),
+            )?;
+            x += ctx
+                .measure_text(text, font)
+                .map(|metrics| metrics.advance)
+                .unwrap_or(text.chars().count() as f32 * char_w);
+        }
+        decoration_index += 1;
     }
 
     Ok(())

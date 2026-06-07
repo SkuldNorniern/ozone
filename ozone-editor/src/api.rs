@@ -23,6 +23,9 @@ use std::path::PathBuf;
 
 use ozone_buffer::{BufferId, Pos, Span};
 
+use crate::decoration::{
+    Decoration, DecorationId, DecorationKind, Gravity, NamespaceId,
+};
 use crate::events::EditorEvent;
 use crate::options::OptionValue;
 use crate::pane::{FocusDirection, SplitAxis};
@@ -132,9 +135,14 @@ impl<'a> EditorApi<'a> {
     /// anything was undone.
     pub fn undo(&mut self) -> bool {
         let Some(bid) = self.active_buffer() else { return false };
-        let pos = self.ws.buffers.get_mut(&bid).and_then(|b| b.undo());
-        match pos {
-            Some(pos) => {
+        let result = self
+            .ws
+            .buffers
+            .get_mut(&bid)
+            .and_then(|b| b.undo_with_delta());
+        match result {
+            Some((pos, delta)) => {
+                self.ws.emit(EditorEvent::BufferChanged { id: bid, delta });
                 self.set_cursor(pos);
                 true
             }
@@ -145,9 +153,14 @@ impl<'a> EditorApi<'a> {
     /// Redo the last undone edit. Returns whether anything was redone.
     pub fn redo(&mut self) -> bool {
         let Some(bid) = self.active_buffer() else { return false };
-        let pos = self.ws.buffers.get_mut(&bid).and_then(|b| b.redo());
-        match pos {
-            Some(pos) => {
+        let result = self
+            .ws
+            .buffers
+            .get_mut(&bid)
+            .and_then(|b| b.redo_with_delta());
+        match result {
+            Some((pos, delta)) => {
+                self.ws.emit(EditorEvent::BufferChanged { id: bid, delta });
                 self.set_cursor(pos);
                 true
             }
@@ -236,6 +249,85 @@ impl<'a> EditorApi<'a> {
         }
     }
 
+    // --- decorations ---
+
+    /// Reserve a namespace for one feature or extension.
+    pub fn decoration_namespace(&mut self) -> NamespaceId {
+        self.ws.decorations_mut().namespace()
+    }
+
+    /// Add a decoration to the active buffer using default endpoint gravity.
+    pub fn add_decoration(
+        &mut self,
+        namespace: NamespaceId,
+        start: usize,
+        end: usize,
+        kind: DecorationKind,
+    ) -> Option<DecorationId> {
+        let buffer = self.active_buffer()?;
+        Some(
+            self.ws
+                .decorations_mut()
+                .add(buffer, namespace, start, end, kind),
+        )
+    }
+
+    /// Add a decoration to an explicit buffer with configurable endpoint gravity.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_decoration_in(
+        &mut self,
+        buffer: BufferId,
+        namespace: NamespaceId,
+        start: usize,
+        end: usize,
+        start_gravity: Gravity,
+        end_gravity: Gravity,
+        kind: DecorationKind,
+    ) -> Option<DecorationId> {
+        self.ws.buffers.contains_key(&buffer).then(|| {
+            self.ws.decorations_mut().add_with_gravity(
+                buffer,
+                namespace,
+                start,
+                end,
+                start_gravity,
+                end_gravity,
+                kind,
+            )
+        })
+    }
+
+    /// Clear a namespace across every buffer.
+    pub fn clear_decoration_namespace(&mut self, namespace: NamespaceId) -> usize {
+        self.ws.decorations_mut().clear_namespace(namespace)
+    }
+
+    /// Clear a namespace in one buffer.
+    pub fn clear_decoration_namespace_in(
+        &mut self,
+        buffer: BufferId,
+        namespace: NamespaceId,
+    ) -> usize {
+        self.ws
+            .decorations_mut()
+            .clear_namespace_in(buffer, namespace)
+    }
+
+    /// Copy decorations overlapping `[start, end)` from an explicit buffer.
+    pub fn decorations_in(
+        &self,
+        buffer: BufferId,
+        start: usize,
+        end: usize,
+    ) -> Vec<Decoration> {
+        self.ws
+            .decorations()
+            .in_range(buffer, start, end)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
     // --- integration ---
 
     /// Emit an editor event (drives autocommands).
@@ -320,5 +412,47 @@ mod tests {
         assert_eq!(api.active_view(), Some(second));
         assert_eq!(api.focus_previous_pane(), Some(first));
         assert!(api.close_pane()); // closes `first`, promotes the other
+    }
+
+    #[test]
+    fn decorations_follow_api_undo_and_redo() {
+        let mut ws = Workspace::new();
+        let mut api = EditorApi::new(&mut ws);
+        api.insert("abcd");
+        let ns = api.decoration_namespace();
+        api.add_decoration(
+            ns,
+            1,
+            3,
+            DecorationKind::Highlight(crate::HlRole::Search),
+        );
+
+        api.set_cursor(Pos::new(0, 0));
+        api.insert("x");
+        let bid = api.active_buffer().unwrap();
+        assert_eq!(
+            api.decorations_in(bid, 0, 10)
+                .iter()
+                .map(|d| (d.start, d.end))
+                .collect::<Vec<_>>(),
+            vec![(2, 4)]
+        );
+
+        assert!(api.undo());
+        assert_eq!(
+            api.decorations_in(bid, 0, 10)
+                .iter()
+                .map(|d| (d.start, d.end))
+                .collect::<Vec<_>>(),
+            vec![(1, 3)]
+        );
+        assert!(api.redo());
+        assert_eq!(
+            api.decorations_in(bid, 0, 10)
+                .iter()
+                .map(|d| (d.start, d.end))
+                .collect::<Vec<_>>(),
+            vec![(2, 4)]
+        );
     }
 }

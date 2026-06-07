@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use ozone_buffer::{Buffer, BufferId, BufferKind, Pos};
 
+use crate::decoration::DecorationStore;
 use crate::events::EditorEvent;
 use crate::options::{BufferLocal, OptionValue};
 use crate::pane::{FocusDirection, PaneTree, SplitAxis};
@@ -57,6 +58,8 @@ pub struct Workspace {
     pub indent: IndentConfig,
     /// Per-buffer setting overrides (`[[filetype]]`, autocommands, plugins).
     buffer_options: HashMap<BufferId, BufferLocal>,
+    /// Edit-tracked annotations over buffer ranges (highlights, signs, hints).
+    decorations: DecorationStore,
     events: Vec<EditorEvent>,
     ui_intents: Vec<UiIntent>,
     jumps: JumpList,
@@ -71,6 +74,7 @@ impl Workspace {
             panes: None,
             indent: IndentConfig::default(),
             buffer_options: HashMap::new(),
+            decorations: DecorationStore::new(),
             events: Vec::new(),
             ui_intents: Vec::new(),
             jumps: JumpList::default(),
@@ -150,7 +154,27 @@ impl Workspace {
     }
 
     pub fn emit(&mut self, event: EditorEvent) {
+        match &event {
+            // Decorations follow edits before observers receive the event.
+            EditorEvent::BufferChanged { id, delta } => {
+                self.decorations.apply_delta(*id, delta);
+            }
+            EditorEvent::BufferClosed { id } => {
+                self.decorations.forget_buffer(*id);
+            }
+            _ => {}
+        }
         self.events.push(event);
+    }
+
+    /// The decoration store (read): highlights, gutter signs, virtual text.
+    pub fn decorations(&self) -> &DecorationStore {
+        &self.decorations
+    }
+
+    /// The decoration store (mutate): add/clear annotations, reserve namespaces.
+    pub fn decorations_mut(&mut self) -> &mut DecorationStore {
+        &mut self.decorations
     }
 
     pub fn drain_events(&mut self) -> Vec<EditorEvent> {
@@ -491,8 +515,10 @@ impl Workspace {
             })
             .unwrap_or(false);
         if should_remove {
-            self.buffers.remove(&buffer_id);
-            self.buffer_options.remove(&buffer_id);
+            if self.buffers.remove(&buffer_id).is_some() {
+                self.buffer_options.remove(&buffer_id);
+                self.emit(EditorEvent::BufferClosed { id: buffer_id });
+            }
         }
     }
 }
@@ -714,5 +740,33 @@ mod tests {
         assert_eq!(ws.focus_next_pane(), Some(second));
         assert_eq!(ws.focus_previous_pane(), Some(first));
         assert_eq!(ws.focus_previous_pane(), Some(third));
+    }
+
+    #[test]
+    fn closing_transient_buffer_discards_decorations() {
+        use crate::decoration::{DecorationKind, HlRole};
+
+        let mut ws = Workspace::new();
+        let original = ws.active_view_id.unwrap();
+        let (buffer, transient) =
+            ws.open_virtual_buffer(BufferKind::Search, "result".to_string());
+        let namespace = ws.decorations_mut().namespace();
+        ws.decorations_mut().add(
+            buffer,
+            namespace,
+            0,
+            6,
+            DecorationKind::Highlight(HlRole::Search),
+        );
+
+        ws.show_view_in_active_pane(original);
+        ws.discard_orphan_view(transient);
+
+        assert!(!ws.buffers.contains_key(&buffer));
+        assert!(ws.decorations().all(buffer).is_empty());
+        assert!(ws
+            .drain_events()
+            .iter()
+            .any(|event| matches!(event, EditorEvent::BufferClosed { id } if *id == buffer)));
     }
 }

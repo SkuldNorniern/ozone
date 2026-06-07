@@ -2,6 +2,7 @@ pub mod api;
 pub mod autocmd;
 pub mod brackets;
 pub mod commands;
+pub mod decoration;
 pub mod events;
 pub mod keymap;
 pub mod options;
@@ -15,6 +16,10 @@ pub use api::EditorApi;
 pub use autocmd::{Autocommand, AutocommandRegistry};
 pub use brackets::matching_bracket;
 pub use commands::{CommandContext, CommandRegistry};
+pub use decoration::{
+    Decoration, DecorationId, DecorationKind, DecorationStore, Gravity, HlRole, NamespaceId,
+    VirtualPos,
+};
 pub use events::{EditorEvent, EventKind};
 pub use ui::{NotifyLevel, SelectItem, UiIntent};
 pub use keymap::{Key, KeyStroke, Keymap, KeymapOutcome, ModifierMap, PhysicalModifier, PhysicalMods, stroke_label};
