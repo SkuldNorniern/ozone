@@ -33,6 +33,7 @@ pub(crate) fn draw_editor(
     term_cells: &TermCells,
     images: &ImageCache,
     mods: ActiveMods,
+    cursor_visible: bool,
     char_w_out: &mut f32,
 ) -> AureaResult<()> {
     let width = ctx.width() as f32;
@@ -76,6 +77,7 @@ pub(crate) fn draw_editor(
             metrics,
             term_cells,
             images,
+            cursor_visible,
         )?;
     } else if let Some(view_id) = ws.active_view().map(|view| view.id) {
         draw_view(
@@ -88,6 +90,7 @@ pub(crate) fn draw_editor(
             metrics,
             term_cells,
             images,
+            cursor_visible,
         )?;
     }
 
@@ -117,10 +120,20 @@ fn draw_pane_tree(
     metrics: TextMetrics,
     term_cells: &TermCells,
     images: &ImageCache,
+    cursor_visible: bool,
 ) -> AureaResult<()> {
     match tree {
         PaneTree::Leaf { view_id } => draw_view(
-            ctx, ws, config, *view_id, rect, font, metrics, term_cells, images,
+            ctx,
+            ws,
+            config,
+            *view_id,
+            rect,
+            font,
+            metrics,
+            term_cells,
+            images,
+            cursor_visible,
         ),
         PaneTree::Split {
             axis,
@@ -130,7 +143,16 @@ fn draw_pane_tree(
         } => {
             let (first_rect, second_rect, divider) = split_rect(rect, *axis, *ratio);
             draw_pane_tree(
-                ctx, ws, config, first, first_rect, font, metrics, term_cells, images,
+                ctx,
+                ws,
+                config,
+                first,
+                first_rect,
+                font,
+                metrics,
+                term_cells,
+                images,
+                cursor_visible,
             )?;
             draw_pane_tree(
                 ctx,
@@ -142,6 +164,7 @@ fn draw_pane_tree(
                 metrics,
                 term_cells,
                 images,
+                cursor_visible,
             )?;
             ctx.draw_rect(divider, &solid(palette().border))?;
             Ok(())
@@ -160,6 +183,7 @@ fn draw_view(
     metrics: TextMetrics,
     term_cells: &TermCells,
     images: &ImageCache,
+    cursor_visible: bool,
 ) -> AureaResult<()> {
     let Some(buffer_id) = ws.views.get(&view_id).map(|view| view.buffer_id) else {
         return Ok(());
@@ -547,7 +571,8 @@ fn draw_view(
             }
         }
 
-        if is_cursor
+        if cursor_visible
+            && is_cursor
             && is_active_pane
             && view.cursor.col >= segment_start
             && (view.cursor.col < segment_end || segment_is_line_end)

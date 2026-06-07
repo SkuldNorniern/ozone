@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use ozone_term::Terminal;
 
@@ -150,6 +151,7 @@ impl OzoneGui {
                 &TermCells::new(),
                 &ImageCache::new(),
                 ActiveMods::default(),
+                true,
                 &mut scratch_char_w,
             )?;
             if let Some(p) = pal.as_ref() {
@@ -190,6 +192,7 @@ impl OzoneGui {
                     &TermCells::new(),
                     &ImageCache::new(),
                     ActiveMods::default(),
+                    true,
                     &mut scratch_char_w,
                 )
             })?;
@@ -217,6 +220,9 @@ impl OzoneGui {
         // Pointer state for the run loop (last position now; the unified
         // pointer model from docs/aurea-pointer-roadmap.md will grow here).
         let mut mouse = MouseState::default();
+        let blink_interval = Duration::from_millis(530);
+        let mut cursor_visible = true;
+        let mut last_cursor_blink = Instant::now();
 
         // --------------- event loop ---------------
         loop {
@@ -241,6 +247,7 @@ impl OzoneGui {
             let events = window.poll_events();
             let mut should_close = false;
             let mut needs_redraw = false;
+            let mut cursor_activity = false;
             // When the palette opens via a key, the trigger char (e.g. the `x`
             // of M-x) may also arrive as TextInput; swallow that one char.
             let mut swallow_text = false;
@@ -282,6 +289,7 @@ impl OzoneGui {
                             live_mods = m;
                             needs_redraw = true;
                         }
+                        cursor_activity = true;
                         let mut pal = lock(palette.as_ref());
                         let mut srch = lock(search.as_ref());
                         let mut mb = lock(minibuffer.as_ref());
@@ -392,6 +400,7 @@ impl OzoneGui {
                             swallow_text = false; // drop the palette trigger char
                             continue;
                         }
+                        cursor_activity = true;
                         let mut mb = lock(minibuffer.as_ref());
                         if let Some(m) = mb.as_mut() {
                             for c in text.chars().filter(|c| !c.is_control()) {
@@ -423,8 +432,8 @@ impl OzoneGui {
                             } else {
                                 drop(srch);
                                 let mut ws = lock(self.workspace.as_ref());
-                                let term_id =
-                                    active_terminal(&ws).filter(|id| terms.sessions.contains_key(id));
+                                let term_id = active_terminal(&ws)
+                                    .filter(|id| terms.sessions.contains_key(id));
                                 if let Some(term_id) = term_id {
                                     // Send typed text straight to the PTY; the shell echoes it back.
                                     let printable: String =
@@ -486,6 +495,7 @@ impl OzoneGui {
                                 modifiers.shift,
                             ) {
                                 needs_redraw = true;
+                                cursor_activity = true;
                             }
                         }
                     }
@@ -526,6 +536,7 @@ impl OzoneGui {
                                 max_scroll,
                             );
                         }
+                        cursor_activity = true;
                         needs_redraw = true;
                     }
 
@@ -535,6 +546,15 @@ impl OzoneGui {
 
             if should_close {
                 break;
+            }
+
+            if cursor_activity {
+                cursor_visible = true;
+                last_cursor_blink = Instant::now();
+            } else if last_cursor_blink.elapsed() >= blink_interval {
+                cursor_visible = !cursor_visible;
+                last_cursor_blink = Instant::now();
+                needs_redraw = true;
             }
 
             // --- terminal sync: spawn, stream output into the buffer, scroll ---
@@ -598,7 +618,9 @@ impl OzoneGui {
                     }
                 }
 
-                terms.versions.retain(|id, _| terms.sessions.contains_key(id));
+                terms
+                    .versions
+                    .retain(|id, _| terms.sessions.contains_key(id));
                 let active_term = active_terminal(&ws);
                 for (id, term) in terms.sessions.iter() {
                     let is_active = active_term == Some(*id);
@@ -739,6 +761,7 @@ impl OzoneGui {
                         &terms.cells,
                         &images,
                         active_mods,
+                        cursor_visible,
                         &mut measured_char_w,
                     )?;
                     if let Some(p) = pal.as_ref() {
