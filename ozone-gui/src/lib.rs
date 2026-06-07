@@ -47,7 +47,10 @@ use input::*;
 use keys::*;
 pub(crate) use layout::*;
 use minibuffer::*;
-use mouse::{MouseState, handle_editor_click, handle_editor_drag};
+use mouse::{
+    MouseState, handle_editor_click, handle_editor_drag, handle_scrollbar_drag,
+    handle_scrollbar_press,
+};
 use notify::*;
 use ozone_buffer::{BufferId, BufferKind};
 use ozone_config::Config;
@@ -454,7 +457,25 @@ impl OzoneGui {
                         let (x, y) = (x as f32, y as f32);
                         mouse.moved(x, y);
                         if self.config.ui.mouse {
-                            if let Some((view_id, anchor)) = mouse.selection_drag() {
+                            if let Some((view_id, grab_y)) = mouse.scrollbar_drag() {
+                                let (width, height) = {
+                                    let canvas = lock(canvas_arc.as_ref());
+                                    (canvas.width() as f32, canvas.height() as f32)
+                                };
+                                let mut ws = lock(self.workspace.as_ref());
+                                if handle_scrollbar_drag(
+                                    &mut ws,
+                                    &self.config,
+                                    y,
+                                    width,
+                                    height,
+                                    view_id,
+                                    grab_y,
+                                ) {
+                                    needs_redraw = true;
+                                    cursor_activity = true;
+                                }
+                            } else if let Some((view_id, anchor)) = mouse.selection_drag() {
                                 let (width, height) = {
                                     let canvas = lock(canvas_arc.as_ref());
                                     (canvas.width() as f32, canvas.height() as f32)
@@ -508,7 +529,13 @@ impl OzoneGui {
                                 (canvas.width() as f32, canvas.height() as f32)
                             };
                             let mut ws = lock(self.workspace.as_ref());
-                            if handle_editor_click(
+                            if let Some(press) =
+                                handle_scrollbar_press(&mut ws, &self.config, x, y, width, height)
+                            {
+                                mouse.begin_scrollbar_drag(press.view_id, press.grab_y);
+                                needs_redraw |= press.changed;
+                                cursor_activity = true;
+                            } else if handle_editor_click(
                                 &mut ws,
                                 &self.config,
                                 x,
@@ -552,6 +579,7 @@ impl OzoneGui {
                         ..
                     } if self.config.ui.mouse => {
                         mouse.end_selection_drag();
+                        mouse.end_scrollbar_drag();
                     }
 
                     WindowEvent::MouseWheel { delta_y, .. } => {

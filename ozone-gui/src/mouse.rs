@@ -26,6 +26,7 @@ pub(crate) struct MouseState {
     /// move event. Currently consumed only by wheel pane targeting.
     pos: Option<(f32, f32)>,
     selection_drag: Option<(ViewId, Pos)>,
+    scrollbar_drag: Option<(ViewId, f32)>,
 }
 
 impl MouseState {
@@ -40,6 +41,7 @@ impl MouseState {
     }
 
     pub(crate) fn begin_selection_drag(&mut self, view_id: ViewId, anchor: Pos) {
+        self.scrollbar_drag = None;
         self.selection_drag = Some((view_id, anchor));
     }
 
@@ -50,6 +52,26 @@ impl MouseState {
     pub(crate) fn selection_drag(&self) -> Option<(ViewId, Pos)> {
         self.selection_drag
     }
+
+    pub(crate) fn begin_scrollbar_drag(&mut self, view_id: ViewId, grab_y: f32) {
+        self.selection_drag = None;
+        self.scrollbar_drag = Some((view_id, grab_y));
+    }
+
+    pub(crate) fn end_scrollbar_drag(&mut self) {
+        self.scrollbar_drag = None;
+    }
+
+    pub(crate) fn scrollbar_drag(&self) -> Option<(ViewId, f32)> {
+        self.scrollbar_drag
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ScrollbarPress {
+    pub view_id: ViewId,
+    pub grab_y: f32,
+    pub changed: bool,
 }
 
 /// Map a left-click at window `(x, y)` to a cursor position: focus the pane,
@@ -168,6 +190,69 @@ pub(crate) fn handle_editor_drag(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub(crate) fn handle_scrollbar_press(
+    ws: &mut Workspace,
+    config: &Config,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+) -> Option<ScrollbarPress> {
+    let (view_id, thumb_y, thumb_h) = scrollbar_at(ws, config, x, y, width, height)?;
+    let grab_y = if y >= thumb_y && y <= thumb_y + thumb_h {
+        y - thumb_y
+    } else {
+        thumb_h / 2.0
+    };
+    let changed = handle_scrollbar_drag(ws, config, y, width, height, view_id, grab_y);
+    Some(ScrollbarPress {
+        view_id,
+        grab_y,
+        changed,
+    })
+}
+
+pub(crate) fn handle_scrollbar_drag(
+    ws: &mut Workspace,
+    config: &Config,
+    y: f32,
+    width: f32,
+    height: f32,
+    view_id: ViewId,
+    grab_y: f32,
+) -> bool {
+    let Some((rect, line_count, viewport_lines, line_h)) =
+        scrollbar_view_metrics(ws, config, width, height, view_id)
+    else {
+        return false;
+    };
+    let max_scroll = crate::layout::max_scroll_line(line_count, viewport_lines as usize);
+    if max_scroll == 0 {
+        return false;
+    }
+    let track_h = rect.height;
+    let thumb_h = (track_h * viewport_lines / line_count as f32).clamp(24.0, track_h);
+    let travel = (track_h - thumb_h).max(1.0);
+    let thumb_y = (y - grab_y).clamp(rect.y, rect.y + travel);
+    let total = ((thumb_y - rect.y) / travel) * max_scroll as f32 * line_h;
+    let scroll_line = (total / line_h).floor() as usize;
+    let scroll_y = total - scroll_line as f32 * line_h;
+
+    let Some(view) = ws.views.get_mut(&view_id) else {
+        return false;
+    };
+    let scroll_line = scroll_line.min(max_scroll);
+    let scroll_y = if scroll_line >= max_scroll { 0.0 } else { scroll_y };
+    let changed = view.scroll_line != scroll_line || (view.scroll_y - scroll_y).abs() > 0.01;
+    if changed {
+        view.scroll_line = scroll_line;
+        view.scroll_y = scroll_y;
+        ws.active_view_id = Some(view_id);
+    }
+    changed
+}
+
+#[allow(clippy::too_many_arguments)]
 fn editor_text_position_at(
     ws: &Workspace,
     config: &Config,
@@ -234,6 +319,67 @@ fn editor_text_position_at(
         col -= 1;
     }
     Some((view_id, Pos::new(line, col)))
+}
+
+fn scrollbar_at(
+    ws: &Workspace,
+    config: &Config,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+) -> Option<(ViewId, f32, f32)> {
+    let editor_rect = Rect::new(0.0, 0.0, width, (height - STATUS_H).max(0.0));
+    let (view_id, _rect) = ws
+        .panes
+        .as_ref()
+        .and_then(|tree| pane_at(tree, editor_rect, x, y))
+        .or_else(|| ws.active_view_id.map(|id| (id, editor_rect)))?;
+    let (rect, line_count, viewport_lines, line_h) =
+        scrollbar_view_metrics(ws, config, width, height, view_id)?;
+    if y < rect.y || y > rect.y + rect.height {
+        return None;
+    }
+    let track_h = rect.height;
+    if line_count as f32 <= viewport_lines {
+        return None;
+    }
+    let bar_x = rect.x + rect.width - 4.0;
+    if x < bar_x - 5.0 || x > rect.x + rect.width {
+        return None;
+    }
+    let thumb_h = (track_h * viewport_lines / line_count as f32).clamp(24.0, track_h);
+    let max_scroll = crate::layout::max_scroll_line(line_count, viewport_lines as usize);
+    let scroll = ws.views.get(&view_id)?.scroll_line;
+    let scroll_y = ws.views.get(&view_id)?.scroll_y;
+    let t = if max_scroll > 0 {
+        ((scroll as f32 + scroll_y / line_h) / max_scroll as f32).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let thumb_y = rect.y + t * (track_h - thumb_h);
+    Some((view_id, thumb_y, thumb_h))
+}
+
+fn scrollbar_view_metrics(
+    ws: &Workspace,
+    config: &Config,
+    width: f32,
+    height: f32,
+    view_id: ViewId,
+) -> Option<(Rect, usize, f32, f32)> {
+    let editor_rect = Rect::new(0.0, 0.0, width, (height - STATUS_H).max(0.0));
+    let rect = ws
+        .panes
+        .as_ref()
+        .and_then(|tree| pane_rect(tree, editor_rect, view_id))
+        .or((ws.active_view_id == Some(view_id)).then_some(editor_rect))?;
+    let buffer_id = ws.views.get(&view_id)?.buffer_id;
+    let line_count = ws.buffers.get(&buffer_id)?.line_count();
+    let line_h = (config.editor.font_size * config.editor.line_height).max(1.0);
+    let content_h = (rect.height - EDITOR_TOP_PAD).max(0.0);
+    let viewport_lines = (content_h / line_h).max(1.0);
+    Some((rect, line_count, viewport_lines, line_h))
 }
 
 fn ordered_span(a: Pos, b: Pos) -> Span {
@@ -440,5 +586,43 @@ mod tests {
         ));
         assert_eq!(ws.active_view().unwrap().cursor, ozone_buffer::Pos::new(0, 1));
         assert!(ws.active_view().unwrap().selection.is_none());
+    }
+
+    #[test]
+    fn scrollbar_press_scrolls_view() {
+        let text = (0..100).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let mut ws = text_workspace(&text);
+        let mut config = Config::default_config();
+        config.editor.font_size = 10.0;
+        config.editor.line_height = 2.0;
+
+        let press = handle_scrollbar_press(&mut ws, &config, 798.0, 500.0, 800.0, 600.0)
+            .expect("scrollbar hit");
+        assert_eq!(press.view_id, ws.active_view_id.unwrap());
+        assert!(press.changed);
+        assert!(ws.active_view().unwrap().scroll_line > 0);
+    }
+
+    #[test]
+    fn scrollbar_drag_clamps_to_bottom() {
+        let text = (0..100).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let mut ws = text_workspace(&text);
+        let mut config = Config::default_config();
+        config.editor.font_size = 10.0;
+        config.editor.line_height = 2.0;
+        let view_id = ws.active_view_id.unwrap();
+
+        assert!(handle_scrollbar_drag(
+            &mut ws,
+            &config,
+            10_000.0,
+            800.0,
+            600.0,
+            view_id,
+            0.0,
+        ));
+        let view = ws.active_view().unwrap();
+        assert_eq!(view.scroll_line, crate::layout::max_scroll_line(100, 28));
+        assert_eq!(view.scroll_y, 0.0);
     }
 }
