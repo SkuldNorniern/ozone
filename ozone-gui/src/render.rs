@@ -286,7 +286,7 @@ fn draw_view(
         let wrap_segments = if word_wrap {
             wrap_line_segments(&full_line_text, text_cols)
         } else {
-            vec![(0, full_line_text.len())]
+            vec![(0, line_prefix_end(&full_line_text, text_cols))]
         };
         let line_start = buf.pos_to_offset(Pos::new(line_idx, 0));
         let (spans, new_state) = if term_grid.is_none() {
@@ -319,7 +319,8 @@ fn draw_view(
         let line_end = line_start + full_line_text.len();
         let segment_abs_start = line_start + segment_start;
         let segment_abs_end = line_start + segment_end;
-        let segment_is_last = segment_index + 1 == wrap_segments.len();
+        let segment_is_line_end =
+            segment_index + 1 == wrap_segments.len() && segment_end == full_line_text.len();
         let line_decorations: Vec<&Decoration> = decorations
             .iter()
             .filter(|decoration| {
@@ -437,6 +438,7 @@ fn draw_view(
         // Line content: terminal colour grid, or syntax-highlighted buffer text.
         if let Some(grid) = term_grid {
             if let Some(row) = grid.get(line_idx) {
+                let row = &row[..row.len().min(text_cols)];
                 draw_term_row(
                     ctx,
                     row,
@@ -518,7 +520,7 @@ fn draw_view(
                     text,
                     pos: VirtualPos::Eol,
                     role,
-                } if segment_is_last
+                } if segment_is_line_end
                     && decoration.start >= line_start
                     && decoration.start <= line_end =>
                 {
@@ -539,7 +541,7 @@ fn draw_view(
         if is_cursor
             && is_active_pane
             && view.cursor.col >= segment_start
-            && (view.cursor.col < segment_end || segment_is_last)
+            && (view.cursor.col < segment_end || segment_is_line_end)
         {
             draw_cursor(
                 ctx,
@@ -727,6 +729,16 @@ fn wrap_line_segments(text: &str, max_cols: usize) -> Vec<(usize, usize)> {
     segments
 }
 
+fn line_prefix_end(text: &str, max_cols: usize) -> usize {
+    if max_cols == 0 {
+        return 0;
+    }
+    text.char_indices()
+        .nth(max_cols)
+        .map(|(offset, _)| offset)
+        .unwrap_or(text.len())
+}
+
 fn shift_token_spans(
     spans: &[ozone_syntax::TokenSpan],
     segment_start: usize,
@@ -814,6 +826,14 @@ mod tests {
         assert_eq!(shifted.len(), 1);
         assert_eq!(shifted[0].start, 0);
         assert_eq!(shifted[0].len, 4);
+    }
+
+    #[test]
+    fn line_prefix_end_clips_on_char_boundaries() {
+        let text = "abλδε";
+        assert_eq!(&text[..line_prefix_end(text, 3)], "abλ");
+        assert_eq!(&text[..line_prefix_end(text, 99)], text);
+        assert_eq!(line_prefix_end(text, 0), 0);
     }
 }
 
