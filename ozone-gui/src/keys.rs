@@ -60,14 +60,18 @@ pub(crate) fn handle_key(
 
     // Picker buffers take precedence so Enter/Esc act on the selection rather
     // than the editing defaults. (Edit keys are swallowed to keep the list.)
-    let in_picker = matches!(
-        ws.active_buffer().map(|b| &b.kind),
-        Some(BufferKind::Search)
-    );
-    if in_picker && pending.is_empty() && !mods.ctrl && !mods.alt {
+    let transient_kind = ws.active_buffer().map(|b| &b.kind);
+    let in_picker = matches!(transient_kind, Some(BufferKind::Search));
+    let in_references = matches!(transient_kind, Some(BufferKind::References));
+    if (in_picker || in_references) && pending.is_empty() && !mods.ctrl && !mods.alt {
         match key {
             Enter => {
-                run_cmd("picker.open-selection", ws, reg, autocmds);
+                let command = if in_picker {
+                    "picker.open-selection"
+                } else {
+                    "references.open-selection"
+                };
+                run_cmd(command, ws, reg, autocmds);
                 return true;
             }
             Escape => {

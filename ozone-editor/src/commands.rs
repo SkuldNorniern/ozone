@@ -8,6 +8,9 @@ use crate::pane::{FocusDirection, SplitAxis};
 use crate::ui::{NotifyLevel, UiIntent};
 use crate::view::ViewId;
 use crate::workspace::Workspace;
+use crate::workspace_search::{
+    MAX_SEARCH_FILES, MAX_SEARCH_RESULTS, WorkspaceMatch, search_workspace,
+};
 
 /// A short display name for a buffer (file name, or its virtual-kind label).
 fn buffer_display_name(ws: &Workspace, id: BufferId) -> String {
@@ -532,6 +535,37 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
             ctx.workspace.request_ui(UiIntent::SearchReplace);
         },
     );
+    reg.register(
+        "search.workspace",
+        "Search for text across workspace files",
+        |ctx| {
+            let Some(query) = ctx.arg.clone() else {
+                ctx.workspace.request_ui(UiIntent::Input {
+                    prompt: "workspace search:".to_string(),
+                    command: "search.workspace".to_string(),
+                });
+                return;
+            };
+            let query = query.trim();
+            if query.is_empty() {
+                return;
+            }
+            let Ok(base) = std::env::current_dir() else {
+                ctx.workspace
+                    .notify(NotifyLevel::Error, "Cannot determine workspace directory");
+                return;
+            };
+            let matches = search_workspace(&base, query, MAX_SEARCH_FILES, MAX_SEARCH_RESULTS);
+            let mut content = format!("Workspace search: {query}\n{} match(es)\n\n", matches.len());
+            for hit in &matches {
+                content.push_str(&hit.display());
+                content.push('\n');
+            }
+            ctx.workspace.push_jump();
+            ctx.workspace
+                .open_virtual_buffer(BufferKind::References, content);
+        },
+    );
 
     reg.register(
         "picker.open-selection",
@@ -569,6 +603,47 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
                 // transient buffer/view don't accumulate.
                 ctx.workspace.discard_orphan_view(picker_view);
             }
+        },
+    );
+
+    reg.register(
+        "references.open-selection",
+        "Open the selected workspace search result",
+        |ctx| {
+            let is_references = matches!(
+                ctx.workspace.buffers.get(&ctx.buffer_id).map(|b| &b.kind),
+                Some(BufferKind::References)
+            );
+            if !is_references {
+                return;
+            }
+            let row = ctx.workspace.views.get(&ctx.view_id).and_then(|view| {
+                ctx.workspace
+                    .buffers
+                    .get(&ctx.buffer_id)
+                    .and_then(|buf| buf.line(view.cursor.line))
+            });
+            let Some(hit) = row.as_deref().and_then(WorkspaceMatch::parse) else {
+                return;
+            };
+            let Ok(base) = std::env::current_dir() else {
+                return;
+            };
+            let references_view = ctx.view_id;
+            let Ok((buffer_id, view_id)) = ctx.workspace.open_file(base.join(&hit.path)) else {
+                return;
+            };
+            let (line, column) = {
+                let buffer = ctx.workspace.buffers.get(&buffer_id).unwrap();
+                let line = hit.line.min(buffer.line_count().saturating_sub(1));
+                (line, hit.column.min(buffer.line_len(line)))
+            };
+            if let Some(view) = ctx.workspace.views.get_mut(&view_id) {
+                view.cursor = Pos::new(line, column);
+                view.col_memory = column;
+                view.scroll_to_cursor(view.page_height.max(1));
+            }
+            ctx.workspace.discard_orphan_view(references_view);
         },
     );
 
@@ -891,6 +966,25 @@ mod tests {
             .with_arg(Some("999".to_string()));
         reg.execute("edit.goto-line", &mut ctx);
         assert_eq!(ws.active_view().unwrap().cursor.line, 4);
+    }
+
+    #[test]
+    fn workspace_search_prompts_without_an_argument() {
+        use super::{CommandContext, CommandRegistry, register_defaults};
+        use crate::ui::UiIntent;
+        use crate::workspace::Workspace;
+
+        let mut ws = Workspace::new();
+        let mut reg = CommandRegistry::new();
+        register_defaults(&mut reg);
+        let mut ctx = CommandContext::new(&mut ws).unwrap();
+
+        assert!(reg.execute("search.workspace", &mut ctx));
+        assert!(matches!(
+            ws.drain_ui_intents().as_slice(),
+            [UiIntent::Input { prompt, command }]
+                if prompt == "workspace search:" && command == "search.workspace"
+        ));
     }
 
     #[test]

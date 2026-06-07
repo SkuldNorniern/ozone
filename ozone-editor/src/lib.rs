@@ -11,6 +11,7 @@ pub mod search;
 pub mod ui;
 pub mod view;
 pub mod workspace;
+pub mod workspace_search;
 
 pub use api::EditorApi;
 pub use autocmd::{Autocommand, AutocommandRegistry};
@@ -28,3 +29,4 @@ pub use pane::{FocusDirection, PaneTree, SplitAxis};
 pub use search::find_matches;
 pub use view::{View, ViewId};
 pub use workspace::{IndentConfig, Workspace};
+pub use workspace_search::{WorkspaceMatch, search_workspace};

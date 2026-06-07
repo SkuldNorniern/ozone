@@ -359,6 +359,7 @@ impl Keymap {
             ("ctrl+n", "cursor.move-down"),
             ("meta+f", "search.start"), // M-f opens in-buffer find
             ("meta+h", "search.replace"), // M-h opens find with a replace box
+            ("ctrl+shift+f", "search.workspace"),
             ("meta+g", "edit.goto-line"),       // Emacs M-g — prompt for a line
             ("ctrl+home", "cursor.file-start"),
             ("ctrl+end", "cursor.file-end"),
@@ -595,6 +596,16 @@ mod tests {
         assert_eq!(
             km.resolve(&[], &s('p').with_control(), None),
             KeymapOutcome::Execute("command.palette".to_string())
+        );
+    }
+
+    #[test]
+    fn workspace_search_has_a_default_binding() {
+        let km = Keymap::with_defaults();
+        let stroke = KeyStroke::parse("ctrl+shift+f").unwrap();
+        assert_eq!(
+            km.resolve(&[], &stroke, None),
+            KeymapOutcome::Execute("search.workspace".to_string())
         );
     }
 
