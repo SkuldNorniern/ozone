@@ -12,8 +12,8 @@ use aurea::render::{Color, DrawingContext, Font, Image, Point, Rect};
 use ozone_buffer::{BufferKind, Pos};
 use ozone_config::{Config, CursorStyle, LineNumbers};
 use ozone_editor::{
-    Decoration, DecorationKind, HlRole, PaneTree, ViewId, VirtualPos, Workspace,
-    matching_bracket,
+    BRACKET_NAMESPACE, Decoration, DecorationKind, HlRole, PaneTree, ViewId, VirtualPos,
+    Workspace, matching_bracket,
 };
 use ozone_syntax::{Filetype, ScanState, TokenKind, scan_line};
 
@@ -195,6 +195,7 @@ fn draw_view(
         view.page_height = visible;
         view.scroll_line = view.scroll_line.min(max_scroll_line(line_count, visible));
     }
+    sync_bracket_decorations(ws, view_id);
 
     let Some(view) = ws.views.get(&view_id) else {
         return Ok(());
@@ -236,13 +237,6 @@ fn draw_view(
         None
     };
 
-    // Matching-bracket pair for the active cursor (highlighted behind the glyphs).
-    let bracket_pair = if is_active_pane {
-        matching_bracket(buf, view.cursor)
-    } else {
-        None
-    };
-
     let visible_start = buf.pos_to_offset(Pos::new(scroll, 0));
     let visible_end_line = (scroll + visible).min(line_count);
     let visible_end = if visible_end_line >= line_count {
@@ -252,7 +246,7 @@ fn draw_view(
     };
     let decorations: Vec<Decoration> = ws
         .decorations()
-        .in_range(buffer_id, visible_start, visible_end)
+        .in_range_for_view(buffer_id, view_id, visible_start, visible_end)
         .into_iter()
         .cloned()
         .collect();
@@ -351,19 +345,6 @@ fn draw_view(
                             line_h - 2.0,
                         ),
                         &solid(decoration_highlight_color(*role)),
-                    )?;
-                }
-            }
-        }
-
-        // Matching-bracket boxes (behind the glyphs).
-        if let Some((p1, p2)) = bracket_pair {
-            for bp in [p1, p2] {
-                if bp.line == line_idx {
-                    let bx = text_x + bp.col as f32 * metrics.char_w;
-                    ctx.draw_rect(
-                        Rect::new(bx, line_top + 1.0, metrics.char_w, line_h - 2.0),
-                        &solid(palette().bracket_match),
                     )?;
                 }
             }
@@ -570,7 +551,7 @@ fn decoration_role_color(role: HlRole) -> Color {
     match role {
         HlRole::Search => palette().search_match,
         HlRole::SearchCurrent => palette().search_match_active,
-        HlRole::Bracket => palette().active_pane_border,
+        HlRole::Bracket => palette().bracket_match,
         HlRole::Selection => palette().selection,
         HlRole::Error => palette().notify_error,
         HlRole::Warn => palette().notify_warn,
@@ -581,7 +562,108 @@ fn decoration_role_color(role: HlRole) -> Color {
 
 fn decoration_highlight_color(role: HlRole) -> Color {
     let color = decoration_role_color(role);
+    if role == HlRole::Bracket {
+        return color;
+    }
     Color::rgba(color.r, color.g, color.b, color.a.min(110))
+}
+
+fn sync_bracket_decorations(ws: &mut Workspace, view_id: ViewId) {
+    let pair = ws.views.get(&view_id).and_then(|view| {
+        let buffer = ws.buffers.get(&view.buffer_id)?;
+        let (first, second) = matching_bracket(buffer, view.cursor)?;
+        Some((
+            view.buffer_id,
+            buffer.pos_to_offset(first),
+            buffer.pos_to_offset(second),
+        ))
+    });
+
+    let mut expected = pair.map(|(buffer, first, second)| {
+        let mut starts = [first, second];
+        starts.sort_unstable();
+        (buffer, starts)
+    });
+    let mut current: Vec<_> = ws
+        .decorations()
+        .namespace_for_view(BRACKET_NAMESPACE, view_id)
+        .into_iter()
+        .filter_map(|(buffer, decoration)| {
+            matches!(
+                decoration.kind,
+                DecorationKind::Highlight(HlRole::Bracket)
+            )
+            .then_some((buffer, decoration.start, decoration.end))
+        })
+        .collect();
+    current.sort_by_key(|(_, start, _)| *start);
+    let unchanged = match (expected.as_ref(), current.as_slice()) {
+        (None, []) => true,
+        (Some((buffer, [first, second])), [(a, a_start, a_end), (b, b_start, b_end)]) => {
+            a == buffer
+                && b == buffer
+                && (*a_start, *a_end) == (*first, first + 1)
+                && (*b_start, *b_end) == (*second, second + 1)
+        }
+        _ => false,
+    };
+    if unchanged {
+        return;
+    }
+
+    ws.decorations_mut()
+        .clear_namespace_for_view(BRACKET_NAMESPACE, view_id);
+    let Some((buffer, [first, second])) = expected.take() else {
+        return;
+    };
+    for start in [first, second] {
+        ws.decorations_mut().add_for_view(
+            buffer,
+            view_id,
+            BRACKET_NAMESPACE,
+            start,
+            start + 1,
+            DecorationKind::Highlight(HlRole::Bracket),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ozone_buffer::Pos;
+    use ozone_editor::SplitAxis;
+
+    #[test]
+    fn bracket_decorations_are_independent_per_split_view() {
+        let mut ws = Workspace::new();
+        let first = ws.active_view_id.unwrap();
+        ws.active_buffer_mut()
+            .unwrap()
+            .insert(Pos::zero(), "(a) [b]");
+        ws.views.get_mut(&first).unwrap().cursor = Pos::new(0, 0);
+        let second = ws.split_active_pane(SplitAxis::Vertical).unwrap();
+        ws.views.get_mut(&second).unwrap().cursor = Pos::new(0, 4);
+        let buffer = ws.active_buffer().unwrap().id;
+
+        sync_bracket_decorations(&mut ws, first);
+        sync_bracket_decorations(&mut ws, second);
+
+        let first_ranges: Vec<_> = ws
+            .decorations()
+            .in_range_for_view(buffer, first, 0, 10)
+            .into_iter()
+            .map(|d| (d.start, d.end))
+            .collect();
+        let second_ranges: Vec<_> = ws
+            .decorations()
+            .in_range_for_view(buffer, second, 0, 10)
+            .into_iter()
+            .map(|d| (d.start, d.end))
+            .collect();
+        assert_eq!(first_ranges, vec![(0, 1), (2, 3)]);
+        assert_eq!(second_ranges, vec![(4, 5), (6, 7)]);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

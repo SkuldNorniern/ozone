@@ -441,6 +441,7 @@ impl Workspace {
                 return false;
             };
             if let Some(removed) = self.views.remove(&view_id) {
+                self.decorations.forget_view(view_id);
                 self.remove_unreferenced_virtual_buffer(removed.buffer_id);
             }
             self.panes = Some(PaneTree::leaf(fallback));
@@ -454,6 +455,7 @@ impl Workspace {
             return false;
         }
         if let Some(removed) = self.views.remove(&view_id) {
+            self.decorations.forget_view(view_id);
             self.remove_unreferenced_virtual_buffer(removed.buffer_id);
         }
 
@@ -483,6 +485,7 @@ impl Workspace {
             return;
         }
         if let Some(removed) = self.views.remove(&view_id) {
+            self.decorations.forget_view(view_id);
             self.remove_unreferenced_virtual_buffer(removed.buffer_id);
         }
     }
@@ -599,6 +602,37 @@ mod tests {
         assert!(ws.close_view(split_view));
         assert_eq!(ws.active_view_id, Some(original_view));
         assert_eq!(ws.panes.as_ref().unwrap().leaves(), vec![original_view]);
+    }
+
+    #[test]
+    fn closing_view_discards_only_its_scoped_decorations() {
+        use crate::decoration::{DecorationKind, HlRole};
+
+        let mut ws = Workspace::new();
+        let first = ws.active_view_id.unwrap();
+        let buffer = ws.active_buffer().unwrap().id;
+        let second = ws.split_active_pane(SplitAxis::Horizontal).unwrap();
+        let namespace = ws.decorations_mut().namespace();
+        ws.decorations_mut().add_for_view(
+            buffer,
+            first,
+            namespace,
+            0,
+            1,
+            DecorationKind::Highlight(HlRole::Bracket),
+        );
+        ws.decorations_mut().add_for_view(
+            buffer,
+            second,
+            namespace,
+            1,
+            2,
+            DecorationKind::Highlight(HlRole::Bracket),
+        );
+
+        assert!(ws.close_view(second));
+        assert_eq!(ws.decorations().all(buffer).len(), 1);
+        assert_eq!(ws.decorations().all(buffer)[0].view, Some(first));
     }
 
     #[test]

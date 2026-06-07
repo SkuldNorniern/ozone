@@ -17,8 +17,8 @@ pub use autocmd::{Autocommand, AutocommandRegistry};
 pub use brackets::matching_bracket;
 pub use commands::{CommandContext, CommandRegistry};
 pub use decoration::{
-    Decoration, DecorationId, DecorationKind, DecorationStore, Gravity, HlRole, NamespaceId,
-    VirtualPos,
+    BRACKET_NAMESPACE, Decoration, DecorationId, DecorationKind, DecorationStore, Gravity,
+    HlRole, NamespaceId, VirtualPos,
 };
 pub use events::{EditorEvent, EventKind};
 pub use ui::{NotifyLevel, SelectItem, UiIntent};

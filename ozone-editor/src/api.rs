@@ -272,6 +272,27 @@ impl<'a> EditorApi<'a> {
         )
     }
 
+    /// Add a decoration to the active buffer that is visible only in the active
+    /// view.
+    pub fn add_view_decoration(
+        &mut self,
+        namespace: NamespaceId,
+        start: usize,
+        end: usize,
+        kind: DecorationKind,
+    ) -> Option<DecorationId> {
+        let view = self.ws.active_view()?;
+        let (view_id, buffer) = (view.id, view.buffer_id);
+        Some(self.ws.decorations_mut().add_for_view(
+            buffer,
+            view_id,
+            namespace,
+            start,
+            end,
+            kind,
+        ))
+    }
+
     /// Add a decoration to an explicit buffer with configurable endpoint gravity.
     #[allow(clippy::too_many_arguments)]
     pub fn add_decoration_in(
@@ -323,6 +344,24 @@ impl<'a> EditorApi<'a> {
         self.ws
             .decorations()
             .in_range(buffer, start, end)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Copy buffer-global and matching view-scoped decorations in a range.
+    pub fn decorations_in_view(
+        &self,
+        view: ViewId,
+        start: usize,
+        end: usize,
+    ) -> Vec<Decoration> {
+        let Some(buffer) = self.ws.views.get(&view).map(|view| view.buffer_id) else {
+            return Vec::new();
+        };
+        self.ws
+            .decorations()
+            .in_range_for_view(buffer, view, start, end)
             .into_iter()
             .cloned()
             .collect()

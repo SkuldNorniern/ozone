@@ -14,10 +14,16 @@ use std::collections::HashMap;
 
 use ozone_buffer::{BufferId, Delta, DeltaKind};
 
+use crate::view::ViewId;
+
 /// A namespace groups decorations for one feature/plugin so they can be cleared
 /// atomically (e.g. "clear all diagnostics, then re-add"). Issued by
 /// [`DecorationStore::namespace`].
 pub type NamespaceId = u32;
+
+/// Reserved namespace for the editor's matching-bracket decorations. Allocated
+/// namespaces start at one, leaving zero for built-in view-local annotations.
+pub const BRACKET_NAMESPACE: NamespaceId = 0;
 
 /// Opaque handle to one decoration, for targeted removal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -75,6 +81,8 @@ pub enum DecorationKind {
 pub struct Decoration {
     pub id: DecorationId,
     pub namespace: NamespaceId,
+    /// Optional view scope. `None` is buffer-global and visible in every view.
+    pub view: Option<ViewId>,
     /// Byte-offset range, edit-tracked. Invariant: `end >= start`.
     pub start: usize,
     pub end: usize,
@@ -137,6 +145,30 @@ impl DecorationStore {
         end_gravity: Gravity,
         kind: DecorationKind,
     ) -> DecorationId {
+        self.add_scoped_with_gravity(
+            buffer,
+            namespace,
+            None,
+            start,
+            end,
+            start_gravity,
+            end_gravity,
+            kind,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn add_scoped_with_gravity(
+        &mut self,
+        buffer: BufferId,
+        namespace: NamespaceId,
+        view: Option<ViewId>,
+        start: usize,
+        end: usize,
+        start_gravity: Gravity,
+        end_gravity: Gravity,
+        kind: DecorationKind,
+    ) -> DecorationId {
         self.next_id = self
             .next_id
             .checked_add(1)
@@ -146,6 +178,7 @@ impl DecorationStore {
         self.by_buffer.entry(buffer).or_default().push(Decoration {
             id,
             namespace,
+            view,
             start,
             end,
             start_gravity,
@@ -153,6 +186,28 @@ impl DecorationStore {
             kind,
         });
         id
+    }
+
+    /// Add a decoration visible only in `view`.
+    pub fn add_for_view(
+        &mut self,
+        buffer: BufferId,
+        view: ViewId,
+        namespace: NamespaceId,
+        start: usize,
+        end: usize,
+        kind: DecorationKind,
+    ) -> DecorationId {
+        self.add_scoped_with_gravity(
+            buffer,
+            namespace,
+            Some(view),
+            start,
+            end,
+            Gravity::Right,
+            Gravity::Left,
+            kind,
+        )
     }
 
     /// Remove every decoration in `namespace` across all buffers. Returns count.
@@ -176,6 +231,38 @@ impl DecorationStore {
         before - v.len()
     }
 
+    /// Remove a namespace's decorations scoped to one view, across buffers.
+    pub fn clear_namespace_for_view(
+        &mut self,
+        namespace: NamespaceId,
+        view: ViewId,
+    ) -> usize {
+        let mut removed = 0;
+        for decorations in self.by_buffer.values_mut() {
+            let before = decorations.len();
+            decorations.retain(|d| d.namespace != namespace || d.view != Some(view));
+            removed += before - decorations.len();
+        }
+        removed
+    }
+
+    /// Decorations in one namespace scoped to `view`, paired with their buffer.
+    pub fn namespace_for_view(
+        &self,
+        namespace: NamespaceId,
+        view: ViewId,
+    ) -> Vec<(BufferId, &Decoration)> {
+        self.by_buffer
+            .iter()
+            .flat_map(|(buffer, decorations)| {
+                decorations
+                    .iter()
+                    .filter(move |d| d.namespace == namespace && d.view == Some(view))
+                    .map(move |decoration| (*buffer, decoration))
+            })
+            .collect()
+    }
+
     /// Remove one decoration by id. Returns whether it existed.
     pub fn remove(&mut self, id: DecorationId) -> bool {
         for v in self.by_buffer.values_mut() {
@@ -190,13 +277,36 @@ impl DecorationStore {
     /// Decorations on `buffer` overlapping `[start, end)`, in document order
     /// (by start, then end). Zero-width decorations count as a point.
     pub fn in_range(&self, buffer: BufferId, start: usize, end: usize) -> Vec<&Decoration> {
+        self.in_range_filtered(buffer, None, start, end)
+    }
+
+    /// Buffer-global decorations plus decorations scoped to `view`, overlapping
+    /// `[start, end)`, in document order.
+    pub fn in_range_for_view(
+        &self,
+        buffer: BufferId,
+        view: ViewId,
+        start: usize,
+        end: usize,
+    ) -> Vec<&Decoration> {
+        self.in_range_filtered(buffer, Some(view), start, end)
+    }
+
+    fn in_range_filtered(
+        &self,
+        buffer: BufferId,
+        view: Option<ViewId>,
+        start: usize,
+        end: usize,
+    ) -> Vec<&Decoration> {
         let Some(v) = self.by_buffer.get(&buffer) else {
             return Vec::new();
         };
         let mut out: Vec<&Decoration> = v
             .iter()
             .filter(|d| {
-                if d.start == d.end {
+                let visible = d.view.is_none() || d.view == view;
+                visible && if d.start == d.end {
                     d.start >= start && d.start < end
                 } else {
                     d.start < end && d.end > start
@@ -267,6 +377,13 @@ impl DecorationStore {
     /// Drop all decorations for a closed buffer.
     pub fn forget_buffer(&mut self, buffer: BufferId) {
         self.by_buffer.remove(&buffer);
+    }
+
+    /// Drop every decoration scoped to a closed view.
+    pub fn forget_view(&mut self, view: ViewId) {
+        for decorations in self.by_buffer.values_mut() {
+            decorations.retain(|decoration| decoration.view != Some(view));
+        }
     }
 }
 
@@ -413,5 +530,69 @@ mod tests {
         assert!(s.remove(id));
         assert!(!s.remove(id));
         assert!(s.all(b).is_empty());
+    }
+
+    #[test]
+    fn view_query_includes_global_and_matching_scope_only() {
+        let mut s = DecorationStore::new();
+        let b = BufferId::next();
+        let first = ViewId::next();
+        let second = ViewId::next();
+        let ns = s.namespace();
+        hl(&mut s, b, ns, 0, 1);
+        s.add_for_view(
+            b,
+            first,
+            ns,
+            2,
+            3,
+            DecorationKind::Highlight(HlRole::Bracket),
+        );
+        s.add_for_view(
+            b,
+            second,
+            ns,
+            4,
+            5,
+            DecorationKind::Highlight(HlRole::Bracket),
+        );
+
+        let first_ranges: Vec<_> = s
+            .in_range_for_view(b, first, 0, 10)
+            .into_iter()
+            .map(|d| (d.start, d.end))
+            .collect();
+        assert_eq!(first_ranges, vec![(0, 1), (2, 3)]);
+        assert_eq!(s.in_range(b, 0, 10).len(), 1);
+    }
+
+    #[test]
+    fn forgetting_view_keeps_global_and_other_view_decorations() {
+        let mut s = DecorationStore::new();
+        let b = BufferId::next();
+        let first = ViewId::next();
+        let second = ViewId::next();
+        let ns = s.namespace();
+        hl(&mut s, b, ns, 0, 1);
+        s.add_for_view(
+            b,
+            first,
+            ns,
+            2,
+            3,
+            DecorationKind::Highlight(HlRole::Bracket),
+        );
+        s.add_for_view(
+            b,
+            second,
+            ns,
+            4,
+            5,
+            DecorationKind::Highlight(HlRole::Bracket),
+        );
+
+        s.forget_view(first);
+        assert_eq!(s.all(b).len(), 2);
+        assert!(s.all(b).iter().all(|d| d.view != Some(first)));
     }
 }
