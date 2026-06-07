@@ -224,11 +224,21 @@ fn draw_view(
             .and_then(|l| l.line_numbers)
             .unwrap_or(config.editor.line_numbers),
     };
+    let word_wrap = !matches!(
+        buf.kind,
+        BufferKind::Terminal | BufferKind::Search | BufferKind::References | BufferKind::Image(_)
+    ) && ws
+        .buffer_local(buffer_id)
+        .and_then(|local| local.word_wrap)
+        .unwrap_or(config.editor.word_wrap);
 
     let scroll = view.scroll_line;
     let visible = visible + 1;
     let gutter_w = gutter_width(line_count, metrics.char_w, line_numbers);
     let text_x = rect.x + gutter_w + PAD;
+    let text_cols = (((rect.x + rect.width - PAD) - text_x) / metrics.char_w)
+        .floor()
+        .max(1.0) as usize;
 
     // For a live terminal, render the colour grid instead of the text buffer.
     let term_grid: Option<&[Vec<ozone_term::Cell>]> = if matches!(buf.kind, BufferKind::Terminal) {
@@ -269,11 +279,33 @@ fn draw_view(
         }
     }
 
-    for i in 0..visible {
-        let line_idx = scroll + i;
-        if line_idx >= line_count {
-            break;
-        }
+    let mut visual_i = 0usize;
+    let mut line_idx = scroll;
+    while visual_i < visible && line_idx < line_count {
+        let full_line_text = buf.line(line_idx).unwrap_or_default();
+        let wrap_segments = if word_wrap {
+            wrap_line_segments(&full_line_text, text_cols)
+        } else {
+            vec![(0, full_line_text.len())]
+        };
+        let line_start = buf.pos_to_offset(Pos::new(line_idx, 0));
+        let (spans, new_state) = if term_grid.is_none() {
+            scan_line(ft, &full_line_text, scan_state)
+        } else {
+            (Vec::new(), scan_state)
+        };
+        scan_state = new_state;
+
+        for (segment_index, (segment_start, segment_end)) in
+            wrap_segments.iter().copied().enumerate()
+        {
+            if visual_i >= visible {
+                break;
+            }
+            let i = visual_i;
+            if line_idx >= line_count {
+                break;
+            }
 
         let line_top = content_top + i as f32 * line_h;
         if line_top >= content_top + content_h || line_top >= rect.y + rect.height {
@@ -283,16 +315,18 @@ fn draw_view(
         let baseline =
             baseline_in_rect(line_top, line_h, metrics.text_ascent, metrics.text_descent);
         let is_cursor = line_idx == view.cursor.line;
-        let line_text = buf.line(line_idx).unwrap_or_default();
-        let line_start = buf.pos_to_offset(Pos::new(line_idx, 0));
-        let line_end = line_start + line_text.len();
+        let line_text = &full_line_text[segment_start..segment_end];
+        let line_end = line_start + full_line_text.len();
+        let segment_abs_start = line_start + segment_start;
+        let segment_abs_end = line_start + segment_end;
+        let segment_is_last = segment_index + 1 == wrap_segments.len();
         let line_decorations: Vec<&Decoration> = decorations
             .iter()
             .filter(|decoration| {
                 if decoration.start == decoration.end {
-                    decoration.start >= line_start && decoration.start <= line_end
+                    decoration.start >= segment_abs_start && decoration.start <= segment_abs_end
                 } else {
-                    decoration.start < line_end && decoration.end > line_start
+                    decoration.start < segment_abs_end && decoration.end > segment_abs_start
                 }
             })
             .collect();
@@ -322,8 +356,10 @@ fn draw_view(
             } else {
                 line_len
             };
+            let start_col = start_col.max(segment_start).min(segment_end);
+            let end_col = end_col.max(segment_start).min(segment_end);
             if end_col > start_col {
-                let sx = text_x + start_col as f32 * metrics.char_w;
+                let sx = text_x + (start_col - segment_start) as f32 * metrics.char_w;
                 let sw = (end_col - start_col) as f32 * metrics.char_w;
                 ctx.draw_rect(
                     Rect::new(sx, line_top + 1.0, sw, line_h - 2.0),
@@ -334,8 +370,8 @@ fn draw_view(
 
         for decoration in &line_decorations {
             if let DecorationKind::Highlight(role) = &decoration.kind {
-                let start = decoration.start.max(line_start) - line_start;
-                let end = decoration.end.min(line_end) - line_start;
+                let start = decoration.start.max(segment_abs_start) - segment_abs_start;
+                let end = decoration.end.min(segment_abs_end) - segment_abs_start;
                 if end > start {
                     ctx.draw_rect(
                         Rect::new(
@@ -351,17 +387,21 @@ fn draw_view(
         }
 
         // Gutter line number (absolute / relative / off per config)
-        let gutter_label = match line_numbers {
-            LineNumbers::Off => None,
-            LineNumbers::Absolute => Some(format!("{:>4}", line_idx + 1)),
-            LineNumbers::Relative => {
-                if is_cursor {
-                    Some(format!("{:<4}", line_idx + 1))
-                } else {
-                    let dist = line_idx.abs_diff(view.cursor.line);
-                    Some(format!("{:>4}", dist))
+        let gutter_label = if segment_index == 0 {
+            match line_numbers {
+                LineNumbers::Off => None,
+                LineNumbers::Absolute => Some(format!("{:>4}", line_idx + 1)),
+                LineNumbers::Relative => {
+                    if is_cursor {
+                        Some(format!("{:<4}", line_idx + 1))
+                    } else {
+                        let dist = line_idx.abs_diff(view.cursor.line);
+                        Some(format!("{:>4}", dist))
+                    }
                 }
             }
+        } else {
+            None
         };
         if let Some(num) = gutter_label {
             let ng = if is_cursor {
@@ -409,14 +449,12 @@ fn draw_view(
                 )?;
             }
         } else {
-            let (spans, new_state) = scan_line(ft, &line_text, scan_state);
-            scan_state = new_state;
             let inline_virtual: Vec<&Decoration> = line_decorations
                 .iter()
                 .copied()
                 .filter(|decoration| {
-                    let anchored_here =
-                        decoration.start >= line_start && decoration.start <= line_end;
+                    let anchored_here = decoration.start >= segment_abs_start
+                        && decoration.start <= segment_abs_end;
                     anchored_here
                         && matches!(
                         &decoration.kind,
@@ -431,10 +469,10 @@ fn draw_view(
             if !inline_virtual.is_empty() {
                 draw_line_with_inline_virtual_text(
                     ctx,
-                    &line_text,
-                    &spans,
+                    line_text,
+                    &shift_token_spans(&spans, segment_start, segment_end),
                     &inline_virtual,
-                    line_start,
+                    segment_abs_start,
                     text_x,
                     baseline,
                     metrics.char_w,
@@ -442,7 +480,7 @@ fn draw_view(
                 )?;
             } else if spans.is_empty() || ft == Filetype::Plain {
                 ctx.draw_text_with_font(
-                    &line_text,
+                    line_text,
                     Point::new(text_x, baseline),
                     font,
                     &solid(token_color(TokenKind::Default)),
@@ -450,8 +488,8 @@ fn draw_view(
             } else {
                 draw_highlighted(
                     ctx,
-                    &line_text,
-                    &spans,
+                    line_text,
+                    &shift_token_spans(&spans, segment_start, segment_end),
                     text_x,
                     baseline,
                     metrics.char_w,
@@ -463,8 +501,8 @@ fn draw_view(
         for decoration in &line_decorations {
             match &decoration.kind {
                 DecorationKind::Underline(role) => {
-                    let start = decoration.start.max(line_start) - line_start;
-                    let end = decoration.end.min(line_end) - line_start;
+                    let start = decoration.start.max(segment_abs_start) - segment_abs_start;
+                    let end = decoration.end.min(segment_abs_end) - segment_abs_start;
                     if end > start {
                         let y = line_top + line_h - 2.0;
                         ctx.draw_line(
@@ -480,7 +518,10 @@ fn draw_view(
                     text,
                     pos: VirtualPos::Eol,
                     role,
-                } if decoration.start >= line_start && decoration.start <= line_end => {
+                } if segment_is_last
+                    && decoration.start >= line_start
+                    && decoration.start <= line_end =>
+                {
                     ctx.draw_text_with_font(
                         text,
                         Point::new(
@@ -495,16 +536,23 @@ fn draw_view(
             }
         }
 
-        if is_cursor && is_active_pane {
+        if is_cursor
+            && is_active_pane
+            && view.cursor.col >= segment_start
+            && (view.cursor.col < segment_end || segment_is_last)
+        {
             draw_cursor(
                 ctx,
-                text_x + view.cursor.col as f32 * metrics.char_w,
+                text_x + view.cursor.col.saturating_sub(segment_start) as f32 * metrics.char_w,
                 line_top,
                 line_h,
                 metrics.char_w,
                 config.editor.cursor_style,
             )?;
         }
+        visual_i += 1;
+        }
+        line_idx += 1;
     }
 
     // Gutter divider
@@ -628,6 +676,76 @@ fn sync_bracket_decorations(ws: &mut Workspace, view_id: ViewId) {
     }
 }
 
+fn wrap_line_segments(text: &str, max_cols: usize) -> Vec<(usize, usize)> {
+    let max_cols = max_cols.max(1);
+    if text.is_empty() {
+        return vec![(0, 0)];
+    }
+
+    let mut segments = Vec::new();
+    let mut start = 0usize;
+    while start < text.len() {
+        let mut end = start;
+        let mut cols = 0usize;
+        let mut last_break = None;
+        for (offset, ch) in text[start..].char_indices() {
+            if cols >= max_cols {
+                break;
+            }
+            let absolute = start + offset;
+            end = absolute + ch.len_utf8();
+            cols += 1;
+            if ch.is_whitespace() {
+                last_break = Some(end);
+            }
+        }
+
+        if end >= text.len() {
+            segments.push((start, text.len()));
+            break;
+        }
+
+        let split = last_break
+            .filter(|break_at| *break_at > start)
+            .unwrap_or(end);
+        segments.push((start, split));
+        start = split;
+        while start < text.len() {
+            let Some(ch) = text[start..].chars().next() else {
+                break;
+            };
+            if !ch.is_whitespace() {
+                break;
+            }
+            start += ch.len_utf8();
+        }
+    }
+
+    if segments.is_empty() {
+        segments.push((0, 0));
+    }
+    segments
+}
+
+fn shift_token_spans(
+    spans: &[ozone_syntax::TokenSpan],
+    segment_start: usize,
+    segment_end: usize,
+) -> Vec<ozone_syntax::TokenSpan> {
+    spans
+        .iter()
+        .filter_map(|span| {
+            let start = span.start.max(segment_start);
+            let end = (span.start + span.len).min(segment_end);
+            (end > start).then_some(ozone_syntax::TokenSpan {
+                start: start - segment_start,
+                len: end - start,
+                kind: span.kind,
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -663,6 +781,39 @@ mod tests {
             .collect();
         assert_eq!(first_ranges, vec![(0, 1), (2, 3)]);
         assert_eq!(second_ranges, vec![(4, 5), (6, 7)]);
+    }
+
+    #[test]
+    fn wrap_segments_prefer_whitespace_and_skip_leading_wrap_space() {
+        let text = "alpha beta gamma";
+        let segments: Vec<_> = wrap_line_segments(text, 8)
+            .into_iter()
+            .map(|(start, end)| &text[start..end])
+            .collect();
+        assert_eq!(segments, vec!["alpha ", "beta ", "gamma"]);
+    }
+
+    #[test]
+    fn wrap_segments_split_long_words_on_char_boundaries() {
+        let text = "abcλδε";
+        let segments: Vec<_> = wrap_line_segments(text, 4)
+            .into_iter()
+            .map(|(start, end)| &text[start..end])
+            .collect();
+        assert_eq!(segments, vec!["abcλ", "δε"]);
+    }
+
+    #[test]
+    fn shifted_token_spans_are_segment_relative() {
+        let spans = vec![ozone_syntax::TokenSpan {
+            start: 2,
+            len: 6,
+            kind: TokenKind::String,
+        }];
+        let shifted = shift_token_spans(&spans, 4, 10);
+        assert_eq!(shifted.len(), 1);
+        assert_eq!(shifted[0].start, 0);
+        assert_eq!(shifted[0].len, 4);
     }
 }
 
