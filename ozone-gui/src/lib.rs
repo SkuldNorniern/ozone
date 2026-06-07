@@ -114,6 +114,7 @@ impl OzoneGui {
         const H: u32 = 800;
 
         let mut window = Window::new("Ozone", W as i32, H as i32)?;
+        set_window_icon(&window);
 
         // Overlay states shared with the draw callback.
         let palette: Arc<Mutex<Option<PickerState>>> = Arc::new(Mutex::new(None));
@@ -795,4 +796,13 @@ fn window_title(ws: &Workspace) -> String {
 
 pub(crate) fn editor_font(config: &Config) -> Font {
     Font::new(&config.editor.font, config.editor.font_size)
+}
+
+fn set_window_icon(window: &Window) {
+    let Ok(image) = image::load_from_memory(include_bytes!("../../assets/icon.png")) else {
+        return;
+    };
+    let rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let _ = window.set_icon_rgba(rgba.as_raw(), width, height);
 }

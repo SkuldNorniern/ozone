@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Ozone
+Comment=A small command-driven text editor
+Exec=ozone %F
+Icon=ozone
+Terminal=false
+Categories=Development;TextEditor;
+MimeType=text/plain;
+StartupNotify=true
