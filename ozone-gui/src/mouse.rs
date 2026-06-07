@@ -79,7 +79,7 @@ pub(crate) fn handle_editor_click(
         return false;
     }
     let line_numbers = match buf.kind {
-        BufferKind::Search | BufferKind::References => LineNumbers::Off,
+        BufferKind::Search | BufferKind::References | BufferKind::FileTree => LineNumbers::Off,
         _ => ws
             .buffer_local(buffer_id)
             .and_then(|local| local.line_numbers)

@@ -172,6 +172,7 @@ pub(crate) fn insert_text_raw(text: &str, ws: &mut Workspace) -> bool {
         Some(
             BufferKind::Search
                 | BufferKind::References
+                | BufferKind::FileTree
                 | BufferKind::Terminal
                 | BufferKind::Image(_)
         )

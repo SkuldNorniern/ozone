@@ -63,10 +63,13 @@ pub(crate) fn handle_key(
     let transient_kind = ws.active_buffer().map(|b| &b.kind);
     let in_picker = matches!(transient_kind, Some(BufferKind::Search));
     let in_references = matches!(transient_kind, Some(BufferKind::References));
-    if (in_picker || in_references) && pending.is_empty() && !mods.ctrl && !mods.alt {
+    let in_tree = matches!(transient_kind, Some(BufferKind::FileTree));
+    if (in_picker || in_references || in_tree) && pending.is_empty() && !mods.ctrl && !mods.alt {
         match key {
             Enter => {
-                let command = if in_picker {
+                let command = if in_tree {
+                    "tree.open-selection"
+                } else if in_picker {
                     "picker.open-selection"
                 } else {
                     "references.open-selection"

@@ -175,7 +175,7 @@ pub(crate) fn buffer_picker_items(ws: &Workspace, mru: &[BufferId]) -> Vec<Picke
             BufferKind::Scratch => ("*scratch*".to_string(), String::new()),
             BufferKind::Terminal => ("*terminal*".to_string(), String::new()),
             // Transient surfaces are not useful to switch to.
-            BufferKind::Search | BufferKind::References => return,
+            BufferKind::Search | BufferKind::References | BufferKind::FileTree => return,
         };
         let dirty = if buf.is_dirty() { " ●" } else { "" };
         let display = format!("{name}{dirty}");

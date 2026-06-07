@@ -218,6 +218,7 @@ fn draw_view(
         BufferKind::Terminal
         | BufferKind::Search
         | BufferKind::References
+        | BufferKind::FileTree
         | BufferKind::Image(_) => LineNumbers::Off,
         _ => ws
             .buffer_local(buffer_id)
@@ -226,7 +227,11 @@ fn draw_view(
     };
     let word_wrap = !matches!(
         buf.kind,
-        BufferKind::Terminal | BufferKind::Search | BufferKind::References | BufferKind::Image(_)
+        BufferKind::Terminal
+            | BufferKind::Search
+            | BufferKind::References
+            | BufferKind::FileTree
+            | BufferKind::Image(_)
     ) && ws
         .buffer_local(buffer_id)
         .and_then(|local| local.word_wrap)
@@ -1110,6 +1115,7 @@ fn draw_status_bar(
                 BufferKind::Scratch => "*scratch*".to_string(),
                 BufferKind::Search => "*files*".to_string(),
                 BufferKind::References => "*references*".to_string(),
+                BufferKind::FileTree => "*tree*".to_string(),
                 BufferKind::Terminal => "*terminal*".to_string(),
             };
             let cursor_info = format!("{}:{}", view.cursor.line + 1, view.cursor.col + 1);
@@ -1118,6 +1124,7 @@ fn draw_status_bar(
                 BufferKind::File(p) => major_mode_label(Filetype::from_path(&p.to_string_lossy())),
                 BufferKind::Search => "Files",
                 BufferKind::References => "Refs",
+                BufferKind::FileTree => "Tree",
                 BufferKind::Terminal => "Term",
                 BufferKind::Image(_) => "Image",
                 BufferKind::Scratch => "Text",

@@ -787,6 +787,7 @@ fn window_title(ws: &Workspace) -> String {
                 BufferKind::Scratch => format!("Ozone - {}scratch", dirty),
                 BufferKind::Search => format!("Ozone - {}files", dirty),
                 BufferKind::References => format!("Ozone - {}references", dirty),
+                BufferKind::FileTree => format!("Ozone - {}tree", dirty),
                 BufferKind::Terminal => format!("Ozone - {}terminal", dirty),
             }
         }

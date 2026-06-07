@@ -65,6 +65,7 @@ pub enum BufferKind {
     Scratch,
     Search,
     References,
+    FileTree,
     Terminal,
     /// A raster image file (PNG/JPEG) shown in the pane, not edited as text.
     Image(PathBuf),

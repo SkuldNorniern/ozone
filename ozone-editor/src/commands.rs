@@ -23,6 +23,7 @@ fn buffer_display_name(ws: &Workspace, id: BufferId) -> String {
         Some(BufferKind::Scratch) => "*scratch*".to_string(),
         Some(BufferKind::Search) => "*files*".to_string(),
         Some(BufferKind::References) => "*references*".to_string(),
+        Some(BufferKind::FileTree) => "*tree*".to_string(),
         Some(BufferKind::Terminal) => "*terminal*".to_string(),
         Some(BufferKind::Image(_)) => "*image*".to_string(),
         None => "?".to_string(),
@@ -515,6 +516,16 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
     reg.register("file.picker", "Open the workspace file picker", |ctx| {
         ctx.workspace.request_ui(UiIntent::FilePicker);
     });
+    reg.register("file.tree", "Open the workspace file tree", |ctx| {
+        let Ok(base) = std::env::current_dir() else {
+            ctx.workspace
+                .notify(NotifyLevel::Error, "Cannot determine workspace directory");
+            return;
+        };
+        let content = workspace_tree_buffer(&base, 10_000);
+        ctx.workspace
+            .open_virtual_buffer(BufferKind::FileTree, content);
+    });
     reg.register(
         "buffer.picker",
         "Switch to an open buffer (fuzzy picker)",
@@ -644,6 +655,37 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
                 view.scroll_to_cursor(view.page_height.max(1));
             }
             ctx.workspace.discard_orphan_view(references_view);
+        },
+    );
+
+    reg.register(
+        "tree.open-selection",
+        "Open the selected file tree entry",
+        |ctx| {
+            let is_tree = matches!(
+                ctx.workspace.buffers.get(&ctx.buffer_id).map(|b| &b.kind),
+                Some(BufferKind::FileTree)
+            );
+            if !is_tree {
+                return;
+            }
+            let row = ctx.workspace.views.get(&ctx.view_id).and_then(|view| {
+                ctx.workspace
+                    .buffers
+                    .get(&ctx.buffer_id)
+                    .and_then(|buf| buf.line(view.cursor.line))
+            });
+            let Some(path) = row.as_deref().and_then(tree_row_path) else {
+                return;
+            };
+            let Ok(base) = std::env::current_dir() else {
+                return;
+            };
+            let target = base.join(path);
+            if !target.is_file() {
+                return;
+            }
+            let _ = ctx.workspace.open_file(target);
         },
     );
 
@@ -806,6 +848,81 @@ fn is_ignored_name(name: &str) -> bool {
     matches!(name, "target" | "node_modules" | ".git" | ".hg" | ".svn") || name.starts_with('.')
 }
 
+fn workspace_tree_buffer(base: &std::path::Path, cap: usize) -> String {
+    let mut rows = vec!["Workspace Tree".to_string(), "--------------".to_string()];
+    collect_workspace_tree_rows(base, "", 0, cap, &mut rows);
+    rows.push(String::new());
+    rows.join("\n")
+}
+
+fn collect_workspace_tree_rows(
+    base: &std::path::Path,
+    relative_dir: &str,
+    depth: usize,
+    cap: usize,
+    out: &mut Vec<String>,
+) {
+    if out.len() >= cap {
+        return;
+    }
+    let dir = if relative_dir.is_empty() {
+        base.to_path_buf()
+    } else {
+        base.join(relative_dir)
+    };
+    let Ok(read_dir) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut dirs = Vec::new();
+    let mut files = Vec::new();
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if is_ignored_name(name) {
+            continue;
+        }
+        let rel = if relative_dir.is_empty() {
+            name.to_string()
+        } else {
+            format!("{relative_dir}/{name}")
+        };
+        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            dirs.push(rel);
+        } else {
+            files.push(rel);
+        }
+    }
+    dirs.sort();
+    files.sort();
+
+    for rel in dirs {
+        if out.len() >= cap {
+            return;
+        }
+        let name = rel.rsplit('/').next().unwrap_or(&rel);
+        out.push(format!("{}+ {name}/  {}", "  ".repeat(depth), rel));
+        collect_workspace_tree_rows(base, &rel, depth + 1, cap, out);
+    }
+    for rel in files {
+        if out.len() >= cap {
+            return;
+        }
+        let name = rel.rsplit('/').next().unwrap_or(&rel);
+        out.push(format!("{}- {name}  {}", "  ".repeat(depth), rel));
+    }
+}
+
+fn tree_row_path(row: &str) -> Option<&str> {
+    if !row.trim_start().starts_with("- ") {
+        return None;
+    }
+    let (_, path) = row.rsplit_once("  ")?;
+    let path = path.trim();
+    (!path.is_empty()).then_some(path)
+}
+
 /// Recursively collect file paths under `base`, relative and `/`-separated,
 /// skipping VCS/build/hidden entries. Bounded by `cap`. No external crates.
 pub fn collect_workspace_files(base: &std::path::Path, cap: usize) -> Vec<String> {
@@ -896,7 +1013,10 @@ fn leading_whitespace(line: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::{collect_workspace_files, is_ignored_name, trailing_whitespace_ranges};
+    use super::{
+        collect_workspace_files, is_ignored_name, trailing_whitespace_ranges, tree_row_path,
+        workspace_tree_buffer,
+    };
 
     #[test]
     fn finds_trailing_space_ranges() {
@@ -944,6 +1064,29 @@ mod tests {
         let files = collect_workspace_files(&base, 3);
         assert!(files.len() <= 3);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn workspace_tree_lists_dirs_and_files() {
+        let base = std::env::temp_dir().join(format!("ozone_tree_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("src")).unwrap();
+        std::fs::write(base.join("src").join("main.rs"), "x").unwrap();
+        std::fs::write(base.join("Cargo.toml"), "x").unwrap();
+
+        let tree = workspace_tree_buffer(&base, 100);
+        assert!(tree.contains("+ src/  src"));
+        assert!(tree.contains("- main.rs  src/main.rs"));
+        assert!(tree.contains("- Cargo.toml  Cargo.toml"));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn tree_row_path_extracts_files_only() {
+        assert_eq!(tree_row_path("- main.rs  src/main.rs"), Some("src/main.rs"));
+        assert_eq!(tree_row_path("+ src/  src"), None);
+        assert_eq!(tree_row_path("Workspace Tree"), None);
     }
 
     #[test]

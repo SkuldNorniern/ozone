@@ -513,7 +513,10 @@ impl Workspace {
             .map(|buffer| {
                 matches!(
                     buffer.kind,
-                    BufferKind::Search | BufferKind::References | BufferKind::Terminal
+                    BufferKind::Search
+                        | BufferKind::References
+                        | BufferKind::FileTree
+                        | BufferKind::Terminal
                 )
             })
             .unwrap_or(false);

@@ -333,6 +333,7 @@ impl Keymap {
             ("ctrl+z", "edit.undo"),
             ("ctrl+y", "edit.redo"),
             ("ctrl+p", "file.picker"),
+            ("ctrl+shift+e", "file.tree"),
             ("alt+x", "command.palette"),       // Emacs M-x
             ("ctrl+shift+p", "command.palette"),
             ("ctrl+tab", "buffer.next"),
@@ -606,6 +607,16 @@ mod tests {
         assert_eq!(
             km.resolve(&[], &stroke, None),
             KeymapOutcome::Execute("search.workspace".to_string())
+        );
+    }
+
+    #[test]
+    fn file_tree_has_a_default_binding() {
+        let km = Keymap::with_defaults();
+        let stroke = KeyStroke::parse("ctrl+shift+e").unwrap();
+        assert_eq!(
+            km.resolve(&[], &stroke, None),
+            KeymapOutcome::Execute("file.tree".to_string())
         );
     }
 
