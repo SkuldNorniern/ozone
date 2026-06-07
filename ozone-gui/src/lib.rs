@@ -10,6 +10,29 @@ pub(crate) type TermCells = HashMap<BufferId, Vec<Vec<ozone_term::Cell>>>;
 /// Decoded images by buffer. `None` = decode failed (shown as an error label).
 pub(crate) type ImageCache = HashMap<BufferId, Option<Image>>;
 
+/// Live terminal sessions plus the per-terminal caches the run loop keeps in
+/// lockstep: the latest colour grid, the last PTY grid size pushed, and the last
+/// output version rendered. Grouped so they are created and pruned together.
+struct Terminals {
+    sessions: HashMap<BufferId, Terminal>,
+    failed: std::collections::HashSet<BufferId>,
+    cells: TermCells,
+    sizes: HashMap<BufferId, (u16, u16)>,
+    versions: HashMap<BufferId, u64>,
+}
+
+impl Terminals {
+    fn new() -> Self {
+        Self {
+            sessions: HashMap::new(),
+            failed: std::collections::HashSet::new(),
+            cells: TermCells::new(),
+            sizes: HashMap::new(),
+            versions: HashMap::new(),
+        }
+    }
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
@@ -238,17 +261,9 @@ impl OzoneGui {
         let mut last_title = String::new();
         // Pending chord prefix carried across key events (e.g. after `ctrl+k`).
         let mut chord_pending: Vec<KeyStroke> = Vec::new();
-        // Live terminal sessions, keyed by their Terminal buffer.
-        let mut terminals: HashMap<BufferId, Terminal> = HashMap::new();
-        let mut failed_terminals: std::collections::HashSet<BufferId> =
-            std::collections::HashSet::new();
-        // Latest coloured grid per terminal, refreshed only when output changes
-        // (cloning the whole scrollback every frame would be far too costly).
-        let mut term_cells: TermCells = TermCells::new();
-        // Last grid size pushed to each terminal's PTY, to avoid redundant resizes.
-        let mut term_sizes: HashMap<BufferId, (u16, u16)> = HashMap::new();
-        // Last output version seen per terminal; skip re-rendering when unchanged.
-        let mut term_versions: HashMap<BufferId, u64> = HashMap::new();
+        // Live terminal sessions + their per-terminal caches (colour grid, last
+        // PTY size, last seen output version), grouped so they stay consistent.
+        let mut terms = Terminals::new();
         // Renderer's measured monospace cell width, updated each draw; used to
         // size terminal PTYs so TUIs fill the pane exactly.
         let mut measured_char_w = (self.config.editor.font_size * 0.6).max(1.0);
@@ -391,14 +406,14 @@ impl OzoneGui {
                             }
                         } else if let Some((term_id, bytes)) =
                             active_terminal(&lock(self.workspace.as_ref()))
-                                .filter(|id| terminals.contains_key(id))
+                                .filter(|id| terms.sessions.contains_key(id))
                                 .and_then(|id| terminal_key_bytes(key, modifiers).map(|b| (id, b)))
                         {
                             // Active buffer is a live terminal and this key maps to
                             // PTY bytes (Enter/Backspace/arrows/Ctrl-C…). Printable
                             // chars come through TextInput; unmapped keys fall to
                             // the editor below.
-                            terminals.get(&term_id).unwrap().write_str(bytes);
+                            terms.sessions.get(&term_id).unwrap().write_str(bytes);
                             needs_redraw = true;
                         } else {
                             let r = handle_key(
@@ -470,13 +485,13 @@ impl OzoneGui {
                                 drop(srch);
                                 let mut ws = lock(self.workspace.as_ref());
                                 let term_id =
-                                    active_terminal(&ws).filter(|id| terminals.contains_key(id));
+                                    active_terminal(&ws).filter(|id| terms.sessions.contains_key(id));
                                 if let Some(term_id) = term_id {
                                     // Send typed text straight to the PTY; the shell echoes it back.
                                     let printable: String =
                                         text.chars().filter(|c| !c.is_control()).collect();
                                     if !printable.is_empty() {
-                                        terminals.get(&term_id).unwrap().write_str(&printable);
+                                        terms.sessions.get(&term_id).unwrap().write_str(&printable);
                                         needs_redraw = true;
                                     }
                                 } else if insert_text_raw(&text, &mut ws) {
@@ -596,7 +611,7 @@ impl OzoneGui {
                     .collect();
                 // Attach a shell to any Terminal buffer that lacks one.
                 for id in &term_bufs {
-                    if terminals.contains_key(id) || failed_terminals.contains(id) {
+                    if terms.sessions.contains_key(id) || terms.failed.contains(id) {
                         continue;
                     }
                     match Terminal::spawn() {
@@ -610,10 +625,10 @@ impl OzoneGui {
                             let rows = (((H as f32) - STATUS_H - EDITOR_TOP_PAD) / lh)
                                 .clamp(5.0, 300.0) as u16;
                             term.resize(cols, rows);
-                            terminals.insert(*id, term);
+                            terms.sessions.insert(*id, term);
                         }
                         Err(e) => {
-                            failed_terminals.insert(*id);
+                            terms.failed.insert(*id);
                             if let Some(buf) = ws.buffers.get_mut(id) {
                                 buf.set_text(&format!("could not start terminal: {e}\n"));
                             }
@@ -622,9 +637,9 @@ impl OzoneGui {
                     }
                 }
                 // Forget sessions whose buffer was closed.
-                terminals.retain(|id, _| ws.buffers.contains_key(id));
-                term_cells.retain(|id, _| terminals.contains_key(id));
-                term_sizes.retain(|id, _| terminals.contains_key(id));
+                terms.sessions.retain(|id, _| ws.buffers.contains_key(id));
+                terms.cells.retain(|id, _| terms.sessions.contains_key(id));
+                terms.sizes.retain(|id, _| terms.sessions.contains_key(id));
 
                 // Resize each terminal's PTY to match its actual pane rect (a
                 // split pane is narrower than the window — otherwise the shell
@@ -634,36 +649,36 @@ impl OzoneGui {
                 if let Some(panes) = &ws.panes {
                     collect_term_rects(&ws, panes, editor_rect, &mut want);
                 } else if let Some(bid) = ws.active_view().map(|v| v.buffer_id)
-                    && terminals.contains_key(&bid)
+                    && terms.sessions.contains_key(&bid)
                 {
                     want.push((bid, editor_rect));
                 }
                 for (bid, rect) in want {
                     let size = rect_to_grid(rect, &self.config, measured_char_w);
-                    if terminals.contains_key(&bid) && term_sizes.get(&bid) != Some(&size) {
-                        terminals[&bid].resize(size.0, size.1);
-                        term_sizes.insert(bid, size);
+                    if terms.sessions.contains_key(&bid) && terms.sizes.get(&bid) != Some(&size) {
+                        terms.sessions[&bid].resize(size.0, size.1);
+                        terms.sizes.insert(bid, size);
                     }
                 }
 
-                term_versions.retain(|id, _| terminals.contains_key(id));
+                terms.versions.retain(|id, _| terms.sessions.contains_key(id));
                 let active_term = active_terminal(&ws);
-                for (id, term) in terminals.iter() {
+                for (id, term) in terms.sessions.iter() {
                     let is_active = active_term == Some(*id);
                     // Skip entirely unless the reader thread saw new output (or a
                     // resize bumped the version) — avoids rendering the whole grid
                     // to a string every frame, which TUIs make costly.
                     let version = term.version();
-                    if term_versions.get(id) == Some(&version) {
+                    if terms.versions.get(id) == Some(&version) {
                         continue;
                     }
-                    term_versions.insert(*id, version);
+                    terms.versions.insert(*id, version);
 
                     // The PTY shell echoes input itself, so the buffer is just output.
                     let text = term.output_snapshot();
                     {
                         // Refresh the colour grid alongside the text (same cadence).
-                        term_cells.insert(*id, term.cell_snapshot());
+                        terms.cells.insert(*id, term.cell_snapshot());
                         if let Some(buf) = ws.buffers.get_mut(id) {
                             buf.set_text(&text);
                         }
@@ -784,7 +799,7 @@ impl OzoneGui {
                         &mut ws,
                         &config,
                         srch.as_ref(),
-                        &term_cells,
+                        &terms.cells,
                         &images,
                         active_mods,
                         &mut measured_char_w,
