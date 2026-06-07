@@ -28,6 +28,7 @@ use aurea::{AureaResult, Element, MouseButton, Window, WindowEvent};
 
 mod actions;
 mod input;
+mod layout;
 mod minibuffer;
 mod mouse;
 mod notify;
@@ -38,6 +39,7 @@ mod theme;
 mod whichkey;
 pub(crate) use actions::*;
 use input::*;
+pub(crate) use layout::*;
 use minibuffer::*;
 use mouse::MouseState;
 use notify::*;
@@ -46,7 +48,7 @@ use ozone_config::{Config, CursorStyle, FiletypeConfig, LineNumbers};
 use ozone_editor::commands::register_defaults;
 use ozone_editor::{
     AutocommandRegistry, CommandRegistry, EditorEvent, IndentConfig, KeyStroke,
-    Keymap, KeymapOutcome, ModifierMap, PaneTree, SplitAxis, UiIntent, ViewId, Workspace,
+    Keymap, KeymapOutcome, ModifierMap, PaneTree, UiIntent, ViewId, Workspace,
     matching_bracket,
 };
 use ozone_syntax::{Filetype, ScanState, TokenKind, scan_line};
@@ -1067,16 +1069,6 @@ fn open_search(ws: &mut Workspace, search: &mut Option<SearchState>, replace: bo
     *search = Some(s);
 }
 
-// ---------------------------------------------------------------------------
-// Rendering constants — Catppuccin Mocha
-// ---------------------------------------------------------------------------
-
-const GUTTER_MIN_W: f32 = 52.0;
-const PAD: f32 = 8.0;
-const STATUS_H: f32 = 28.0;
-const EDITOR_TOP_PAD: f32 = 10.0;
-const SPLIT_GAP: f32 = 4.0;
-
 pub(crate) fn editor_font(config: &Config) -> Font {
     Font::new(&config.editor.font, config.editor.font_size)
 }
@@ -1852,40 +1844,6 @@ fn draw_status_bar(
 // Helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) fn baseline_in_rect(top: f32, height: f32, ascent: f32, descent: f32) -> f32 {
-    top + (height + ascent - descent) / 2.0
-}
-
-fn gutter_width(line_count: usize, char_w: f32, mode: LineNumbers) -> f32 {
-    if mode == LineNumbers::Off {
-        return 0.0;
-    }
-    let digits = line_count.max(1).to_string().len().max(2);
-    GUTTER_MIN_W.max((digits as f32 + 2.0) * char_w + PAD)
-}
-
-fn point_in_rect(rect: Rect, x: f32, y: f32) -> bool {
-    x >= rect.x && y >= rect.y && x < rect.x + rect.width && y < rect.y + rect.height
-}
-
-fn pane_at(tree: &PaneTree, rect: Rect, x: f32, y: f32) -> Option<(ViewId, Rect)> {
-    if !point_in_rect(rect, x, y) {
-        return None;
-    }
-    match tree {
-        PaneTree::Leaf { view_id } => Some((*view_id, rect)),
-        PaneTree::Split {
-            axis,
-            ratio,
-            first,
-            second,
-        } => {
-            let (first_rect, second_rect, _) = split_rect(rect, *axis, *ratio);
-            pane_at(first, first_rect, x, y).or_else(|| pane_at(second, second_rect, x, y))
-        }
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn handle_editor_click(
     ws: &mut Workspace,
@@ -2019,34 +1977,6 @@ fn rect_to_grid(rect: Rect, config: &Config, char_w: f32) -> (u16, u16) {
     (cols, rows)
 }
 
-fn split_rect(rect: Rect, axis: SplitAxis, ratio: f32) -> (Rect, Rect, Rect) {
-    let ratio = ratio.clamp(0.1, 0.9);
-    match axis {
-        SplitAxis::Vertical => {
-            let first_w = (rect.width * ratio - SPLIT_GAP / 2.0).max(0.0);
-            let divider_x = rect.x + first_w;
-            let second_x = divider_x + SPLIT_GAP;
-            let second_w = (rect.x + rect.width - second_x).max(0.0);
-            (
-                Rect::new(rect.x, rect.y, first_w, rect.height),
-                Rect::new(second_x, rect.y, second_w, rect.height),
-                Rect::new(divider_x, rect.y, SPLIT_GAP, rect.height),
-            )
-        }
-        SplitAxis::Horizontal => {
-            let first_h = (rect.height * ratio - SPLIT_GAP / 2.0).max(0.0);
-            let divider_y = rect.y + first_h;
-            let second_y = divider_y + SPLIT_GAP;
-            let second_h = (rect.y + rect.height - second_y).max(0.0);
-            (
-                Rect::new(rect.x, rect.y, rect.width, first_h),
-                Rect::new(rect.x, second_y, rect.width, second_h),
-                Rect::new(rect.x, divider_y, rect.width, SPLIT_GAP),
-            )
-        }
-    }
-}
-
 fn draw_cursor(
     ctx: &mut dyn DrawingContext,
     x: f32,
@@ -2101,10 +2031,6 @@ fn pane_status(ws: &Workspace, active: ViewId) -> String {
         return String::new();
     };
     format!("pane {}/{}", idx + 1, leaves.len())
-}
-
-fn max_scroll_line(line_count: usize, page_height: usize) -> usize {
-    line_count.saturating_sub(page_height.max(1))
 }
 
 #[cfg(test)]
