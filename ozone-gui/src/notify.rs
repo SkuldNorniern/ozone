@@ -7,7 +7,7 @@
 //! a self-contained handle so it can later grow into the broader popup host
 //! (hover cards, completion, progress) without the run loop changing shape.
 //!
-//! Rendering reuses the shared [`crate::popup`] primitives; layout is a stack of
+//! Rendering reuses the shared [`crate::components`] primitives; layout is a stack of
 //! rounded cards anchored to the top-right, each with a severity accent stripe.
 
 use std::time::{Duration, Instant};
@@ -16,7 +16,7 @@ use aurea::AureaResult;
 use aurea::render::{DrawingContext, Font, Point, Rect};
 use ozone_editor::NotifyLevel;
 
-use crate::popup::{draw_panel, top_right_rect};
+use crate::components::{draw_panel, top_right_rect};
 use crate::theme::{notify_accent, palette, solid};
 
 /// Default time a toast stays before auto-dismissing, by severity. Errors linger.

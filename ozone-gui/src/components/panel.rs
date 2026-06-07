@@ -1,19 +1,11 @@
-//! Reusable floating-panel (popup / overlay) primitives — the shared base every
-//! small popup draws on.
-//!
-//! Every overlay — the fuzzy picker, the find/replace bar, the modifier pills,
-//! the [which-key panel](crate::whichkey), the [notification toasts](crate::notify),
-//! and future completion / hover popups — is the same shape: a rounded, bordered
-//! panel (optionally over a dimmed scrim), positioned either centred or anchored
-//! to an edge. This module owns those primitives so the drawing is defined once
-//! and each overlay just lays out its content inside a [`Rect`]. Stateful popups
-//! that own a list + lifetime (like notifications) keep their controller in their
-//! own module and call back here only to draw.
+//! Panel primitives: rounded rects, the bordered floating panel, the modal
+//! scrim, and edge/centre placement helpers. The base every popup draws on.
 
 use aurea::AureaResult;
 use aurea::render::{Color, DrawingContext, Point, Rect};
 
-use crate::theme::{palette, solid};
+use crate::components::style;
+use crate::theme::solid;
 
 /// Fill a rounded rectangle using a cross of rects plus four corner circles.
 /// The shared building block for every panel and pill.
@@ -56,12 +48,13 @@ pub(crate) fn fill_round_rect(
 
 /// Dim the whole surface behind a modal popup.
 pub(crate) fn draw_scrim(ctx: &mut dyn DrawingContext, width: f32, height: f32) -> AureaResult<()> {
-    ctx.draw_rect(Rect::new(0.0, 0.0, width, height), &solid(palette().scrim))
+    ctx.draw_rect(Rect::new(0.0, 0.0, width, height), &solid(style().scrim))
 }
 
 /// Draw a bordered rounded panel (1px border ring + background fill). Content is
 /// drawn by the caller inside `rect`.
 pub(crate) fn draw_panel(ctx: &mut dyn DrawingContext, rect: Rect, radius: f32) -> AureaResult<()> {
+    let s = style();
     fill_round_rect(
         ctx,
         Rect::new(
@@ -71,9 +64,9 @@ pub(crate) fn draw_panel(ctx: &mut dyn DrawingContext, rect: Rect, radius: f32) 
             rect.height + 2.0,
         ),
         radius + 1.0,
-        palette().picker_border,
+        s.panel_border,
     )?;
-    fill_round_rect(ctx, rect, radius, palette().picker_bg)?;
+    fill_round_rect(ctx, rect, radius, s.panel_bg)?;
     Ok(())
 }
 

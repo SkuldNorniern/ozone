@@ -8,8 +8,10 @@ use ozone_buffer::{BufferId, BufferKind};
 use ozone_config::Config;
 use ozone_editor::{AutocommandRegistry, CommandRegistry, Workspace};
 
-use crate::popup::{centered_rect, draw_panel, draw_scrim, fill_round_rect};
-use crate::theme::{palette, solid};
+use crate::components::{
+    ListRow, centered_rect, draw_field, draw_list, draw_panel, draw_scrim, fill_round_rect, style,
+};
+use crate::theme::solid;
 use crate::{baseline_in_rect, dispatch_autocmds, editor_font, run_cmd, run_cmd_with_arg};
 
 /// What committing a picker item does.
@@ -308,11 +310,6 @@ pub(crate) fn draw_palette(
     let m = ctx.measure_text("M", &font).ok();
     let ascent = m.as_ref().map(|x| x.ascent).unwrap_or(font.size * 0.8);
     let descent = m.as_ref().map(|x| x.descent).unwrap_or(font.size * 0.2);
-    let measure = |ctx: &mut dyn DrawingContext, s: &str| {
-        ctx.measure_text(s, &font)
-            .map(|m| m.advance)
-            .unwrap_or(s.len() as f32 * font.size * 0.6)
-    };
 
     // Dim the editor behind the panel.
     draw_scrim(ctx, w, h)?;
@@ -340,31 +337,19 @@ pub(crate) fn draw_palette(
     let (px, py) = (panel.x, panel.y);
 
     // Rounded bordered panel.
+    let s = style();
     draw_panel(ctx, panel, radius)?;
 
-    // Input box: "<prompt> <query>" with a caret.
+    // Input box: "<prompt> <query>" with a caret (shared field component).
     let input_rect = Rect::new(px + pad, py + pad, pw - 2.0 * pad, line_h);
-    fill_round_rect(ctx, input_rect, 6.0, palette().picker_input_bg)?;
-    let in_baseline = baseline_in_rect(input_rect.y, input_rect.height, ascent, descent);
-    ctx.draw_text_with_font(
-        &p.prompt,
-        Point::new(input_rect.x + 8.0, in_baseline),
-        &font,
-        &solid(palette().picker_prompt),
-    )?;
-    let prompt_w = measure(ctx, &format!("{} ", p.prompt));
-    let query_x = input_rect.x + 8.0 + prompt_w;
-    ctx.draw_text_with_font(
-        &p.query,
-        Point::new(query_x, in_baseline),
-        &font,
-        &solid(palette().picker_fg),
-    )?;
-    let caret_x = query_x + measure(ctx, &p.query) + 1.0;
-    ctx.draw_rect(
-        Rect::new(caret_x, input_rect.y + 4.0, 2.0, line_h - 8.0),
-        &solid(palette().picker_fg),
-    )?;
+    fill_round_rect(ctx, input_rect, 6.0, s.input_bg)?;
+    let in_text = Rect::new(
+        input_rect.x + 8.0,
+        input_rect.y,
+        input_rect.width - 16.0,
+        input_rect.height,
+    );
+    draw_field(ctx, in_text, &p.prompt, &p.query, &font, ascent, descent)?;
 
     // Result list.
     let list_top = py + header_h;
@@ -374,43 +359,21 @@ pub(crate) fn draw_palette(
             "no matches",
             Point::new(px + pad + 8.0, bl),
             &font,
-            &solid(palette().picker_detail),
+            &solid(s.dim),
         )?;
         return Ok(());
     }
-    for (row, &idx) in shown.iter().enumerate() {
-        let y = list_top + row as f32 * line_h;
-        let item = &p.all[idx];
-        let selected = start + row == p.selected;
-        if selected {
-            fill_round_rect(
-                ctx,
-                Rect::new(px + pad, y, pw - 2.0 * pad, line_h),
-                6.0,
-                palette().picker_selection,
-            )?;
-        }
-        let bl = baseline_in_rect(y, line_h, ascent, descent);
-        ctx.draw_text_with_font(
-            &item.display,
-            Point::new(px + pad + 8.0, bl),
-            &font,
-            &solid(palette().picker_fg),
-        )?;
-        if !item.detail.is_empty() {
-            let dw = measure(ctx, &item.detail);
-            let name_w = measure(ctx, &item.display);
-            let dx = px + pw - pad - 8.0 - dw;
-            if dx > px + pad + 8.0 + name_w + 16.0 {
-                ctx.draw_text_with_font(
-                    &item.detail,
-                    Point::new(dx, bl),
-                    &font,
-                    &solid(palette().picker_detail),
-                )?;
-            }
-        }
-    }
+    let rows: Vec<ListRow> = shown
+        .iter()
+        .map(|&idx| ListRow {
+            primary: &p.all[idx].display,
+            detail: &p.all[idx].detail,
+        })
+        .collect();
+    let sel = p.selected.checked_sub(start);
+    draw_list(
+        ctx, px, list_top, pw, line_h, pad, &rows, sel, &font, ascent, descent,
+    )?;
     Ok(())
 }
 

@@ -16,7 +16,7 @@ use ozone_syntax::{Filetype, ScanState, TokenKind, scan_line};
 
 use crate::input::ActiveMods;
 use crate::layout::*;
-use crate::popup::fill_round_rect;
+use crate::components::draw_pill;
 use crate::search::{SearchState, draw_search_bar};
 use crate::theme::{palette, solid, stroke, term_color, token_color};
 use crate::{ImageCache, TermCells, editor_font};
@@ -738,22 +738,25 @@ fn draw_status_bar(
             if !active {
                 continue;
             }
-            let w = ctx
+            // Pre-measure so the chip can be placed right-to-left, then draw it
+            // with the shared pill component.
+            let chip_w = ctx
                 .measure_text(label, font)
                 .map(|m| m.advance)
-                .unwrap_or(label.len() as f32 * font.size * 0.6);
-            x -= w + 12.0;
-            fill_round_rect(
+                .unwrap_or(label.len() as f32 * font.size * 0.6)
+                + 12.0;
+            x -= chip_w;
+            draw_pill(
                 ctx,
-                Rect::new(x, bar_top + 4.0, w + 12.0, STATUS_H - 8.0),
-                5.0,
-                palette().status_mode_bg,
-            )?;
-            ctx.draw_text_with_font(
                 label,
-                Point::new(x + 6.0, baseline),
+                x,
+                bar_top + 4.0,
+                STATUS_H - 8.0,
+                baseline,
+                6.0,
                 font,
-                &solid(palette().picker_prompt),
+                palette().status_mode_bg,
+                palette().picker_prompt,
             )?;
             x -= 6.0; // gap between pills
         }

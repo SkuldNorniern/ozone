@@ -11,7 +11,7 @@ use aurea::render::{DrawingContext, Font, Point};
 use ozone_editor::Workspace;
 
 use crate::baseline_in_rect;
-use crate::popup::{draw_panel, top_right_rect};
+use crate::components::{draw_panel, top_right_rect};
 use crate::theme::{palette, solid};
 
 pub(crate) struct SearchState {

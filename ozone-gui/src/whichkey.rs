@@ -10,8 +10,8 @@
 use aurea::AureaResult;
 use aurea::render::{DrawingContext, Font, Point, Rect};
 
-use crate::popup::{draw_panel, fill_round_rect};
-use crate::theme::{palette, solid};
+use crate::components::{draw_panel, draw_pill, style};
+use crate::theme::solid;
 use crate::{STATUS_H, baseline_in_rect};
 
 /// One which-key entry: the next stroke label and what it leads to (a command
@@ -73,6 +73,7 @@ pub(crate) fn draw_which_key(
     let panel_y = (height - STATUS_H - panel_h - 6.0).max(6.0);
     let panel = Rect::new(panel_x, panel_y, panel_w, panel_h);
 
+    let s = style();
     draw_panel(ctx, panel, 8.0)?;
 
     // Header: the pending prefix.
@@ -81,7 +82,7 @@ pub(crate) fn draw_which_key(
         &format!("{prefix}-"),
         Point::new(panel_x + pad, head_base),
         font,
-        &solid(palette().picker_prompt),
+        &solid(s.accent),
     )?;
 
     // Entries, column-major so reading down a column is natural.
@@ -93,26 +94,21 @@ pub(crate) fn draw_which_key(
         let cell_top = body_top + row as f32 * line_h;
         let base = baseline_in_rect(cell_top, line_h, ascent, descent);
 
-        // Key pill.
-        let key_w = entry.key.chars().count() as f32 * char_w + 8.0;
-        fill_round_rect(
+        // Key pill (generic chip component).
+        let key_w = draw_pill(
             ctx,
-            Rect::new(cell_x, cell_top + 2.0, key_w, line_h - 4.0),
-            4.0,
-            palette().status_mode_bg,
-        )?;
-        ctx.draw_text_with_font(
             &entry.key,
-            Point::new(cell_x + 4.0, base),
+            cell_x,
+            cell_top + 2.0,
+            line_h - 4.0,
+            base,
+            4.0,
             font,
-            &solid(palette().picker_prompt),
+            s.chip_bg,
+            s.accent,
         )?;
 
-        let desc_color = if entry.is_group {
-            palette().picker_detail
-        } else {
-            palette().picker_fg
-        };
+        let desc_color = if entry.is_group { s.dim } else { s.fg };
         ctx.draw_text_with_font(
             &entry.desc,
             Point::new(cell_x + key_w + 6.0, base),
