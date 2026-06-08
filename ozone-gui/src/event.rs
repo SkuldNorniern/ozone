@@ -48,6 +48,12 @@ pub(crate) struct AppState {
     pub(crate) images: ImageCache,
     pub(crate) ft_applied: HashSet<BufferId>,
     pub(crate) live_mods: aurea::Modifiers,
+    /// When a bare modifier (Ctrl/Meta) started being held alone, used to delay
+    /// the which-key hint so quick chords like `C-s` don't flash it.
+    pub(crate) mod_hint_start: Option<Instant>,
+    /// Whether the bare-modifier which-key hint is currently shown (tracked to
+    /// trigger a redraw only when its visibility flips).
+    pub(crate) mod_hint_visible: bool,
     pub(crate) mouse: MouseState,
     pub(crate) cursor_visible: bool,
     pub(crate) last_cursor_blink: Instant,
@@ -92,6 +98,8 @@ impl AppState {
             images: ImageCache::new(),
             ft_applied: HashSet::new(),
             live_mods: aurea::Modifiers::default(),
+            mod_hint_start: None,
+            mod_hint_visible: false,
             mouse: MouseState::default(),
             cursor_visible: true,
             last_cursor_blink: Instant::now(),

@@ -16,7 +16,8 @@ use crate::canvas::{SendableCanvas, SharedCanvas};
 use crate::event::{AppState, EventResult, handle_window_event};
 use crate::input::ActiveMods;
 use crate::keys::{
-    active_filetype_name, apply_filetype_config, filetype_config_name, which_key_entries,
+    active_filetype_name, apply_filetype_config, filetype_config_name, modifier_which_key_entries,
+    which_key_entries,
 };
 use crate::layout::{EDITOR_TOP_PAD, STATUS_H};
 use crate::overlay::minibuffer::{Minibuffer, draw_minibuffer};
@@ -27,6 +28,36 @@ use crate::overlay::whichkey::draw_which_key;
 use crate::render::draw_editor;
 use crate::terminals::{collect_term_rects, rect_to_grid};
 use crate::{ImageCache, TermCells, editor_font, lock};
+
+/// How long a bare modifier must be held alone before the which-key hint shows.
+const MOD_HINT_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// Which single logical modifier is held alone, eligible for the bare-modifier
+/// which-key hint. Returns `(control, meta, super_)` with exactly one set, or
+/// `None` when zero or several are held. `shift` is ignored (it pairs with a key
+/// rather than acting as a chord prefix on its own).
+fn bare_modifier_held(active: ActiveMods) -> Option<(bool, bool, bool)> {
+    let count = active.control as u8 + active.meta as u8 + active.super_ as u8;
+    if count == 1 {
+        Some((active.control, active.meta, active.super_))
+    } else {
+        None
+    }
+}
+
+/// Header label for the bare-modifier hint panel (`draw_which_key` appends `-`).
+fn modifier_prefix_label(control: bool, meta: bool, super_: bool) -> String {
+    if control {
+        "C"
+    } else if meta {
+        "M"
+    } else if super_ {
+        "s"
+    } else {
+        ""
+    }
+    .to_string()
+}
 
 pub struct OzoneGui {
     pub(crate) workspace: Arc<Mutex<Workspace>>,
@@ -359,6 +390,29 @@ impl OzoneGui {
                 state.needs_redraw = true;
             }
 
+            // Bare-modifier which-key hint: holding Ctrl/Meta alone (no pending
+            // chord) reveals its bindings after a short delay, so quick chords
+            // like C-s don't flash the panel. Recomputed each frame; flips drive
+            // a redraw. Overlay suppression is handled at draw time.
+            {
+                let active = ActiveMods::from_physical(state.live_mods, &state.modmap);
+                let eligible =
+                    state.chord_pending.is_empty() && bare_modifier_held(active).is_some();
+                let now_visible = if eligible {
+                    let start = *state
+                        .mod_hint_start
+                        .get_or_insert_with(std::time::Instant::now);
+                    start.elapsed() >= MOD_HINT_DELAY
+                } else {
+                    state.mod_hint_start = None;
+                    false
+                };
+                if now_visible != state.mod_hint_visible {
+                    state.mod_hint_visible = now_visible;
+                    state.needs_redraw = true;
+                }
+            }
+
             {
                 let ws = lock(state.workspace.as_ref());
                 let title = window_title(&ws);
@@ -396,6 +450,23 @@ impl OzoneGui {
                         .collect::<Vec<_>>()
                         .join(" ");
                     (prefix, entries)
+                } else if state.mod_hint_visible && pal.is_none() && srch.is_none() && mb.is_none()
+                {
+                    match bare_modifier_held(active_mods) {
+                        Some((control, meta, super_)) => {
+                            let ft = active_filetype_name(&ws);
+                            let entries = modifier_which_key_entries(
+                                &state.keymap,
+                                control,
+                                meta,
+                                super_,
+                                ft.as_deref(),
+                                &state.commands,
+                            );
+                            (modifier_prefix_label(control, meta, super_), entries)
+                        }
+                        None => (String::new(), Vec::new()),
+                    }
                 } else {
                     (String::new(), Vec::new())
                 };

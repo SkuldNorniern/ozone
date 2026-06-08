@@ -201,6 +201,48 @@ impl Keymap {
         next.into_iter().map(|(k, (_, d))| (k, d)).collect()
     }
 
+    /// First strokes reachable while only the given modifiers are held, for the
+    /// bare-modifier which-key hint (e.g. holding `Ctrl` lists every `C-…`
+    /// binding). A binding's leading stroke must match the held `control` /
+    /// `meta` / `super_` flags exactly; `shift` is left free so `C-S-e` still
+    /// appears while only `Ctrl` is held. Returns `(stroke_label, command-or-+prefix)`.
+    pub fn modifier_continuations(
+        &self,
+        control: bool,
+        meta: bool,
+        super_: bool,
+        filetype: Option<&str>,
+    ) -> Vec<(String, String)> {
+        use std::collections::BTreeMap;
+        let mut next: BTreeMap<String, (Layer, String)> = BTreeMap::new();
+        for b in &self.bindings {
+            if !Self::applies(b, filetype) {
+                continue;
+            }
+            let Some(stroke) = b.chord.first() else {
+                continue;
+            };
+            if stroke.control != control || stroke.meta != meta || stroke.super_ != super_ {
+                continue;
+            }
+            let label = stroke_label(stroke);
+            let desc = if b.chord.len() == 1 {
+                b.command.clone()
+            } else {
+                "+prefix".to_string()
+            };
+            next.entry(label)
+                .and_modify(|(layer, d)| {
+                    if b.layer > *layer || (*d == "+prefix" && desc != "+prefix") {
+                        *layer = b.layer;
+                        *d = desc.clone();
+                    }
+                })
+                .or_insert((b.layer, desc));
+        }
+        next.into_iter().map(|(k, (_, d))| (k, d)).collect()
+    }
+
     /// A stable sample of active bindings for help/welcome surfaces.
     pub fn display_bindings(&self, filetype: Option<&str>, limit: usize) -> Vec<(String, String)> {
         let mut rows: Vec<(Vec<KeyStroke>, Layer, String)> = Vec::new();
@@ -429,6 +471,30 @@ mod tests {
         assert_eq!(
             stroke_label(&KeyStroke::key(Key::Enter).with_meta()),
             "M-Enter"
+        );
+    }
+
+    #[test]
+    fn modifier_continuations_list_bare_prefix_bindings() {
+        let mut km = Keymap::new();
+        km.bind_default("ctrl+s", "file.save");
+        km.bind_default("ctrl+shift+e", "file.tree");
+        km.bind_default("ctrl+k ctrl+s", "file.save-all");
+        km.bind_default("meta+x", "command.palette");
+        km.bind_default("ctrl+meta+right", "pane.focus-right");
+
+        let ctrl = km.modifier_continuations(true, false, false, None);
+        // C-S leaf, C-S-E leaf (shift free), C-K as a +prefix group.
+        assert!(ctrl.iter().any(|(k, c)| k == "C-S" && c == "file.save"));
+        assert!(ctrl.iter().any(|(k, c)| k == "C-S-E" && c == "file.tree"));
+        assert!(ctrl.iter().any(|(k, c)| k == "C-K" && c == "+prefix"));
+        // Combos needing another modifier (meta) are excluded while only Ctrl is held.
+        assert!(ctrl.iter().all(|(k, _)| k != "C-M-Right"));
+
+        let meta = km.modifier_continuations(false, true, false, None);
+        assert_eq!(
+            meta,
+            vec![("M-X".to_string(), "command.palette".to_string())]
         );
     }
 

@@ -156,6 +156,35 @@ pub(crate) fn which_key_entries(
         .collect()
 }
 
+/// Build which-key entries for the bare-modifier hint: every top-level binding
+/// reachable while only `control` / `meta` / `super_` is held.
+pub(crate) fn modifier_which_key_entries(
+    keymap: &Keymap,
+    control: bool,
+    meta: bool,
+    super_: bool,
+    filetype: Option<&str>,
+    reg: &CommandRegistry,
+) -> Vec<WhichKeyEntry> {
+    keymap
+        .modifier_continuations(control, meta, super_, filetype)
+        .into_iter()
+        .map(|(key, desc)| {
+            let is_group = desc == "+prefix";
+            let desc = if is_group {
+                desc
+            } else {
+                reg.display_name(&desc)
+            };
+            WhichKeyEntry {
+                key,
+                desc,
+                is_group,
+            }
+        })
+        .collect()
+}
+
 /// Document symbols of the active buffer as `Select` items; choosing one runs
 /// `edit.goto-line` with the symbol's 1-based line. Empty for non-code buffers.
 fn symbol_select_items(ws: &Workspace) -> Vec<SelectItem> {
