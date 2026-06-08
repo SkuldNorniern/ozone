@@ -17,15 +17,13 @@ pub(super) fn wrap_line_segments(text: &str, max_cols: usize) -> Vec<(usize, usi
     let mut start = 0usize;
     while start < text.len() {
         let mut end = start;
-        let mut cols = 0usize;
         let mut last_break = None;
-        for (offset, ch) in text[start..].char_indices() {
-            if cols >= max_cols {
+        for (col, (offset, ch)) in text[start..].char_indices().enumerate() {
+            if col >= max_cols {
                 break;
             }
             let absolute = start + offset;
             end = absolute + ch.len_utf8();
-            cols += 1;
             if ch.is_whitespace() {
                 last_break = Some(end);
             }

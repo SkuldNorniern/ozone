@@ -84,6 +84,7 @@ pub(crate) fn rect_to_grid(rect: Rect, config: &Config, char_w: f32) -> (u16, u1
 /// Draw one row of terminal cells: per-cell background fills, then runs of
 /// glyphs batched by identical foreground colour into single text draws.
 /// Honours reverse-video by swapping fg/bg.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_term_row(
     ctx: &mut dyn DrawingContext,
     row: &[ozone_term::Cell],

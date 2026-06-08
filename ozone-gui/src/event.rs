@@ -60,6 +60,7 @@ pub(crate) struct AppState {
 }
 
 impl AppState {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         app: OzoneGui,
         palette: Arc<Mutex<Option<PickerState>>>,

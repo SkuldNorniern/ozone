@@ -141,11 +141,9 @@ impl Workspace {
                 )
             })
             .unwrap_or(false);
-        if should_remove {
-            if self.buffers.remove(&buffer_id).is_some() {
-                self.buffer_options.remove(&buffer_id);
-                self.emit(EditorEvent::BufferClosed { id: buffer_id });
-            }
+        if should_remove && self.buffers.remove(&buffer_id).is_some() {
+            self.buffer_options.remove(&buffer_id);
+            self.emit(EditorEvent::BufferClosed { id: buffer_id });
         }
     }
 }
