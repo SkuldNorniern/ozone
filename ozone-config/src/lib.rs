@@ -330,14 +330,34 @@ impl Config {
     }
 
     /// Load the user/local config, plus a warning when that file is unreadable
-    /// or syntactically invalid.
+    /// or syntactically invalid.  When no config exists anywhere, write the
+    /// default template to the user config path so the user has a file to edit.
     pub fn load_user_with_warning() -> (Self, Option<String>) {
         if let Some(path) = Self::resolved_config_path() {
-            Self::load_with_warning(&path)
-        } else {
-            (Self::default_config(), None)
+            return Self::load_with_warning(&path);
         }
+
+        // No config found – generate one at the user path.
+        if let Some(path) = Self::user_config_path() {
+            let _ = Self::write_default_to(&path);
+        }
+
+        (Self::default_config(), None)
     }
+
+    /// Write the built-in default config template to `path`, creating parent
+    /// directories as needed.  Returns an error string on failure.
+    pub fn write_default_to(path: &std::path::Path) -> Result<(), String> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("create config dir: {e}"))?;
+        }
+        std::fs::write(path, Self::DEFAULT_TEMPLATE)
+            .map_err(|e| format!("write config: {e}"))
+    }
+
+    /// The default configuration template written when no user config exists.
+    pub const DEFAULT_TEMPLATE: &'static str = include_str!("../../config.toml");
 }
 
 /// Coerce a TOML value (integer or float) into `f32`.
