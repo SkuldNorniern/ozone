@@ -302,20 +302,28 @@ fn draw_view(
         )?;
     }
 
-    // Pre-scan: walk from line 0 to scroll to find block-comment state.
-    // Acceptable for Phase 1 file sizes.
+    // Pre-scan: single pass from line 0 to scroll for block-comment state.
+    // Plain and Toml have no cross-line state — skip entirely.
     let mut scan_state = ScanState::clean();
-    for l in 0..scroll {
-        if let Some(text) = buf.line(l) {
+    if !matches!(ft, Filetype::Plain | Filetype::Toml) {
+        for text in buf.lines_slice(0, scroll) {
             let (_, ns) = scan_line(ft, &text, scan_state);
             scan_state = ns;
         }
     }
 
+    // Fetch all visible lines in one pass to avoid O(scroll²) repeated nth() scans.
+    let visible_line_end = (scroll + visible + 1).min(line_count);
+    let visible_texts = buf.lines_slice(scroll, visible_line_end);
+
     let mut visual_i = 0usize;
     let mut line_idx = scroll;
     while visual_i < visible && line_idx < line_count {
-        let full_line_text = buf.line(line_idx).unwrap_or_default();
+        let line_offset = line_idx - scroll;
+        let full_line_text = visible_texts
+            .get(line_offset)
+            .cloned()
+            .unwrap_or_default();
         let wrap_segments = if word_wrap {
             wrap_line_segments(&full_line_text, text_cols)
         } else {
@@ -1167,14 +1175,9 @@ fn draw_status_bar(
             )
         };
 
-    let ascent = ctx
-        .measure_text("M", font)
-        .map(|m| m.ascent)
-        .unwrap_or(font.size * 0.8);
-    let descent = ctx
-        .measure_text("M", font)
-        .map(|m| m.descent)
-        .unwrap_or(font.size * 0.2);
+    let em = ctx.measure_text("M", font).ok();
+    let ascent = em.as_ref().map(|m| m.ascent).unwrap_or(font.size * 0.8);
+    let descent = em.as_ref().map(|m| m.descent).unwrap_or(font.size * 0.2);
     let baseline = baseline_in_rect(bar_top, STATUS_H, ascent, descent);
 
     let mode_text = format!(" {} ", mode);

@@ -52,6 +52,8 @@ pub(crate) struct AppState {
     pub(crate) cursor_visible: bool,
     pub(crate) last_cursor_blink: Instant,
     pub(crate) needs_redraw: bool,
+    pub(crate) window_width: u32,
+    pub(crate) window_height: u32,
     cursor_activity: bool,
     swallow_text: bool,
     has_text_input: bool,
@@ -65,6 +67,8 @@ impl AppState {
         minibuffer: Arc<Mutex<Option<Minibuffer>>>,
         notifications: Arc<Mutex<Notifications>>,
         canvas: Arc<Mutex<SendableCanvas>>,
+        window_width: u32,
+        window_height: u32,
     ) -> Self {
         let measured_char_w = (app.config.editor.font_size * 0.6).max(1.0);
         Self {
@@ -91,6 +95,8 @@ impl AppState {
             cursor_visible: true,
             last_cursor_blink: Instant::now(),
             needs_redraw: false,
+            window_width,
+            window_height,
             cursor_activity: false,
             swallow_text: false,
             has_text_input: false,
@@ -112,7 +118,12 @@ impl AppState {
 pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> EventResult {
     match event {
         WindowEvent::CloseRequested => return EventResult::Close,
-        WindowEvent::Resized { .. } | WindowEvent::ScaleFactorChanged { .. } => {
+        WindowEvent::Resized { width, height } => {
+            state.window_width = *width;
+            state.window_height = *height;
+            state.needs_redraw = true;
+        }
+        WindowEvent::ScaleFactorChanged { .. } => {
             state.needs_redraw = true;
         }
 

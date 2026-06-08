@@ -166,6 +166,11 @@ impl Buffer {
         self.table.line(idx)
     }
 
+    /// Return lines `start..end` in one pass.
+    pub fn lines_slice(&self, start: usize, end: usize) -> Vec<String> {
+        self.table.lines_slice(start, end)
+    }
+
     /// Length of a line in bytes (excludes the newline).
     pub fn line_len(&self, line: usize) -> usize {
         self.table.line(line).map(|l| l.len()).unwrap_or(0)

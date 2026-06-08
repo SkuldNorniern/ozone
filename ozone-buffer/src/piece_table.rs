@@ -88,6 +88,25 @@ impl PieceTable {
         text.split('\n').nth(idx).map(|s| s.to_string())
     }
 
+    /// Return lines `start..end` in a single pass — O(text_len) instead of
+    /// O(end² ) from repeated `nth()` calls.
+    pub fn lines_slice(&self, start: usize, end: usize) -> Vec<String> {
+        if start >= end {
+            return Vec::new();
+        }
+        let text = self.materialized();
+        let mut out = Vec::with_capacity(end.saturating_sub(start));
+        for (i, line) in text.split('\n').enumerate() {
+            if i >= end {
+                break;
+            }
+            if i >= start {
+                out.push(line.to_string());
+            }
+        }
+        out
+    }
+
     /// Convert (line, col) to byte offset. Clamps to total length.
     pub fn pos_to_offset(&self, line: usize, col: usize) -> usize {
         let text = self.materialized();

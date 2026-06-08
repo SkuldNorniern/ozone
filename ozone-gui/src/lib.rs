@@ -199,7 +199,7 @@ impl OzoneGui {
             canvas.invalidate_all();
         }
 
-        let mut state = AppState::new(self, palette, search, minibuffer, notifications, canvas_arc);
+        let mut state = AppState::new(self, palette, search, minibuffer, notifications, canvas_arc, W, H);
         let blink_interval = std::time::Duration::from_millis(530);
 
         // --------------- event loop ---------------
@@ -265,8 +265,8 @@ impl OzoneGui {
                             let lh = (state.config.editor.font_size
                                 * state.config.editor.line_height)
                                 .max(1.0);
-                            let cols = (((W as f32) - 60.0) / cw).clamp(20.0, 500.0) as u16;
-                            let rows = (((H as f32) - STATUS_H - EDITOR_TOP_PAD) / lh)
+                            let cols = ((state.window_width as f32 - 60.0) / cw).clamp(20.0, 500.0) as u16;
+                            let rows = ((state.window_height as f32 - STATUS_H - EDITOR_TOP_PAD) / lh)
                                 .clamp(5.0, 300.0) as u16;
                             term.resize(cols, rows);
                             state.terms.sessions.insert(*id, term);
@@ -292,7 +292,7 @@ impl OzoneGui {
                 // Resize each terminal's PTY to match its actual pane rect (a
                 // split pane is narrower than the window — otherwise the shell
                 // wraps to the full width and overflows the pane).
-                let editor_rect = Rect::new(0.0, 0.0, W as f32, (H as f32 - STATUS_H).max(0.0));
+                let editor_rect = Rect::new(0.0, 0.0, state.window_width as f32, (state.window_height as f32 - STATUS_H).max(0.0));
                 let mut want: Vec<(BufferId, Rect)> = Vec::new();
                 if let Some(panes) = &ws.panes {
                     collect_term_rects(&ws, panes, editor_rect, &mut want);
