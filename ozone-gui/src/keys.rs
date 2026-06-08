@@ -11,10 +11,10 @@
 use ozone_buffer::{BufferId, BufferKind};
 use ozone_config::FiletypeConfig;
 use ozone_editor::{
-    AutocommandRegistry, CommandRegistry, KeyStroke, Keymap, KeymapOutcome, ModifierMap, UiIntent,
-    Workspace,
+    AutocommandRegistry, CommandRegistry, KeyStroke, Keymap, KeymapOutcome, ModifierMap,
+    SelectItem, UiIntent, Workspace,
 };
-use ozone_syntax::Filetype;
+use ozone_syntax::{Filetype, symbols};
 
 use crate::actions::{insert_text_raw, run_cmd};
 use crate::input::{keycode_to_char, keystroke_from};
@@ -156,6 +156,28 @@ pub(crate) fn which_key_entries(
         .collect()
 }
 
+/// Document symbols of the active buffer as `Select` items; choosing one runs
+/// `edit.goto-line` with the symbol's 1-based line. Empty for non-code buffers.
+fn symbol_select_items(ws: &Workspace) -> Vec<SelectItem> {
+    let Some(buf) = ws.active_buffer() else {
+        return Vec::new();
+    };
+    let ft = match &buf.kind {
+        BufferKind::File(p) => Filetype::from_path(&p.to_string_lossy()),
+        _ => Filetype::Plain,
+    };
+    let text = buf.text();
+    symbols(ft, &text)
+        .into_iter()
+        .map(|s| SelectItem {
+            label: s.name,
+            detail: s.kind.label().to_string(),
+            command: "edit.goto-line".to_string(),
+            arg: Some((s.line + 1).to_string()),
+        })
+        .collect()
+}
+
 /// The active buffer's id if it is a live terminal surface.
 pub(crate) fn active_terminal(ws: &Workspace) -> Option<BufferId> {
     let view = ws.active_view()?;
@@ -229,6 +251,10 @@ pub(crate) fn apply_ui_intents(
             }
             UiIntent::ThemePicker => {
                 *ov.palette = Some(PickerState::new("theme:", theme_picker_items()));
+            }
+            UiIntent::SymbolPicker => {
+                let items = select_picker_items(symbol_select_items(ws));
+                *ov.palette = Some(PickerState::new("symbol:", items));
             }
             UiIntent::SearchStart => open_search(ws, ov.search, false),
             UiIntent::SearchReplace => open_search(ws, ov.search, true),

@@ -3,6 +3,8 @@ pub mod autocmd;
 pub mod brackets;
 pub mod commands;
 pub mod decoration;
+pub mod fold;
+pub mod text_object;
 pub mod events;
 pub mod keymap;
 pub mod options;

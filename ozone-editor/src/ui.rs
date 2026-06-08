@@ -31,6 +31,9 @@ pub enum UiIntent {
     BufferPicker,
     /// Open the installed-theme picker.
     ThemePicker,
+    /// Open the document-symbol picker for the active buffer. The frontend
+    /// extracts symbols (it owns the syntax layer) and jumps to the chosen one.
+    SymbolPicker,
     /// Start incremental in-buffer search.
     SearchStart,
     /// Start in-buffer search with the replace field shown.

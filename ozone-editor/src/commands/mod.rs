@@ -10,12 +10,16 @@ use crate::workspace::Workspace;
 mod cursor;
 mod edit;
 mod file;
+mod fold;
 mod pane;
+mod select;
 
 use cursor::register_cursor_commands;
 use edit::register_edit_commands;
 use file::register_file_commands;
+use fold::register_fold_commands;
 use pane::register_pane_commands;
+use select::register_select_commands;
 
 fn buffer_display_name(ws: &Workspace, id: BufferId) -> String {
     match ws.buffers.get(&id).map(|b| &b.kind) {
@@ -143,7 +147,9 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
     register_cursor_commands(reg);
     register_edit_commands(reg);
     register_file_commands(reg);
+    register_fold_commands(reg);
     register_pane_commands(reg);
+    register_select_commands(reg);
 }
 
 // ---------------------------------------------------------------------------

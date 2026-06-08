@@ -65,6 +65,13 @@ pub(super) fn register_file_commands(reg: &mut CommandRegistry) {
     reg.register("theme.select", "Select an installed color theme", |ctx| {
         ctx.workspace.request_ui(UiIntent::ThemePicker);
     });
+    reg.register(
+        "symbol.picker",
+        "Jump to a symbol in the current buffer",
+        |ctx| {
+            ctx.workspace.request_ui(UiIntent::SymbolPicker);
+        },
+    );
     reg.register("search.start", "Incremental search in the buffer", |ctx| {
         ctx.workspace.request_ui(UiIntent::SearchStart);
     });

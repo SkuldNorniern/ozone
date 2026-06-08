@@ -73,6 +73,10 @@ impl Keymap {
             ("ctrl+tab", "buffer.next"),
             ("ctrl+shift+tab", "buffer.previous"),
             ("ctrl+x b", "buffer.picker"),
+            ("ctrl+shift+o", "symbol.picker"),
+            ("ctrl+k ctrl+l", "fold.toggle"),
+            ("ctrl+k ctrl+0", "fold.open-all"),
+            ("ctrl+k ctrl+j", "fold.all"),
             ("meta+left", "view.jump-back"),
             ("meta+right", "view.jump-forward"),
             ("ctrl+-", "view.jump-back"),
@@ -86,6 +90,7 @@ impl Keymap {
             ("super+shift+p", "command.palette"),
             ("super+shift+f", "search.workspace"),
             ("super+shift+e", "file.tree"),
+            ("super+shift+o", "symbol.picker"),
             ("super+tab", "buffer.next"),
             ("super+shift+tab", "buffer.previous"),
             // ── Panes ─────────────────────────────────────────────────────────

@@ -3,7 +3,7 @@ use aurea::render::{DrawingContext, Font, Point, Rect};
 
 use ozone_buffer::{BufferKind, Pos};
 use ozone_config::{Config, CursorStyle, LineNumbers};
-use ozone_editor::{Decoration, DecorationKind, ViewId, VirtualPos, Workspace};
+use ozone_editor::{Decoration, DecorationKind, ViewId, VirtualPos, Workspace, fold};
 use ozone_syntax::{Filetype, ScanState, TokenKind, scan_line};
 
 use super::TextMetrics;
@@ -174,6 +174,14 @@ pub(super) fn draw_view(
             (Vec::new(), scan_state)
         };
         scan_state = new_state;
+
+        // Folding: lines inside a collapsed region are not drawn (the syntax
+        // scan state above has already advanced past them). The header line
+        // itself stays visible and gets a fold marker below.
+        if fold::is_hidden(buf, &view.folds, line_idx) {
+            line_idx += 1;
+            continue;
+        }
 
         for (segment_index, (segment_start, segment_end)) in
             wrap_segments.iter().copied().enumerate()
@@ -372,6 +380,17 @@ pub(super) fn draw_view(
                         font,
                     )?;
                 }
+            }
+
+            // Fold marker: a dim ellipsis after a collapsed header's content.
+            if segment_is_line_end && view.folds.contains(&line_idx) {
+                let marker_x = text_x + (line_text.len() + 1) as f32 * metrics.char_w;
+                ctx.draw_text_with_font(
+                    "⋯",
+                    Point::new(marker_x, baseline),
+                    font,
+                    &solid(palette().line_number),
+                )?;
             }
 
             for decoration in &line_decorations {

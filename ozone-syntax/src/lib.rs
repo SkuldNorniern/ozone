@@ -8,7 +8,10 @@
 mod json;
 mod markdown;
 mod rust;
+pub mod symbols;
 mod toml;
+
+pub use symbols::{Symbol, SymbolKind, symbols};
 
 // ---------------------------------------------------------------------------
 // Public types

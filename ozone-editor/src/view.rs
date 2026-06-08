@@ -1,4 +1,5 @@
 use ozone_buffer::{BufferId, Pos, Span};
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_VIEW_ID: AtomicU64 = AtomicU64::new(1);
@@ -28,6 +29,9 @@ pub struct View {
     pub col_memory: usize,
     /// Visible line count — set by ozone-gui each frame so page commands work.
     pub page_height: usize,
+    /// Header lines whose fold is collapsed (interior lines hidden). View-local,
+    /// like Neovim window folds. See [`crate::fold`].
+    pub folds: HashSet<usize>,
 }
 
 impl View {
@@ -41,6 +45,7 @@ impl View {
             selection: None,
             col_memory: 0,
             page_height: 40,
+            folds: HashSet::new(),
         }
     }
 
@@ -54,6 +59,7 @@ impl View {
             selection: self.selection,
             col_memory: self.col_memory,
             page_height: self.page_height,
+            folds: self.folds.clone(),
         }
     }
 
