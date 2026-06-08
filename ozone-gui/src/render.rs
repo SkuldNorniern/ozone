@@ -920,10 +920,7 @@ fn draw_line_with_inline_virtual_text(
             font,
             &solid(token_color(kind)),
         )?;
-        x += ctx
-            .measure_text(glyph, font)
-            .map(|metrics| metrics.advance)
-            .unwrap_or(char_w);
+        x += char_w;
     }
 
     while let Some(decoration) = decorations.get(decoration_index) {

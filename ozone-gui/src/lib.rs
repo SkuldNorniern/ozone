@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
 
 use ozone_term::Terminal;
 
@@ -24,11 +23,12 @@ fn decode_image(path: &std::path::Path) -> Option<Image> {
 }
 
 use aurea::render::{Canvas, Font, Image, Rect, RendererBackend};
-use aurea::{AureaResult, Element, MouseButton, Window, WindowEvent};
+use aurea::{AureaResult, Element, Window, WindowEvent};
 
 mod actions;
 mod canvas;
 mod components;
+mod event;
 mod input;
 mod keys;
 mod layout;
@@ -43,26 +43,23 @@ mod theme;
 mod whichkey;
 pub(crate) use actions::*;
 use canvas::{SendableCanvas, SharedCanvas};
+use event::{AppState, EventResult, handle_window_event};
 use input::*;
 use keys::*;
 pub(crate) use layout::*;
 use minibuffer::*;
-use mouse::{
-    MouseState, handle_editor_click, handle_editor_drag, handle_scrollbar_drag,
-    handle_scrollbar_press,
-};
 use notify::*;
 use ozone_buffer::{BufferId, BufferKind};
 use ozone_config::Config;
 use ozone_editor::commands::register_defaults;
 use ozone_editor::{
-    AutocommandRegistry, CommandRegistry, IndentConfig, KeyStroke, Keymap, ModifierMap, Workspace,
+    AutocommandRegistry, CommandRegistry, IndentConfig, Keymap, ModifierMap, Workspace,
 };
 use ozone_syntax::Filetype;
 use picker::*;
 use render::draw_editor;
 use search::*;
-use terminals::{Terminals, collect_term_rects, rect_to_grid};
+use terminals::{collect_term_rects, rect_to_grid};
 use whichkey::*;
 
 pub struct OzoneGui {
@@ -202,30 +199,8 @@ impl OzoneGui {
             canvas.invalidate_all();
         }
 
-        let mut last_title = String::new();
-        // Pending chord prefix carried across key events (e.g. after `ctrl+k`).
-        let mut chord_pending: Vec<KeyStroke> = Vec::new();
-        // Live terminal sessions + their per-terminal caches (colour grid, last
-        // PTY size, last seen output version), grouped so they stay consistent.
-        let mut terms = Terminals::new();
-        // Renderer's measured monospace cell width, updated each draw; used to
-        // size terminal PTYs so TUIs fill the pane exactly.
-        let mut measured_char_w = (self.config.editor.font_size * 0.6).max(1.0);
-        // Most-recently-used buffer order (front = current), for the buffer picker.
-        let mut buffer_mru: Vec<BufferId> = Vec::new();
-        // Decoded images by buffer (decoded once, on first sight).
-        let mut images: ImageCache = ImageCache::new();
-        // Buffers whose `[[filetype]]` config has already been applied.
-        let mut ft_applied: std::collections::HashSet<BufferId> = std::collections::HashSet::new();
-        // Live physical modifier state, updated on every key press/release, for
-        // the status-bar modifier indicator.
-        let mut live_mods = aurea::Modifiers::default();
-        // Pointer state for the run loop (last position now; the unified
-        // pointer model from docs/aurea-pointer-roadmap.md will grow here).
-        let mut mouse = MouseState::default();
-        let blink_interval = Duration::from_millis(530);
-        let mut cursor_visible = true;
-        let mut last_cursor_blink = Instant::now();
+        let mut state = AppState::new(self, palette, search, minibuffer, notifications, canvas_arc);
+        let blink_interval = std::time::Duration::from_millis(530);
 
         // --------------- event loop ---------------
         loop {
@@ -237,410 +212,41 @@ impl OzoneGui {
             // Keep the MRU list current: whichever buffer is active moves to the
             // front. Drop ids whose buffer was closed.
             {
-                let ws = lock(self.workspace.as_ref());
+                let ws = lock(state.workspace.as_ref());
                 if let Some(active) = ws.active_view().map(|v| v.buffer_id)
-                    && buffer_mru.first() != Some(&active)
+                    && state.buffer_mru.first() != Some(&active)
                 {
-                    buffer_mru.retain(|id| *id != active);
-                    buffer_mru.insert(0, active);
+                    state.buffer_mru.retain(|id| *id != active);
+                    state.buffer_mru.insert(0, active);
                 }
-                buffer_mru.retain(|id| ws.buffers.contains_key(id));
+                state.buffer_mru.retain(|id| ws.buffers.contains_key(id));
             }
 
             let events = window.poll_events();
-            let mut should_close = false;
-            let mut needs_redraw = false;
-            let mut cursor_activity = false;
-            // When the palette opens via a key, the trigger char (e.g. the `x`
-            // of M-x) may also arrive as TextInput; swallow that one char.
-            let mut swallow_text = false;
-
             let has_text_input = events.iter().any(|event| matches!(event, WindowEvent::TextInput { text } if text.chars().any(|c| !c.is_control())));
-
-            for event in events {
-                match event {
-                    WindowEvent::CloseRequested => {
-                        should_close = true;
-                    }
-                    WindowEvent::Resized { width, height } => {
-                        let _ = (width, height);
-                        needs_redraw = true;
-                    }
-                    WindowEvent::ScaleFactorChanged { scale_factor } => {
-                        let _ = scale_factor;
-                        needs_redraw = true;
-                    }
-
-                    // Modifier release: refresh the live modifier indicator. The
-                    // native modifier snapshot is unreliable for a modifier's own
-                    // release (GetKeyState quirk), so derive the bit from the key.
-                    WindowEvent::KeyInput {
-                        key,
-                        pressed: false,
-                        modifiers,
-                    } => {
-                        let m = corrected_mods(modifiers, key, false);
-                        if live_mods != m {
-                            live_mods = m;
-                            needs_redraw = true;
-                        }
-                    }
-
-                    WindowEvent::KeyInput {
-                        key,
-                        pressed: true,
-                        modifiers,
-                    } => {
-                        let m = corrected_mods(modifiers, key, true);
-                        if live_mods != m {
-                            live_mods = m;
-                            needs_redraw = true;
-                        }
-                        cursor_activity = true;
-                        let mut pal = lock(palette.as_ref());
-                        let mut srch = lock(search.as_ref());
-                        let mut mb = lock(minibuffer.as_ref());
-                        let mut notes = lock(notifications.as_ref());
-                        if mb.is_some() {
-                            let mut ws = lock(self.workspace.as_ref());
-                            if handle_minibuffer_key(
-                                key,
-                                &mut mb,
-                                &mut ws,
-                                &self.commands,
-                                &self.autocmds,
-                            ) {
-                                needs_redraw = true;
-                            }
-                            // Submitting may queue another intent (e.g. re-prompt).
-                            if apply_ui_intents(
-                                &mut ws,
-                                &self.commands,
-                                &mut Overlays {
-                                    palette: &mut pal,
-                                    search: &mut srch,
-                                    minibuffer: &mut mb,
-                                    notifications: &mut notes,
-                                },
-                                &buffer_mru,
-                            ) {
-                                needs_redraw = true;
-                            }
-                        } else if pal.is_some() {
-                            let mut ws = lock(self.workspace.as_ref());
-                            if handle_palette_key(
-                                key,
-                                &mut pal,
-                                &mut ws,
-                                &self.commands,
-                                &self.autocmds,
-                            ) {
-                                needs_redraw = true;
-                            }
-                            // A palette selection may itself request an overlay
-                            // (e.g. running search.start from the palette).
-                            if apply_ui_intents(
-                                &mut ws,
-                                &self.commands,
-                                &mut Overlays {
-                                    palette: &mut pal,
-                                    search: &mut srch,
-                                    minibuffer: &mut mb,
-                                    notifications: &mut notes,
-                                },
-                                &buffer_mru,
-                            ) {
-                                needs_redraw = true;
-                            }
-                        } else if srch.is_some() {
-                            let mut ws = lock(self.workspace.as_ref());
-                            if handle_search_key(key, modifiers, &mut srch, &mut ws) {
-                                dispatch_autocmds(&mut ws, &self.commands, &self.autocmds);
-                                needs_redraw = true;
-                            }
-                        } else if let Some((term_id, bytes)) =
-                            active_terminal(&lock(self.workspace.as_ref()))
-                                .filter(|id| terms.sessions.contains_key(id))
-                                .and_then(|id| terminal_key_bytes(key, modifiers).map(|b| (id, b)))
-                        {
-                            // Active buffer is a live terminal and this key maps to
-                            // PTY bytes (Enter/Backspace/arrows/Ctrl-C…). Printable
-                            // chars come through TextInput; unmapped keys fall to
-                            // the editor below.
-                            terms.sessions.get(&term_id).unwrap().write_str(bytes);
-                            needs_redraw = true;
-                        } else {
-                            let r = handle_key(
-                                key,
-                                modifiers,
-                                !has_text_input,
-                                &mut lock(self.workspace.as_ref()),
-                                &self.commands,
-                                &self.autocmds,
-                                &self.keymap,
-                                &self.modmap,
-                                &mut chord_pending,
-                                &mut Overlays {
-                                    palette: &mut pal,
-                                    search: &mut srch,
-                                    minibuffer: &mut mb,
-                                    notifications: &mut notes,
-                                },
-                                &buffer_mru,
-                            );
-                            if r {
-                                needs_redraw = true;
-                            }
-                            // If a key just opened an overlay, the trigger char
-                            // (M-x's `x`, M-g's `g`) also arrives as TextInput on
-                            // Windows; drop it so the input starts empty.
-                            if pal.is_some() || srch.is_some() || mb.is_some() {
-                                swallow_text = true;
-                            }
-                        }
-                    }
-
-                    // Text input is the primary edit path. While the palette is
-                    // open, typed chars filter it instead of editing the buffer.
-                    WindowEvent::TextInput { text } => {
-                        if swallow_text {
-                            swallow_text = false; // drop the palette trigger char
-                            continue;
-                        }
-                        cursor_activity = true;
-                        let mut mb = lock(minibuffer.as_ref());
-                        if let Some(m) = mb.as_mut() {
-                            for c in text.chars().filter(|c| !c.is_control()) {
-                                m.input.push(c);
-                                needs_redraw = true;
-                            }
-                            continue;
-                        }
-                        drop(mb);
-                        let mut pal = lock(palette.as_ref());
-                        if let Some(p) = pal.as_mut() {
-                            for c in text.chars().filter(|c| !c.is_control()) {
-                                p.push(c);
-                                needs_redraw = true;
-                            }
-                        } else {
-                            drop(pal);
-                            let mut srch = lock(search.as_ref());
-                            if let Some(s) = srch.as_mut() {
-                                let mut ws = lock(self.workspace.as_ref());
-                                // Typed text edits the query or the replacement,
-                                // depending on focus; query edits re-search + jump.
-                                if search_input_text(s, &text, &mut ws) {
-                                    if !s.focus_replace {
-                                        search_jump(s, &mut ws);
-                                    }
-                                    needs_redraw = true;
-                                }
-                            } else {
-                                drop(srch);
-                                let mut ws = lock(self.workspace.as_ref());
-                                let term_id = active_terminal(&ws)
-                                    .filter(|id| terms.sessions.contains_key(id));
-                                if let Some(term_id) = term_id {
-                                    // Send typed text straight to the PTY; the shell echoes it back.
-                                    let printable: String =
-                                        text.chars().filter(|c| !c.is_control()).collect();
-                                    if !printable.is_empty() {
-                                        terms.sessions.get(&term_id).unwrap().write_str(&printable);
-                                        needs_redraw = true;
-                                    }
-                                } else if insert_text_raw(&text, &mut ws) {
-                                    dispatch_autocmds(&mut ws, &self.commands, &self.autocmds);
-                                    needs_redraw = true;
-                                }
-                            }
-                        }
-                    }
-
-                    WindowEvent::MouseMove { x, y } => {
-                        let (x, y) = (x as f32, y as f32);
-                        mouse.moved(x, y);
-                        if self.config.ui.mouse {
-                            if let Some((view_id, grab_y)) = mouse.scrollbar_drag() {
-                                let (width, height) = {
-                                    let canvas = lock(canvas_arc.as_ref());
-                                    (canvas.width() as f32, canvas.height() as f32)
-                                };
-                                let mut ws = lock(self.workspace.as_ref());
-                                if handle_scrollbar_drag(
-                                    &mut ws,
-                                    &self.config,
-                                    y,
-                                    width,
-                                    height,
-                                    view_id,
-                                    grab_y,
-                                ) {
-                                    needs_redraw = true;
-                                    cursor_activity = true;
-                                }
-                            } else if let Some((view_id, anchor)) = mouse.selection_drag() {
-                                let (width, height) = {
-                                    let canvas = lock(canvas_arc.as_ref());
-                                    (canvas.width() as f32, canvas.height() as f32)
-                                };
-                                let mut ws = lock(self.workspace.as_ref());
-                                if handle_editor_drag(
-                                    &mut ws,
-                                    &self.config,
-                                    x,
-                                    y,
-                                    width,
-                                    height,
-                                    measured_char_w,
-                                    view_id,
-                                    anchor,
-                                ) {
-                                    needs_redraw = true;
-                                    cursor_activity = true;
-                                }
-                            } else {
-                                let canvas = lock(canvas_arc.as_ref());
-                                let _ = canvas.handle_hover(x, y);
-                            }
-                        }
-                    }
-
-                    WindowEvent::MouseButton {
-                        button: MouseButton::Left,
-                        pressed: true,
-                        modifiers,
-                        x,
-                        y,
-                        click_count,
-                        ..
-                    } if self.config.ui.mouse => {
-                        let (x, y) = (x as f32, y as f32);
-                        {
-                            // Sparse Canvas controls can opt into Aurea's
-                            // InteractiveId callback system.
-                            let canvas = lock(canvas_arc.as_ref());
-                            let _ = canvas.handle_click(x, y);
-                        }
-                        // Dense editor text uses coordinate mapping instead of
-                        // one interactive display item per glyph.
-                        let overlays_open = lock(palette.as_ref()).is_some()
-                            || lock(search.as_ref()).is_some()
-                            || lock(minibuffer.as_ref()).is_some();
-                        if !overlays_open {
-                            let (width, height) = {
-                                let canvas = lock(canvas_arc.as_ref());
-                                (canvas.width() as f32, canvas.height() as f32)
-                            };
-                            let mut ws = lock(self.workspace.as_ref());
-                            if let Some(press) =
-                                handle_scrollbar_press(&mut ws, &self.config, x, y, width, height)
-                            {
-                                mouse.begin_scrollbar_drag(press.view_id, press.grab_y);
-                                needs_redraw |= press.changed;
-                                cursor_activity = true;
-                            } else if handle_editor_click(
-                                &mut ws,
-                                &self.config,
-                                x,
-                                y,
-                                width,
-                                height,
-                                measured_char_w,
-                                modifiers.shift,
-                                click_count,
-                            ) {
-                                let text_like = ws.active_buffer().is_some_and(|buf| {
-                                    !matches!(buf.kind, BufferKind::Image(_) | BufferKind::Terminal)
-                                });
-                                if text_like && let Some(view) = ws.active_view() {
-                                    let anchor = view
-                                        .selection
-                                        .map(|span| {
-                                            if view.cursor == span.start {
-                                                span.end
-                                            } else {
-                                                span.start
-                                            }
-                                        })
-                                        .unwrap_or(view.cursor);
-                                    mouse.begin_selection_drag(view.id, anchor);
-                                }
-                                needs_redraw = true;
-                                cursor_activity = true;
-                            }
-                        }
-                    }
-
-                    WindowEvent::MouseButton {
-                        button: MouseButton::Left,
-                        pressed: false,
-                        ..
-                    } if self.config.ui.mouse => {
-                        mouse.end_selection_drag();
-                        mouse.end_scrollbar_drag();
-                    }
-
-                    WindowEvent::MouseWheel { delta_y, .. } => {
-                        let mut ws = lock(self.workspace.as_ref());
-                        if self.config.ui.mouse
-                            && let Some((x, y)) = mouse.pos()
-                        {
-                            let (width, height) = {
-                                let canvas = lock(canvas_arc.as_ref());
-                                (canvas.width() as f32, canvas.height() as f32)
-                            };
-                            let editor_rect =
-                                Rect::new(0.0, 0.0, width, (height - STATUS_H).max(0.0));
-                            if let Some((view_id, _)) = ws
-                                .panes
-                                .as_ref()
-                                .and_then(|tree| pane_at(tree, editor_rect, x, y))
-                            {
-                                ws.active_view_id = Some(view_id);
-                            }
-                        }
-                        let max_scroll = ws
-                            .active_view()
-                            .and_then(|view| {
-                                ws.buffers
-                                    .get(&view.buffer_id)
-                                    .map(|buf| max_scroll_line(buf.line_count(), view.page_height))
-                            })
-                            .unwrap_or(0);
-                        if let Some(view) = ws.active_view_mut() {
-                            let line_h =
-                                self.config.editor.font_size * self.config.editor.line_height;
-                            view.scroll_by_pixels(
-                                -(delta_y as f32) * line_h * 3.0,
-                                line_h,
-                                max_scroll,
-                            );
-                        }
-                        cursor_activity = true;
-                        needs_redraw = true;
-                    }
-
-                    _ => {}
+            state.begin_event_batch(has_text_input);
+            let mut should_close = false;
+            for event in &events {
+                if matches!(handle_window_event(event, &mut state), EventResult::Close) {
+                    should_close = true;
                 }
             }
-
             if should_close {
                 break;
             }
 
-            if cursor_activity {
-                cursor_visible = true;
-                last_cursor_blink = Instant::now();
-            } else if last_cursor_blink.elapsed() >= blink_interval {
-                cursor_visible = !cursor_visible;
-                last_cursor_blink = Instant::now();
-                needs_redraw = true;
+            if state.take_cursor_activity() {
+                state.cursor_visible = true;
+                state.last_cursor_blink = std::time::Instant::now();
+            } else if state.last_cursor_blink.elapsed() >= blink_interval {
+                state.cursor_visible = !state.cursor_visible;
+                state.last_cursor_blink = std::time::Instant::now();
+                state.needs_redraw = true;
             }
 
             // --- terminal sync: spawn, stream output into the buffer, scroll ---
             {
-                let mut ws = lock(self.workspace.as_ref());
+                let mut ws = lock(state.workspace.as_ref());
                 let term_bufs: Vec<BufferId> = ws
                     .buffers
                     .iter()
@@ -649,35 +255,39 @@ impl OzoneGui {
                     .collect();
                 // Attach a shell to any Terminal buffer that lacks one.
                 for id in &term_bufs {
-                    if terms.sessions.contains_key(id) || terms.failed.contains(id) {
+                    if state.terms.sessions.contains_key(id) || state.terms.failed.contains(id) {
                         continue;
                     }
                     match Terminal::spawn() {
                         Ok(term) => {
                             // Size the PTY to the (approx) visible character grid.
-                            let cw = (self.config.editor.font_size * 0.6).max(1.0);
-                            let lh = (self.config.editor.font_size
-                                * self.config.editor.line_height)
+                            let cw = (state.config.editor.font_size * 0.6).max(1.0);
+                            let lh = (state.config.editor.font_size
+                                * state.config.editor.line_height)
                                 .max(1.0);
                             let cols = (((W as f32) - 60.0) / cw).clamp(20.0, 500.0) as u16;
                             let rows = (((H as f32) - STATUS_H - EDITOR_TOP_PAD) / lh)
                                 .clamp(5.0, 300.0) as u16;
                             term.resize(cols, rows);
-                            terms.sessions.insert(*id, term);
+                            state.terms.sessions.insert(*id, term);
                         }
                         Err(e) => {
-                            terms.failed.insert(*id);
+                            state.terms.failed.insert(*id);
                             if let Some(buf) = ws.buffers.get_mut(id) {
                                 buf.set_text(&format!("could not start terminal: {e}\n"));
                             }
-                            needs_redraw = true;
+                            state.needs_redraw = true;
                         }
                     }
                 }
                 // Forget sessions whose buffer was closed.
-                terms.sessions.retain(|id, _| ws.buffers.contains_key(id));
-                terms.cells.retain(|id, _| terms.sessions.contains_key(id));
-                terms.sizes.retain(|id, _| terms.sessions.contains_key(id));
+                state
+                    .terms
+                    .sessions
+                    .retain(|id, _| ws.buffers.contains_key(id));
+                let live_ids = &state.terms.sessions;
+                state.terms.cells.retain(|id, _| live_ids.contains_key(id));
+                state.terms.sizes.retain(|id, _| live_ids.contains_key(id));
 
                 // Resize each terminal's PTY to match its actual pane rect (a
                 // split pane is narrower than the window — otherwise the shell
@@ -687,38 +297,41 @@ impl OzoneGui {
                 if let Some(panes) = &ws.panes {
                     collect_term_rects(&ws, panes, editor_rect, &mut want);
                 } else if let Some(bid) = ws.active_view().map(|v| v.buffer_id)
-                    && terms.sessions.contains_key(&bid)
+                    && state.terms.sessions.contains_key(&bid)
                 {
                     want.push((bid, editor_rect));
                 }
                 for (bid, rect) in want {
-                    let size = rect_to_grid(rect, &self.config, measured_char_w);
-                    if terms.sessions.contains_key(&bid) && terms.sizes.get(&bid) != Some(&size) {
-                        terms.sessions[&bid].resize(size.0, size.1);
-                        terms.sizes.insert(bid, size);
+                    let size = rect_to_grid(rect, &state.config, state.measured_char_w);
+                    if state.terms.sessions.contains_key(&bid)
+                        && state.terms.sizes.get(&bid) != Some(&size)
+                    {
+                        state.terms.sessions[&bid].resize(size.0, size.1);
+                        state.terms.sizes.insert(bid, size);
                     }
                 }
 
-                terms
+                state
+                    .terms
                     .versions
-                    .retain(|id, _| terms.sessions.contains_key(id));
+                    .retain(|id, _| state.terms.sessions.contains_key(id));
                 let active_term = active_terminal(&ws);
-                for (id, term) in terms.sessions.iter() {
+                for (id, term) in state.terms.sessions.iter() {
                     let is_active = active_term == Some(*id);
                     // Skip entirely unless the reader thread saw new output (or a
                     // resize bumped the version) — avoids rendering the whole grid
                     // to a string every frame, which TUIs make costly.
                     let version = term.version();
-                    if terms.versions.get(id) == Some(&version) {
+                    if state.terms.versions.get(id) == Some(&version) {
                         continue;
                     }
-                    terms.versions.insert(*id, version);
+                    state.terms.versions.insert(*id, version);
 
                     // The PTY shell echoes input itself, so the buffer is just output.
                     let text = term.output_snapshot();
                     {
                         // Refresh the colour grid alongside the text (same cadence).
-                        terms.cells.insert(*id, term.cell_snapshot());
+                        state.terms.cells.insert(*id, term.cell_snapshot());
                         if let Some(buf) = ws.buffers.get_mut(id) {
                             buf.set_text(&text);
                         }
@@ -745,32 +358,32 @@ impl OzoneGui {
                                 view.scroll_to_cursor(view.page_height.max(1));
                             }
                         }
-                        needs_redraw = true;
+                        state.needs_redraw = true;
                     }
                 }
             }
 
             // --- image sync: decode any new image buffer once ---
             {
-                let ws = lock(self.workspace.as_ref());
+                let ws = lock(state.workspace.as_ref());
                 for (id, buf) in ws.buffers.iter() {
                     if let BufferKind::Image(path) = &buf.kind
-                        && !images.contains_key(id)
+                        && !state.images.contains_key(id)
                     {
-                        images.insert(*id, decode_image(path));
-                        needs_redraw = true;
+                        state.images.insert(*id, decode_image(path));
+                        state.needs_redraw = true;
                     }
                 }
-                images.retain(|id, _| ws.buffers.contains_key(id));
+                state.images.retain(|id, _| ws.buffers.contains_key(id));
             }
 
             // --- filetype-local settings: apply [[filetype]] config once per file ---
-            if !self.config.filetypes.is_empty() {
-                let mut ws = lock(self.workspace.as_ref());
+            if !state.config.filetypes.is_empty() {
+                let mut ws = lock(state.workspace.as_ref());
                 let pending: Vec<(BufferId, String)> = ws
                     .buffers
                     .iter()
-                    .filter(|(id, _)| !ft_applied.contains(id))
+                    .filter(|(id, _)| !state.ft_applied.contains(id))
                     .filter_map(|(id, b)| match &b.kind {
                         BufferKind::File(p) => Some((
                             *id,
@@ -780,70 +393,73 @@ impl OzoneGui {
                     })
                     .collect();
                 for (id, ftname) in pending {
-                    ft_applied.insert(id);
-                    if let Some(fc) = self.config.filetypes.iter().find(|f| f.name == ftname) {
+                    state.ft_applied.insert(id);
+                    if let Some(fc) = state.config.filetypes.iter().find(|f| f.name == ftname) {
                         apply_filetype_config(&mut ws, id, fc);
                     }
                 }
-                ft_applied.retain(|id| ws.buffers.contains_key(id));
+                state.ft_applied.retain(|id| ws.buffers.contains_key(id));
             }
 
             // Update window title when active file changes
             // Expire stale notification toasts; repaint when the stack changes.
-            if lock(notifications.as_ref()).tick() {
-                needs_redraw = true;
+            if lock(state.notifications.as_ref()).tick() {
+                state.needs_redraw = true;
             }
 
             {
-                let ws = lock(self.workspace.as_ref());
+                let ws = lock(state.workspace.as_ref());
                 let title = window_title(&ws);
-                if title != last_title {
+                if title != state.last_title {
                     let _ = window.set_title(&title);
-                    last_title = title;
+                    state.last_title = title;
                 }
             }
 
-            if needs_redraw {
-                let pal = lock(palette.as_ref());
-                let srch = lock(search.as_ref());
-                let mb = lock(minibuffer.as_ref());
-                let notes = lock(notifications.as_ref());
-                let mut ws = lock(self.workspace.as_ref());
-                let mut canvas = lock(canvas_arc.as_ref());
-                let config = self.config.clone();
-                let active_mods = ActiveMods::from_physical(live_mods, &self.modmap);
+            if state.needs_redraw {
+                let pal = lock(state.palette.as_ref());
+                let srch = lock(state.search.as_ref());
+                let mb = lock(state.minibuffer.as_ref());
+                let notes = lock(state.notifications.as_ref());
+                let mut ws = lock(state.workspace.as_ref());
+                let mut canvas = lock(state.canvas.as_ref());
+                let config = state.config.clone();
+                let active_mods = ActiveMods::from_physical(state.live_mods, &state.modmap);
                 // Which-key: while a chord prefix is pending and no other overlay
                 // owns the input, show the keys that could come next.
-                let (wk_prefix, wk_entries) =
-                    if !chord_pending.is_empty() && pal.is_none() && srch.is_none() && mb.is_none()
-                    {
-                        let ft = active_filetype_name(&ws);
-                        let entries = which_key_entries(
-                            &self.keymap,
-                            &chord_pending,
-                            ft.as_deref(),
-                            &self.commands,
-                        );
-                        let prefix = chord_pending
-                            .iter()
-                            .map(ozone_editor::stroke_label)
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        (prefix, entries)
-                    } else {
-                        (String::new(), Vec::new())
-                    };
+                let (wk_prefix, wk_entries) = if !state.chord_pending.is_empty()
+                    && pal.is_none()
+                    && srch.is_none()
+                    && mb.is_none()
+                {
+                    let ft = active_filetype_name(&ws);
+                    let entries = which_key_entries(
+                        &state.keymap,
+                        &state.chord_pending,
+                        ft.as_deref(),
+                        &state.commands,
+                    );
+                    let prefix = state
+                        .chord_pending
+                        .iter()
+                        .map(ozone_editor::stroke_label)
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    (prefix, entries)
+                } else {
+                    (String::new(), Vec::new())
+                };
                 canvas.draw(|ctx| {
                     draw_editor(
                         ctx,
                         &mut ws,
                         &config,
                         srch.as_ref(),
-                        &terms.cells,
-                        &images,
+                        &state.terms.cells,
+                        &state.images,
                         active_mods,
-                        cursor_visible,
-                        &mut measured_char_w,
+                        state.cursor_visible,
+                        &mut state.measured_char_w,
                     )?;
                     if let Some(p) = pal.as_ref() {
                         draw_palette(ctx, p, &config)?;
