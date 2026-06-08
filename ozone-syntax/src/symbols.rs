@@ -83,7 +83,10 @@ fn rust_symbols(text: &str) -> Vec<Symbol> {
         let t = t.strip_prefix("default ").unwrap_or(t);
         let t = t.strip_prefix("unsafe ").unwrap_or(t);
         let t = t.strip_prefix("async ").unwrap_or(t);
-        let t = t.strip_prefix("const ").filter(|r| r.starts_with("fn ")).unwrap_or(t);
+        let t = t
+            .strip_prefix("const ")
+            .filter(|r| r.starts_with("fn "))
+            .unwrap_or(t);
 
         let found = ident_after(t, "fn ")
             .map(|n| (n, SymbolKind::Function))
@@ -108,7 +111,10 @@ fn impl_name(trimmed: &str) -> Option<(String, SymbolKind)> {
     let rest = trimmed.strip_prefix("impl ")?.trim_start();
     // Strip generics on the impl block itself: `impl<T> Foo<T>`.
     let rest = rest.strip_prefix('<').map_or(rest, |after| {
-        after.split_once('>').map(|(_, r)| r.trim_start()).unwrap_or(after)
+        after
+            .split_once('>')
+            .map(|(_, r)| r.trim_start())
+            .unwrap_or(after)
     });
     // `Trait for Type` → keep the part after `for`.
     let subject = rest.rsplit(" for ").next().unwrap_or(rest);
@@ -168,8 +174,10 @@ mod tests {
     fn rust_items() {
         let src = "pub fn alpha() {}\nstruct Bravo;\n  enum Charlie {}\nimpl Bravo {}\nimpl Trait for Bravo {}\nmacro_rules! mac {}\nconst K: u8 = 1;";
         let s = symbols(Filetype::Rust, src);
-        let got: Vec<(&str, SymbolKind, usize)> =
-            s.iter().map(|x| (x.name.as_str(), x.kind, x.line)).collect();
+        let got: Vec<(&str, SymbolKind, usize)> = s
+            .iter()
+            .map(|x| (x.name.as_str(), x.kind, x.line))
+            .collect();
         assert!(got.contains(&("alpha", SymbolKind::Function, 0)));
         assert!(got.contains(&("Bravo", SymbolKind::Struct, 1)));
         assert!(got.contains(&("Charlie", SymbolKind::Enum, 2)));

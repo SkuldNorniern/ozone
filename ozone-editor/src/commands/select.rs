@@ -44,10 +44,7 @@ pub(super) fn register_select_commands(reg: &mut CommandRegistry) {
 }
 
 /// Run a text-object function against the active buffer at the cursor.
-fn with_cursor(
-    ctx: &CommandContext,
-    f: impl FnOnce(&Buffer, Pos) -> Option<Span>,
-) -> Option<Span> {
+fn with_cursor(ctx: &CommandContext, f: impl FnOnce(&Buffer, Pos) -> Option<Span>) -> Option<Span> {
     let buf = ctx.workspace.buffers.get(&ctx.buffer_id)?;
     let cursor = ctx.workspace.views.get(&ctx.view_id)?.cursor;
     f(buf, cursor)

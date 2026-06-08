@@ -56,8 +56,7 @@ pub fn is_foldable(buf: &Buffer, header: usize) -> bool {
 /// visible (it shows the fold marker).
 pub fn is_hidden(buf: &Buffer, folds: &HashSet<usize>, line: usize) -> bool {
     folds.iter().any(|&h| {
-        h < line
-            && fold_region(buf, h).is_some_and(|(start, end)| line > start && line <= end)
+        h < line && fold_region(buf, h).is_some_and(|(start, end)| line > start && line <= end)
     })
 }
 
@@ -67,14 +66,16 @@ pub fn header_for(buf: &Buffer, line: usize) -> Option<usize> {
     if is_foldable(buf, line) {
         return Some(line);
     }
-    (0..line).rev().find(|&h| {
-        fold_region(buf, h).is_some_and(|(start, end)| line > start && line <= end)
-    })
+    (0..line)
+        .rev()
+        .find(|&h| fold_region(buf, h).is_some_and(|(start, end)| line > start && line <= end))
 }
 
 /// Every foldable header line in the buffer (for "fold all").
 pub fn all_headers(buf: &Buffer) -> Vec<usize> {
-    (0..buf.line_count()).filter(|&l| is_foldable(buf, l)).collect()
+    (0..buf.line_count())
+        .filter(|&l| is_foldable(buf, l))
+        .collect()
 }
 
 #[cfg(test)]

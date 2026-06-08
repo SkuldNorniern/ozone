@@ -82,17 +82,10 @@ impl Keymap {
             ("ctrl+-", "view.jump-back"),
             ("ctrl+=", "view.jump-forward"),
             ("ctrl+k ctrl+s", "file.save-all"),
-            // ── Super+ aliases (Cmd on macOS, Win on Linux) ────────────────────
-            ("super+s", "file.save"),
-            ("super+z", "edit.undo"),
-            ("super+shift+z", "edit.redo"),
-            ("super+p", "file.picker"),
-            ("super+shift+p", "command.palette"),
-            ("super+shift+f", "search.workspace"),
-            ("super+shift+e", "file.tree"),
-            ("super+shift+o", "symbol.picker"),
-            ("super+tab", "buffer.next"),
-            ("super+shift+tab", "buffer.previous"),
+            // Super (Win key / macOS Option) is intentionally left unbound — it
+            // is OS-reserved (Win+S etc. are system shortcuts), matching Emacs /
+            // Neovim leaving the GUI super key to the platform. macOS Command is
+            // Meta, so the bindings above are reachable as Cmd-… there.
             // ── Panes ─────────────────────────────────────────────────────────
             ("ctrl+shift+right", "pane.split-right"),
             ("ctrl+shift+down", "pane.split-down"),
@@ -282,7 +275,7 @@ mod tests {
         assert!(k.control && k.shift && !k.meta && !k.super_);
         assert_eq!(k.key, Key::Char('f'));
         assert!(KeyStroke::parse("ctrl").is_none());
-        assert_eq!(KeyStroke::parse("ctrl+k ctrl+s").is_none(), false);
+        assert!(KeyStroke::parse("ctrl+k ctrl+s").is_some());
         assert_eq!(Key::parse("f5"), Some(Key::F(5)));
         assert_eq!(Key::parse("pgdn"), Some(Key::PageDown));
         assert_eq!(KeyStroke::parse("option+x"), KeyStroke::parse("meta+x"));

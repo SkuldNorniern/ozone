@@ -110,7 +110,7 @@ mod tests {
         assert_eq!(hits.len(), 2);
         assert!(
             hits.iter()
-                .all(|hit| hit.path == PathBuf::from("src/one.rs"))
+                .all(|hit| hit.path.as_path() == std::path::Path::new("src/one.rs"))
         );
         assert_eq!((hits[0].line, hits[0].column), (0, 0));
 

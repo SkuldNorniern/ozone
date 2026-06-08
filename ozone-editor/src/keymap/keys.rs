@@ -48,7 +48,10 @@ pub(super) fn parse_physical_modifier(s: &str) -> Option<PhysicalModifier> {
 
 /// Maps Emacs-style logical modifiers to physical keys. Editable per platform.
 ///
-/// Defaults: Control→Ctrl, Meta→Alt, Super→the OS Win/Cmd key.
+/// Defaults — Control→Ctrl everywhere; Meta→Alt on Windows/Linux, **Cmd on
+/// macOS**; Super→the OS key (Win on Windows/Linux, Option on macOS). Super is
+/// deliberately OS-reserved: Ozone binds no defaults to it (mirrors Emacs/Neovim
+/// leaving the GUI/OS super key alone).
 #[derive(Debug, Clone, Copy)]
 pub struct ModifierMap {
     pub control: PhysicalModifier,
@@ -58,10 +61,23 @@ pub struct ModifierMap {
 
 impl ModifierMap {
     pub fn platform_default() -> Self {
-        Self {
-            control: PhysicalModifier::Ctrl,
-            meta: PhysicalModifier::Alt,
-            super_: PhysicalModifier::Meta,
+        if cfg!(target_os = "macos") {
+            // Command is the editor's Meta (so `M-x` is Cmd-x), Control stays
+            // Control, and Option is Super (rarely bound — like Emacs
+            // `mac-option-modifier = super`). Command is reclaimed for the
+            // editor; macOS has no Win-style OS super key to leave alone.
+            Self {
+                control: PhysicalModifier::Ctrl,
+                meta: PhysicalModifier::Meta,
+                super_: PhysicalModifier::Alt,
+            }
+        } else {
+            // Windows/Linux: Meta = Alt, Super = the OS Win key (left to the OS).
+            Self {
+                control: PhysicalModifier::Ctrl,
+                meta: PhysicalModifier::Alt,
+                super_: PhysicalModifier::Meta,
+            }
         }
     }
 
