@@ -11,6 +11,7 @@ members = [
     "ozone-syntax",
     "ozone-config",
     "ozone-term",
+    "ozone-lsp",
 ]
 exclude = ["aurea"]
 resolver = "2"
@@ -24,6 +25,7 @@ ozone-gui    = { path = "ozone-gui" }
 ozone-syntax = { path = "ozone-syntax" }
 ozone-config = { path = "ozone-config" }
 ozone-term   = { path = "ozone-term" }
+ozone-lsp    = { path = "ozone-lsp" }
 
 [dependencies]
 ozone-editor = { workspace = true }

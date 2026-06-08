@@ -1,0 +1,8 @@
+[package]
+name = "ozone-lsp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ozone-buffer = { workspace = true }
+ozone-editor = { workspace = true }
