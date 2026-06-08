@@ -282,6 +282,7 @@ fn filetype_name(path: &std::path::Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SplitAxis;
 
     #[test]
     fn new_workspace_has_single_pane_for_scratch() {
