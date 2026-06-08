@@ -38,6 +38,7 @@ mod notify;
 mod picker;
 mod render;
 mod search;
+mod statusbar;
 mod terminals;
 mod theme;
 mod whichkey;

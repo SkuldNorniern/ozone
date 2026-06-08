@@ -298,16 +298,11 @@ fn editor_text_position_at(
             .unwrap_or(config.editor.line_numbers),
     };
     let line_h = (config.editor.font_size * config.editor.line_height).max(1.0);
-    let scroll = ws
+    let (scroll, scroll_y) = ws
         .views
         .get(&view_id)
-        .map(|view| view.scroll_line)
-        .unwrap_or(0);
-    let scroll_y = ws
-        .views
-        .get(&view_id)
-        .map(|view| view.scroll_y)
-        .unwrap_or(0.0);
+        .map(|v| (v.scroll_line, v.scroll_y))
+        .unwrap_or((0, 0.0));
     let relative_y = (y - rect.y - EDITOR_TOP_PAD).max(0.0);
     let line = (scroll + ((relative_y + scroll_y) / line_h).floor() as usize).min(line_count - 1);
     let gutter_w = gutter_width(line_count, char_w.max(1.0), line_numbers);
@@ -354,8 +349,7 @@ fn scrollbar_at(
     }
     let thumb_h = (track_h * viewport_lines / line_count as f32).clamp(24.0, track_h);
     let max_scroll = crate::layout::max_scroll_line(line_count, viewport_lines as usize);
-    let scroll = ws.views.get(&view_id)?.scroll_line;
-    let scroll_y = ws.views.get(&view_id)?.scroll_y;
+    let (scroll, scroll_y) = ws.views.get(&view_id).map(|v| (v.scroll_line, v.scroll_y))?;
     let t = if max_scroll > 0 {
         ((scroll as f32 + scroll_y / line_h) / max_scroll as f32).clamp(0.0, 1.0)
     } else {

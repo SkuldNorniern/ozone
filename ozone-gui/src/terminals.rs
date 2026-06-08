@@ -1,9 +1,9 @@
-//! Terminal session bookkeeping for the run loop: the live PTY sessions plus
-//! the per-terminal caches kept in lockstep, and the pane→grid sizing math.
+//! Terminal session bookkeeping and terminal-row rendering.
 
 use std::collections::HashMap;
 
-use aurea::render::Rect;
+use aurea::AureaResult;
+use aurea::render::{DrawingContext, Font, Point, Rect};
 use ozone_buffer::{BufferId, BufferKind};
 use ozone_config::Config;
 use ozone_editor::{PaneTree, Workspace};
@@ -11,6 +11,7 @@ use ozone_term::Terminal;
 
 use crate::TermCells;
 use crate::layout::{EDITOR_TOP_PAD, PAD, split_rect};
+use crate::theme::{palette, solid, term_color};
 
 /// Live terminal sessions plus the per-terminal caches the run loop keeps in
 /// lockstep: the latest colour grid, the last PTY grid size pushed, and the last
@@ -78,4 +79,62 @@ pub(crate) fn rect_to_grid(rect: Rect, config: &Config, char_w: f32) -> (u16, u1
     let cols = (usable_w / cw).clamp(8.0, 1000.0) as u16;
     let rows = (usable_h / lh).clamp(2.0, 1000.0) as u16;
     (cols, rows)
+}
+
+/// Draw one row of terminal cells: per-cell background fills, then runs of
+/// glyphs batched by identical foreground colour into single text draws.
+/// Honours reverse-video by swapping fg/bg.
+pub(crate) fn draw_term_row(
+    ctx: &mut dyn DrawingContext,
+    row: &[ozone_term::Cell],
+    x0: f32,
+    line_top: f32,
+    baseline: f32,
+    line_h: f32,
+    char_w: f32,
+    font: &Font,
+) -> AureaResult<()> {
+    use ozone_term::Color as TC;
+
+    let resolve = |c: &ozone_term::Cell| -> (aurea::render::Color, Option<aurea::render::Color>) {
+        if c.inverse {
+            return (
+                term_color(c.bg, palette().background),
+                Some(term_color(c.fg, palette().foreground)),
+            );
+        }
+        let bg = match c.bg {
+            TC::Default => None,
+            other => Some(term_color(other, palette().background)),
+        };
+        (term_color(c.fg, palette().foreground), bg)
+    };
+
+    for (i, cell) in row.iter().enumerate() {
+        if let (_, Some(bg)) = resolve(cell) {
+            let bx = x0 + i as f32 * char_w;
+            ctx.draw_rect(
+                Rect::new(bx, line_top + 1.0, char_w + 0.5, line_h - 1.0),
+                &solid(bg),
+            )?;
+        }
+    }
+
+    let mut i = 0usize;
+    while i < row.len() {
+        let (fg, _) = resolve(&row[i]);
+        let start = i;
+        let mut text = String::new();
+        while i < row.len() && resolve(&row[i]).0 == fg {
+            text.push(row[i].ch);
+            i += 1;
+        }
+        if text.trim_end().is_empty() {
+            continue;
+        }
+        let sx = x0 + start as f32 * char_w;
+        ctx.draw_text_with_font(&text, Point::new(sx, baseline), font, &solid(fg))?;
+    }
+
+    Ok(())
 }

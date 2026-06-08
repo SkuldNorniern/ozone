@@ -2,9 +2,9 @@
 //!
 //! `draw_editor` is the entry point the run loop calls each frame; everything
 //! else here is private detail (pane tree, per-view text/gutter/cursor, terminal
-//! colour grid, image pane, status bar). Geometry comes from [`crate::layout`],
-//! colours from [`crate::theme`]; this module owns no state — it paints the
-//! current `Workspace` into a `DrawingContext`.
+//! colour grid, image pane). Status bar lives in `statusbar`; terminal-row
+//! drawing lives in `terminals`. Geometry comes from [`crate::layout`],
+//! colours from [`crate::theme`]; this module owns no state.
 
 use aurea::AureaResult;
 use aurea::render::{Color, DrawingContext, Font, Image, Point, Rect};
@@ -17,11 +17,12 @@ use ozone_editor::{
 };
 use ozone_syntax::{Filetype, ScanState, TokenKind, scan_line};
 
-use crate::components::draw_pill;
 use crate::input::ActiveMods;
 use crate::layout::*;
 use crate::search::{SearchState, draw_search_bar};
-use crate::theme::{palette, solid, stroke, term_color, token_color};
+use crate::statusbar::draw_status_bar;
+use crate::terminals::draw_term_row;
+use crate::theme::{palette, solid, stroke, token_color};
 use crate::{ImageCache, TermCells, editor_font};
 
 #[allow(clippy::too_many_arguments)]
@@ -999,68 +1000,6 @@ fn draw_highlighted(
     Ok(())
 }
 
-/// Draw one row of terminal cells: per-cell background fills, then runs of
-/// glyphs batched by identical pen (foreground colour + bold) into single text
-/// draws. Honours reverse-video by swapping fg/bg.
-#[allow(clippy::too_many_arguments)]
-fn draw_term_row(
-    ctx: &mut dyn DrawingContext,
-    row: &[ozone_term::Cell],
-    x0: f32,
-    line_top: f32,
-    baseline: f32,
-    line_h: f32,
-    char_w: f32,
-    font: &Font,
-) -> AureaResult<()> {
-    use ozone_term::Color as TC;
-
-    // Resolve a cell's effective (fg, optional bg) after applying reverse-video.
-    let resolve = |c: &ozone_term::Cell| -> (aurea::render::Color, Option<aurea::render::Color>) {
-        if c.inverse {
-            // Reverse video: foreground paints the background and vice versa.
-            return (
-                term_color(c.bg, palette().background),
-                Some(term_color(c.fg, palette().foreground)),
-            );
-        }
-        let bg = match c.bg {
-            TC::Default => None,
-            other => Some(term_color(other, palette().background)),
-        };
-        (term_color(c.fg, palette().foreground), bg)
-    };
-
-    // Background fills first (so glyphs sit on top).
-    for (i, cell) in row.iter().enumerate() {
-        if let (_, Some(bg)) = resolve(cell) {
-            let bx = x0 + i as f32 * char_w;
-            ctx.draw_rect(
-                Rect::new(bx, line_top + 1.0, char_w + 0.5, line_h - 1.0),
-                &solid(bg),
-            )?;
-        }
-    }
-
-    // Glyph runs batched by foreground colour (spaces included; they draw blank).
-    let mut i = 0usize;
-    while i < row.len() {
-        let (fg, _) = resolve(&row[i]);
-        let start = i;
-        let mut text = String::new();
-        while i < row.len() && resolve(&row[i]).0 == fg {
-            text.push(row[i].ch);
-            i += 1;
-        }
-        if text.trim_end().is_empty() {
-            continue; // run of spaces: nothing to draw
-        }
-        let sx = x0 + start as f32 * char_w;
-        ctx.draw_text_with_font(&text, Point::new(sx, baseline), font, &solid(fg))?;
-    }
-
-    Ok(())
-}
 
 /// Draw an image centered in `rect`, scaled to fit while preserving aspect
 /// ratio (never upscaling past 1:1). Shows a label if the image failed to load.
@@ -1120,148 +1059,6 @@ fn draw_image_pane(
     Ok(())
 }
 
-fn draw_status_bar(
-    ctx: &mut dyn DrawingContext,
-    width: f32,
-    height: f32,
-    font: &Font,
-    ws: &Workspace,
-    mods: ActiveMods,
-) -> AureaResult<()> {
-    let bar_top = height - STATUS_H;
-    ctx.draw_rect(
-        Rect::new(0.0, bar_top, width, STATUS_H),
-        &solid(palette().statusbar_bg),
-    )?;
-    ctx.draw_line(0.0, bar_top, width, bar_top, &stroke(palette().border, 1.0))?;
-
-    // Emacs-style modeline: the left badge is the buffer's *major mode*, not a
-    // generic "EDIT" (Ozone is non-modal). Transient input modes (find, M-x) have
-    // their own overlays, so they don't belong here.
-    let (mode, file_name, cursor_info, dirty, pane_info) =
-        if let (Some(view), Some(buf)) = (ws.active_view(), ws.active_buffer()) {
-            let file_name = match &buf.kind {
-                BufferKind::File(p) | BufferKind::Image(p) => p
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("?")
-                    .to_string(),
-                BufferKind::Scratch => "*scratch*".to_string(),
-                BufferKind::Search => "*files*".to_string(),
-                BufferKind::References => "*references*".to_string(),
-                BufferKind::FileTree => "*tree*".to_string(),
-                BufferKind::Terminal => "*terminal*".to_string(),
-            };
-            let cursor_info = format!("{}:{}", view.cursor.line + 1, view.cursor.col + 1);
-            let dirty = if buf.is_dirty() { "*" } else { "" };
-            let mode = match &buf.kind {
-                BufferKind::File(p) => major_mode_label(Filetype::from_path(&p.to_string_lossy())),
-                BufferKind::Search => "Files",
-                BufferKind::References => "Refs",
-                BufferKind::FileTree => "Tree",
-                BufferKind::Terminal => "Term",
-                BufferKind::Image(_) => "Image",
-                BufferKind::Scratch => "Text",
-            };
-            let pane_info = pane_status(ws, view.id);
-            (mode, file_name, cursor_info, dirty.to_string(), pane_info)
-        } else {
-            (
-                "",
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-            )
-        };
-
-    let em = ctx.measure_text("M", font).ok();
-    let ascent = em.as_ref().map(|m| m.ascent).unwrap_or(font.size * 0.8);
-    let descent = em.as_ref().map(|m| m.descent).unwrap_or(font.size * 0.2);
-    let baseline = baseline_in_rect(bar_top, STATUS_H, ascent, descent);
-
-    let mode_text = format!(" {} ", mode);
-    let mode_w = ctx
-        .measure_text(&mode_text, font)
-        .map(|m| m.advance)
-        .unwrap_or(font.size * 4.0);
-    ctx.draw_rect(
-        Rect::new(8.0, bar_top + 4.0, mode_w + 8.0, STATUS_H - 8.0),
-        &solid(palette().status_mode_bg),
-    )?;
-    ctx.draw_text_with_font(
-        &mode_text,
-        Point::new(12.0, baseline),
-        font,
-        &solid(palette().statusbar_fg),
-    )?;
-
-    let left = format!("  {}{}    {}", file_name, dirty, cursor_info);
-    ctx.draw_text_with_font(
-        &left,
-        Point::new(16.0 + mode_w, baseline),
-        font,
-        &solid(palette().statusbar_fg),
-    )?;
-
-    // Live modifier indicator, far right: a lit pill per *held* logical modifier.
-    let mut x = width - 12.0;
-    if mods.any() {
-        let labels = [
-            ("Shift", mods.shift),
-            ("Super", mods.super_),
-            ("Meta", mods.meta),
-            ("Ctrl", mods.control),
-        ];
-        for (label, active) in labels {
-            if !active {
-                continue;
-            }
-            // Pre-measure so the chip can be placed right-to-left, then draw it
-            // with the shared pill component.
-            let chip_w = ctx
-                .measure_text(label, font)
-                .map(|m| m.advance)
-                .unwrap_or(label.len() as f32 * font.size * 0.6)
-                + 12.0;
-            x -= chip_w;
-            draw_pill(
-                ctx,
-                label,
-                x,
-                bar_top + 4.0,
-                STATUS_H - 8.0,
-                baseline,
-                6.0,
-                font,
-                palette().status_mode_bg,
-                palette().picker_prompt,
-            )?;
-            x -= 6.0; // gap between pills
-        }
-    }
-
-    // Encoding / pane info, left of the modifier indicator.
-    let right = if pane_info.is_empty() {
-        "UTF-8".to_string()
-    } else {
-        format!("{}  UTF-8", pane_info)
-    };
-    let right_w = ctx
-        .measure_text(&right, font)
-        .map(|m| m.advance)
-        .unwrap_or(right.len() as f32 * font.size * 0.6);
-    let right_x = (x - right_w - 12.0).max(16.0 + mode_w);
-    ctx.draw_text_with_font(
-        &right,
-        Point::new(right_x, baseline),
-        font,
-        &solid(palette().statusbar_dim),
-    )?;
-
-    Ok(())
-}
-
 fn draw_cursor(
     ctx: &mut dyn DrawingContext,
     x: f32,
@@ -1293,27 +1090,3 @@ fn draw_cursor(
     Ok(())
 }
 
-/// Emacs-style major-mode label shown in the status badge.
-fn major_mode_label(filetype: Filetype) -> &'static str {
-    match filetype {
-        Filetype::Rust => "Rust",
-        Filetype::Toml => "TOML",
-        Filetype::Json => "JSON",
-        Filetype::Markdown => "Markdown",
-        Filetype::Plain => "Text",
-    }
-}
-
-fn pane_status(ws: &Workspace, active: ViewId) -> String {
-    let Some(panes) = &ws.panes else {
-        return String::new();
-    };
-    let leaves = panes.leaves();
-    if leaves.len() <= 1 {
-        return String::new();
-    }
-    let Some(idx) = leaves.iter().position(|id| *id == active) else {
-        return String::new();
-    };
-    format!("pane {}/{}", idx + 1, leaves.len())
-}

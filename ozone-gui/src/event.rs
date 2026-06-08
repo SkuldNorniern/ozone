@@ -300,10 +300,7 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
             state.mouse.moved(x, y);
             if state.config.ui.mouse {
                 if let Some((view_id, grab_y)) = state.mouse.scrollbar_drag() {
-                    let (width, height) = {
-                        let canvas = lock(state.canvas.as_ref());
-                        (canvas.width() as f32, canvas.height() as f32)
-                    };
+                    let (width, height) = (state.window_width as f32, state.window_height as f32);
                     let mut workspace = lock(state.workspace.as_ref());
                     if handle_scrollbar_drag(
                         &mut workspace,
@@ -318,10 +315,7 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                         state.cursor_activity = true;
                     }
                 } else if let Some((view_id, anchor)) = state.mouse.selection_drag() {
-                    let (width, height) = {
-                        let canvas = lock(state.canvas.as_ref());
-                        (canvas.width() as f32, canvas.height() as f32)
-                    };
+                    let (width, height) = (state.window_width as f32, state.window_height as f32);
                     let mut workspace = lock(state.workspace.as_ref());
                     if handle_editor_drag(
                         &mut workspace,
@@ -361,10 +355,7 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                 || lock(state.search.as_ref()).is_some()
                 || lock(state.minibuffer.as_ref()).is_some();
             if !overlays_open {
-                let (width, height) = {
-                    let canvas = lock(state.canvas.as_ref());
-                    (canvas.width() as f32, canvas.height() as f32)
-                };
+                let (width, height) = (state.window_width as f32, state.window_height as f32);
                 let mut workspace = lock(state.workspace.as_ref());
                 if let Some(press) =
                     handle_scrollbar_press(&mut workspace, &state.config, x, y, width, height)
@@ -421,10 +412,7 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
             if state.config.ui.mouse
                 && let Some((x, y)) = state.mouse.pos()
             {
-                let (width, height) = {
-                    let canvas = lock(state.canvas.as_ref());
-                    (canvas.width() as f32, canvas.height() as f32)
-                };
+                let (width, height) = (state.window_width as f32, state.window_height as f32);
                 let editor_rect = Rect::new(0.0, 0.0, width, (height - STATUS_H).max(0.0));
                 if let Some((view_id, _)) = workspace
                     .panes
