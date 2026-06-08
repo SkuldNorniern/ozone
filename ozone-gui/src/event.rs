@@ -20,6 +20,7 @@ use crate::overlay::minibuffer::Minibuffer;
 use crate::overlay::notify::Notifications;
 use crate::overlay::picker::{PickerState, handle_palette_key};
 use crate::overlay::search::{SearchState, handle_search_key, search_input_text, search_jump};
+use crate::overlay::whichkey::WhichKeyView;
 use crate::terminals::Terminals;
 use crate::{ImageCache, OzoneGui, lock};
 
@@ -39,6 +40,9 @@ pub(crate) struct AppState {
     pub(crate) search: Arc<Mutex<Option<SearchState>>>,
     pub(crate) minibuffer: Arc<Mutex<Option<Minibuffer>>>,
     pub(crate) notifications: Arc<Mutex<Notifications>>,
+    /// Which-key view-model shared with the canvas draw callback (the frame the
+    /// scheduler actually presents).
+    pub(crate) which_key: Arc<Mutex<WhichKeyView>>,
     pub(crate) canvas: Arc<Mutex<SendableCanvas>>,
     pub(crate) last_title: String,
     pub(crate) chord_pending: Vec<KeyStroke>,
@@ -73,6 +77,7 @@ impl AppState {
         search: Arc<Mutex<Option<SearchState>>>,
         minibuffer: Arc<Mutex<Option<Minibuffer>>>,
         notifications: Arc<Mutex<Notifications>>,
+        which_key: Arc<Mutex<WhichKeyView>>,
         canvas: Arc<Mutex<SendableCanvas>>,
         window_width: u32,
         window_height: u32,
@@ -89,6 +94,7 @@ impl AppState {
             search,
             minibuffer,
             notifications,
+            which_key,
             canvas,
             last_title: String::new(),
             chord_pending: Vec::new(),

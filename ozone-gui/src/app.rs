@@ -24,7 +24,7 @@ use crate::overlay::minibuffer::{Minibuffer, draw_minibuffer};
 use crate::overlay::notify::Notifications;
 use crate::overlay::picker::{PickerState, draw_palette};
 use crate::overlay::search::SearchState;
-use crate::overlay::whichkey::draw_which_key;
+use crate::overlay::whichkey::{WhichKeyView, draw_which_key};
 use crate::render::draw_editor;
 use crate::terminals::{collect_term_rects, rect_to_grid};
 use crate::{ImageCache, TermCells, editor_font, lock};
@@ -43,6 +43,59 @@ fn bare_modifier_held(active: ActiveMods) -> Option<(bool, bool, bool)> {
     } else {
         None
     }
+}
+
+/// Build the which-key view-model for the current frame: the pending-chord
+/// continuations, else the bare-modifier hint, else nothing. Suppressed while an
+/// overlay (palette/search/minibuffer) is open.
+fn compute_which_key(state: &AppState) -> WhichKeyView {
+    let overlays_open = lock(state.palette.as_ref()).is_some()
+        || lock(state.search.as_ref()).is_some()
+        || lock(state.minibuffer.as_ref()).is_some();
+    if overlays_open {
+        return None;
+    }
+
+    let ws = lock(state.workspace.as_ref());
+    let ft = active_filetype_name(&ws);
+
+    if !state.chord_pending.is_empty() {
+        let entries = which_key_entries(
+            &state.keymap,
+            &state.chord_pending,
+            ft.as_deref(),
+            &state.commands,
+        );
+        if entries.is_empty() {
+            return None;
+        }
+        let prefix = state
+            .chord_pending
+            .iter()
+            .map(ozone_editor::stroke_label)
+            .collect::<Vec<_>>()
+            .join(" ");
+        return Some((prefix, entries));
+    }
+
+    if state.mod_hint_visible {
+        let active = ActiveMods::from_physical(state.live_mods, &state.modmap);
+        if let Some((control, meta, super_)) = bare_modifier_held(active) {
+            let entries = modifier_which_key_entries(
+                &state.keymap,
+                control,
+                meta,
+                super_,
+                ft.as_deref(),
+                &state.commands,
+            );
+            if !entries.is_empty() {
+                return Some((modifier_prefix_label(control, meta, super_), entries));
+            }
+        }
+    }
+
+    None
 }
 
 /// Header label for the bare-modifier hint panel (`draw_which_key` appends `-`).
@@ -115,6 +168,7 @@ impl OzoneGui {
         let search: Arc<Mutex<Option<SearchState>>> = Arc::new(Mutex::new(None));
         let minibuffer: Arc<Mutex<Option<Minibuffer>>> = Arc::new(Mutex::new(None));
         let notifications: Arc<Mutex<Notifications>> = Arc::new(Mutex::new(Notifications::new()));
+        let which_key: Arc<Mutex<WhichKeyView>> = Arc::new(Mutex::new(None));
 
         let raw_canvas = Canvas::new(W, H, RendererBackend::Cpu)?;
         let workspace_for_draw = self.workspace.clone();
@@ -125,6 +179,7 @@ impl OzoneGui {
         let search_for_draw = search.clone();
         let minibuffer_for_draw = minibuffer.clone();
         let notifications_for_draw = notifications.clone();
+        let which_key_for_draw = which_key.clone();
 
         raw_canvas.set_draw_callback(move |ctx| {
             let pal = lock(palette_for_draw.as_ref());
@@ -154,6 +209,15 @@ impl OzoneGui {
                 let f = editor_font(&config_for_draw);
                 let (cw, ch) = (ctx.width() as f32, ctx.height() as f32);
                 draw_minibuffer(ctx, m, &f, cw, ch, STATUS_H)?;
+            }
+            // Which-key panel: the frame scheduler presents this callback, so the
+            // panel must be drawn here (not only in the loop's `canvas.draw`).
+            if let Some((prefix, entries)) = lock(which_key_for_draw.as_ref()).as_ref()
+                && !entries.is_empty()
+            {
+                let f = editor_font(&config_for_draw);
+                let (cw, ch) = (ctx.width() as f32, ctx.height() as f32);
+                draw_which_key(ctx, prefix, entries, &f, cw, ch)?;
             }
             if !notes.is_empty() {
                 let f = editor_font(&config_for_draw);
@@ -195,6 +259,7 @@ impl OzoneGui {
             search,
             minibuffer,
             notifications,
+            which_key,
             canvas_arc,
             W,
             H,
@@ -413,6 +478,18 @@ impl OzoneGui {
                 }
             }
 
+            // Recompute the which-key view-model and publish it for the draw
+            // callback. A change forces a redraw so the panel appears/updates/
+            // disappears promptly.
+            {
+                let view = compute_which_key(&state);
+                let changed = *lock(state.which_key.as_ref()) != view;
+                if changed {
+                    *lock(state.which_key.as_ref()) = view;
+                    state.needs_redraw = true;
+                }
+            }
+
             {
                 let ws = lock(state.workspace.as_ref());
                 let title = window_title(&ws);
@@ -431,45 +508,7 @@ impl OzoneGui {
                 let mut canvas = lock(state.canvas.as_ref());
                 let config = state.config.clone();
                 let active_mods = ActiveMods::from_physical(state.live_mods, &state.modmap);
-                let (wk_prefix, wk_entries) = if !state.chord_pending.is_empty()
-                    && pal.is_none()
-                    && srch.is_none()
-                    && mb.is_none()
-                {
-                    let ft = active_filetype_name(&ws);
-                    let entries = which_key_entries(
-                        &state.keymap,
-                        &state.chord_pending,
-                        ft.as_deref(),
-                        &state.commands,
-                    );
-                    let prefix = state
-                        .chord_pending
-                        .iter()
-                        .map(ozone_editor::stroke_label)
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    (prefix, entries)
-                } else if state.mod_hint_visible && pal.is_none() && srch.is_none() && mb.is_none()
-                {
-                    match bare_modifier_held(active_mods) {
-                        Some((control, meta, super_)) => {
-                            let ft = active_filetype_name(&ws);
-                            let entries = modifier_which_key_entries(
-                                &state.keymap,
-                                control,
-                                meta,
-                                super_,
-                                ft.as_deref(),
-                                &state.commands,
-                            );
-                            (modifier_prefix_label(control, meta, super_), entries)
-                        }
-                        None => (String::new(), Vec::new()),
-                    }
-                } else {
-                    (String::new(), Vec::new())
-                };
+                let frame_wk = lock(state.which_key.as_ref()).clone();
                 let welcome_bindings = welcome_keymap_rows(&state.keymap, &state.commands);
                 canvas.draw(|ctx| {
                     draw_editor(
@@ -492,10 +531,12 @@ impl OzoneGui {
                         let (cw, ch) = (ctx.width() as f32, ctx.height() as f32);
                         draw_minibuffer(ctx, m, &f, cw, ch, STATUS_H)?;
                     }
-                    if !wk_entries.is_empty() {
+                    if let Some((prefix, entries)) = frame_wk.as_ref()
+                        && !entries.is_empty()
+                    {
                         let f = editor_font(&config);
                         let (cw, ch) = (ctx.width() as f32, ctx.height() as f32);
-                        draw_which_key(ctx, &wk_prefix, &wk_entries, &f, cw, ch)?;
+                        draw_which_key(ctx, prefix, entries, &f, cw, ch)?;
                     }
                     if !notes.is_empty() {
                         let f = editor_font(&config);

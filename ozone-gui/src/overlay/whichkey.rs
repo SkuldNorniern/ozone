@@ -14,8 +14,14 @@ use crate::components::{draw_panel, draw_pill, style};
 use crate::layout::{STATUS_H, baseline_in_rect};
 use crate::theme::solid;
 
+/// The which-key panel's render state: the already-typed `prefix` plus its
+/// continuation `entries`. `None` means the panel is hidden. Shared between the
+/// run loop (which computes it) and the canvas draw callback (which renders it).
+pub(crate) type WhichKeyView = Option<(String, Vec<WhichKeyEntry>)>;
+
 /// One which-key entry: the next stroke label and what it leads to (a command
 /// display name, or `+prefix` for a deeper group).
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct WhichKeyEntry {
     pub key: String,
     pub desc: String,
