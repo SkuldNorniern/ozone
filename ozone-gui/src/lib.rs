@@ -29,16 +29,20 @@ mod event;
 mod input;
 mod keys;
 mod layout;
-mod minibuffer;
 mod mouse;
-mod notify;
-mod picker;
+mod overlay;
 mod render;
-mod search;
 mod statusbar;
 mod terminals;
 mod theme;
-mod whichkey;
+
+// Re-export overlay submodules at crate level so existing `crate::minibuffer::*`
+// paths in app.rs, event.rs, keys.rs, etc. continue to resolve unchanged.
+pub(crate) use overlay::minibuffer;
+pub(crate) use overlay::notify;
+pub(crate) use overlay::picker;
+pub(crate) use overlay::search;
+pub(crate) use overlay::whichkey;
 
 pub(crate) use actions::*;
 pub(crate) use layout::*;
