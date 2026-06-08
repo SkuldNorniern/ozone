@@ -213,7 +213,7 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                 }
             } else if let Some((term_id, bytes)) = active_terminal(&lock(state.workspace.as_ref()))
                 .filter(|id| state.terms.sessions.contains_key(id))
-                .and_then(|id| terminal_key_bytes(*key, *modifiers).map(|b| (id, b)))
+                .zip(terminal_key_bytes(*key, *modifiers))
             {
                 state.terms.sessions[&term_id].write_str(bytes);
                 state.needs_redraw = true;
