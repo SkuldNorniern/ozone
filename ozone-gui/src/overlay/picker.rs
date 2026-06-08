@@ -8,13 +8,13 @@ use ozone_buffer::{BufferId, BufferKind};
 use ozone_config::Config;
 use ozone_editor::{AutocommandRegistry, CommandRegistry, Workspace};
 
+use crate::actions::{dispatch_autocmds, run_cmd, run_cmd_with_arg};
 use crate::components::{
     ListRow, centered_rect, draw_field, draw_list, draw_panel, draw_scrim, fill_round_rect, style,
 };
-use crate::theme::solid;
-use crate::actions::{dispatch_autocmds, run_cmd, run_cmd_with_arg};
+use crate::editor_font;
 use crate::layout::baseline_in_rect;
-use crate::{editor_font};
+use crate::theme::solid;
 
 /// What committing a picker item does.
 #[derive(Clone)]

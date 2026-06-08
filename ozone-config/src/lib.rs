@@ -351,11 +351,9 @@ impl Config {
     /// directories as needed.  Returns an error string on failure.
     pub fn write_default_to(path: &std::path::Path) -> Result<(), String> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("create config dir: {e}"))?;
+            std::fs::create_dir_all(parent).map_err(|e| format!("create config dir: {e}"))?;
         }
-        std::fs::write(path, Self::DEFAULT_TEMPLATE)
-            .map_err(|e| format!("write config: {e}"))
+        std::fs::write(path, Self::DEFAULT_TEMPLATE).map_err(|e| format!("write config: {e}"))
     }
 
     /// The default configuration template written when no user config exists.

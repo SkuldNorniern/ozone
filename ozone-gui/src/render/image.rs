@@ -1,8 +1,8 @@
 use aurea::AureaResult;
 use aurea::render::{DrawingContext, Font, Image, Rect};
 
-use crate::theme::{palette, solid};
 use super::TextMetrics;
+use crate::theme::{palette, solid};
 
 /// Draw an image centered in `rect`, scaled to fit while preserving aspect
 /// ratio (never upscaling past 1:1). Shows a label if the image failed to load.

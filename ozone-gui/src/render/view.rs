@@ -6,17 +6,19 @@ use ozone_config::{Config, CursorStyle, LineNumbers};
 use ozone_editor::{Decoration, DecorationKind, ViewId, VirtualPos, Workspace};
 use ozone_syntax::{Filetype, ScanState, TokenKind, scan_line};
 
-use crate::layout::*;
-use crate::terminals::draw_term_row;
-use crate::theme::{palette, solid, stroke, token_color};
-use crate::{ImageCache, TermCells};
 use super::TextMetrics;
-use super::decorations::{decoration_highlight_color, decoration_role_color, sync_bracket_decorations};
+use super::decorations::{
+    decoration_highlight_color, decoration_role_color, sync_bracket_decorations,
+};
 use super::image::draw_image_pane;
 use super::text::{
     draw_highlighted, draw_line_with_inline_virtual_text, line_prefix_end, shift_token_spans,
     wrap_line_segments,
 };
+use crate::layout::*;
+use crate::terminals::draw_term_row;
+use crate::theme::{palette, solid, stroke, token_color};
+use crate::{ImageCache, TermCells};
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw_view(

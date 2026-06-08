@@ -22,10 +22,10 @@ use crate::layout::{EDITOR_TOP_PAD, STATUS_H};
 use crate::overlay::minibuffer::{Minibuffer, draw_minibuffer};
 use crate::overlay::notify::Notifications;
 use crate::overlay::picker::{PickerState, draw_palette};
-use crate::render::draw_editor;
 use crate::overlay::search::SearchState;
-use crate::terminals::{collect_term_rects, rect_to_grid};
 use crate::overlay::whichkey::draw_which_key;
+use crate::render::draw_editor;
+use crate::terminals::{collect_term_rects, rect_to_grid};
 use crate::{ImageCache, TermCells, editor_font, lock};
 
 pub struct OzoneGui {
@@ -158,8 +158,16 @@ impl OzoneGui {
             canvas.invalidate_all();
         }
 
-        let mut state =
-            AppState::new(self, palette, search, minibuffer, notifications, canvas_arc, W, H);
+        let mut state = AppState::new(
+            self,
+            palette,
+            search,
+            minibuffer,
+            notifications,
+            canvas_arc,
+            W,
+            H,
+        );
         let blink_interval = std::time::Duration::from_millis(530);
 
         loop {
@@ -219,11 +227,11 @@ impl OzoneGui {
                             let lh = (state.config.editor.font_size
                                 * state.config.editor.line_height)
                                 .max(1.0);
-                            let cols = ((state.window_width as f32 - 60.0) / cw)
-                                .clamp(20.0, 500.0) as u16;
-                            let rows =
-                                ((state.window_height as f32 - STATUS_H - EDITOR_TOP_PAD) / lh)
-                                    .clamp(5.0, 300.0) as u16;
+                            let cols =
+                                ((state.window_width as f32 - 60.0) / cw).clamp(20.0, 500.0) as u16;
+                            let rows = ((state.window_height as f32 - STATUS_H - EDITOR_TOP_PAD)
+                                / lh)
+                                .clamp(5.0, 300.0) as u16;
                             term.resize(cols, rows);
                             state.terms.sessions.insert(*id, term);
                         }

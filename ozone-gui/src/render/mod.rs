@@ -5,7 +5,7 @@ use ozone_config::Config;
 use ozone_editor::{PaneTree, Workspace};
 
 use crate::input::ActiveMods;
-use crate::layout::{split_rect, STATUS_H};
+use crate::layout::{STATUS_H, split_rect};
 use crate::overlay::search::SearchState;
 use crate::statusbar::draw_status_bar;
 use crate::theme::{palette, solid};

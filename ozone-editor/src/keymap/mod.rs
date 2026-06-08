@@ -53,7 +53,9 @@ pub struct Keymap {
 
 impl Keymap {
     pub fn new() -> Self {
-        Self { bindings: Vec::new() }
+        Self {
+            bindings: Vec::new(),
+        }
     }
 
     /// The shipped default layer.
@@ -146,7 +148,11 @@ impl Keymap {
             let Some(chord) = parse_chord(&cfg.keys) else {
                 continue;
             };
-            let layer = if cfg.filetype.is_some() { Layer::Filetype } else { Layer::Global };
+            let layer = if cfg.filetype.is_some() {
+                Layer::Filetype
+            } else {
+                Layer::Global
+            };
             self.bindings.push(Binding {
                 chord,
                 command: cfg.command.clone(),
@@ -214,7 +220,11 @@ impl Keymap {
                 }
                 continue;
             }
-            rows.push((binding.chord.clone(), binding.layer, binding.command.clone()));
+            rows.push((
+                binding.chord.clone(),
+                binding.layer,
+                binding.command.clone(),
+            ));
         }
         rows.into_iter()
             .take(limit)
@@ -446,6 +456,9 @@ mod tests {
             km.resolve(&[], &stroke, Some("rust")),
             KeymapOutcome::Execute("lsp.format".to_string())
         );
-        assert_eq!(km.resolve(&[], &stroke, Some("toml")), KeymapOutcome::NoMatch);
+        assert_eq!(
+            km.resolve(&[], &stroke, Some("toml")),
+            KeymapOutcome::NoMatch
+        );
     }
 }

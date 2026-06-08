@@ -4,8 +4,8 @@ use aurea::render::{DrawingContext, Font, Point};
 use ozone_editor::{Decoration, DecorationKind};
 use ozone_syntax::{TokenKind, TokenSpan};
 
-use crate::theme::{solid, token_color};
 use super::decorations::decoration_role_color;
+use crate::theme::{solid, token_color};
 
 pub(super) fn wrap_line_segments(text: &str, max_cols: usize) -> Vec<(usize, usize)> {
     let max_cols = max_cols.max(1);

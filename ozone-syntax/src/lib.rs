@@ -116,9 +116,9 @@ pub fn scan_line(ft: Filetype, line: &str, state: ScanState) -> (Vec<TokenSpan>,
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::json::scan_json;
     use super::markdown::scan_markdown;
+    use super::*;
 
     fn kinds(spans: &[TokenSpan]) -> Vec<TokenKind> {
         spans.iter().map(|s| s.kind).collect()

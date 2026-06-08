@@ -11,8 +11,8 @@ use aurea::AureaResult;
 use aurea::render::{DrawingContext, Font, Point, Rect};
 
 use crate::components::{draw_panel, draw_pill, style};
-use crate::theme::solid;
 use crate::layout::{STATUS_H, baseline_in_rect};
+use crate::theme::solid;
 
 /// One which-key entry: the next stroke label and what it leads to (a command
 /// display name, or `+prefix` for a deeper group).

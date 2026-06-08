@@ -1,7 +1,9 @@
 use ozone_buffer::{BufferKind, Pos};
 
 use crate::ui::{NotifyLevel, UiIntent};
-use crate::workspace_search::{MAX_SEARCH_FILES, MAX_SEARCH_RESULTS, WorkspaceMatch, search_workspace};
+use crate::workspace_search::{
+    MAX_SEARCH_FILES, MAX_SEARCH_RESULTS, WorkspaceMatch, search_workspace,
+};
 
 use super::{CommandRegistry, buffer_display_name, tree_row_path, workspace_tree_buffer};
 
@@ -94,8 +96,7 @@ pub(super) fn register_file_commands(reg: &mut CommandRegistry) {
                 return;
             };
             let matches = search_workspace(&base, query, MAX_SEARCH_FILES, MAX_SEARCH_RESULTS);
-            let mut content =
-                format!("Workspace search: {query}\n{} match(es)\n\n", matches.len());
+            let mut content = format!("Workspace search: {query}\n{} match(es)\n\n", matches.len());
             for hit in &matches {
                 content.push_str(&hit.display());
                 content.push('\n');

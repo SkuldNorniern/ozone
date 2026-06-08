@@ -458,7 +458,10 @@ mod tests {
     fn buffer_local_overrides_indent() {
         use crate::options::OptionValue;
         let mut ws = Workspace::new();
-        ws.indent = IndentConfig { width: 4, soft_tabs: true };
+        ws.indent = IndentConfig {
+            width: 4,
+            soft_tabs: true,
+        };
         let bid = ws.active_buffer().unwrap().id;
         assert_eq!(ws.indent_for(bid).width, 4);
         ws.set_local(bid, "tab_width", OptionValue::Int(2));

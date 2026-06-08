@@ -18,7 +18,12 @@ pub struct PhysicalMods {
 
 impl PhysicalMods {
     pub fn new(ctrl: bool, alt: bool, shift: bool, meta: bool) -> Self {
-        Self { ctrl, alt, shift, meta }
+        Self {
+            ctrl,
+            alt,
+            shift,
+            meta,
+        }
     }
 
     pub(super) fn has(&self, m: PhysicalModifier) -> bool {

@@ -156,17 +156,31 @@ impl KeyStroke {
                 other => key = Key::parse(other),
             }
         }
-        Some(Self { control, meta, super_, shift, key: key? })
+        Some(Self {
+            control,
+            meta,
+            super_,
+            shift,
+            key: key?,
+        })
     }
 }
 
 /// Human-readable label for a single stroke (`"C-x"`, `"M-g"`, `"Enter"`).
 pub fn stroke_label(stroke: &KeyStroke) -> String {
     let mut s = String::new();
-    if stroke.control { s.push_str("C-"); }
-    if stroke.meta    { s.push_str("M-"); }
-    if stroke.super_  { s.push_str("s-"); }
-    if stroke.shift   { s.push_str("S-"); }
+    if stroke.control {
+        s.push_str("C-");
+    }
+    if stroke.meta {
+        s.push_str("M-");
+    }
+    if stroke.super_ {
+        s.push_str("s-");
+    }
+    if stroke.shift {
+        s.push_str("S-");
+    }
     s.push_str(&stroke.key.label());
     s
 }
@@ -182,5 +196,9 @@ pub fn parse_chord(keys: &str) -> Option<Vec<KeyStroke>> {
         .split_whitespace()
         .filter_map(KeyStroke::parse)
         .collect();
-    if strokes.is_empty() { None } else { Some(strokes) }
+    if strokes.is_empty() {
+        None
+    } else {
+        Some(strokes)
+    }
 }
