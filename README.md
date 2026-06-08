@@ -1,7 +1,9 @@
 # Ozone
 
 Ozone is a small Rust editor built around explicit editor, buffer, syntax, and
-GUI crates. It is a plain text editor first: no Vim-style modes, no hidden
+GUI crates. It is made to fit my own editor taste first, while keeping enough
+configuration surface for others to reshape keymaps, themes, filetype behavior,
+and UI defaults. It is a plain text editor first: no Vim-style modes, no hidden
 global editor state, and no large plugin runtime while the architecture is still
 settling.
 
@@ -25,7 +27,8 @@ navigation, and small project work:
 
 Some pieces are intentionally still thin. Terminal buffers currently render a
 placeholder surface, and LSP configuration is parsed but the LSP runtime remains
-deferred.
+deferred. Plugin capability is planned for later, once the command, event, and
+configuration surfaces are stable enough to expose cleanly.
 
 ## Build
 
