@@ -266,7 +266,10 @@ pub(crate) fn handle_palette_key(
                     None => run_cmd(&cmd, ws, reg, autocmds),
                 },
                 Some(PickerAction::ApplyTheme(name)) => {
-                    crate::theme::activate(&name);
+                    if crate::theme::activate(&name) {
+                        // Persist the choice so it survives a restart.
+                        crate::theme::persist_theme_name(&name);
+                    }
                 }
                 Some(PickerAction::OpenFile(path)) => {
                     let _ = ws.open_file(path);

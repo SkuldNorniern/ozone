@@ -239,10 +239,97 @@ impl Theme {
 }
 
 pub(crate) fn initialize(selection: &str) {
+    ensure_bundled_themes();
     let store = THEME.get_or_init(|| RwLock::new(Theme::default()));
     *store
         .write()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = Theme::load(selection);
+}
+
+/// Write the bundled themes into the user config `themes/` directory (creating
+/// it) when missing, so users have editable templates and a place to drop their
+/// own. Existing files are never overwritten. Best-effort; failures are ignored.
+pub(crate) fn ensure_bundled_themes() {
+    let Some(config_path) = ozone_config::Config::user_config_path() else {
+        return;
+    };
+    let Some(config_dir) = config_path.parent() else {
+        return;
+    };
+    let dir = config_dir.join("themes");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    for (id, text) in BUNDLED_THEMES {
+        let path = dir.join(format!("{id}.toml"));
+        if !path.exists() {
+            let _ = std::fs::write(&path, text);
+        }
+    }
+}
+
+/// Persist the chosen theme id into the user config's `[theme].name`, editing in
+/// place so comments and the rest of the file are preserved. Best-effort.
+pub(crate) fn persist_theme_name(id: &str) {
+    let Some(path) = ozone_config::Config::user_config_path() else {
+        return;
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let _ = std::fs::write(&path, update_theme_name(&text, id));
+}
+
+/// Return `text` with `[theme].name` set to `id`, preserving everything else.
+/// Replaces an existing `name` in `[theme]`, inserts one if the block lacks it,
+/// or appends a `[theme]` block if absent.
+fn update_theme_name(text: &str, id: &str) -> String {
+    let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut out: Vec<String> = Vec::new();
+    let mut in_theme = false;
+    let mut replaced = false;
+    let mut theme_header_idx: Option<usize> = None;
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            // Leaving the previous section; entering a new one.
+            in_theme = trimmed == "[theme]";
+            if in_theme {
+                theme_header_idx = Some(out.len());
+            }
+        } else if in_theme && !replaced {
+            let key = trimmed.split('=').next().unwrap_or("").trim();
+            if key == "name" {
+                let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+                out.push(format!("{indent}name = \"{id}\""));
+                replaced = true;
+                continue;
+            }
+        }
+        out.push(line.to_string());
+    }
+
+    if !replaced {
+        match theme_header_idx {
+            // `[theme]` exists but had no `name` → insert right after the header.
+            Some(idx) => out.insert(idx + 1, format!("name = \"{id}\"")),
+            // No `[theme]` block at all → append one.
+            None => {
+                if out.last().is_some_and(|l| !l.trim().is_empty()) {
+                    out.push(String::new());
+                }
+                out.push("[theme]".to_string());
+                out.push(format!("name = \"{id}\""));
+            }
+        }
+    }
+
+    let mut result = out.join(newline);
+    if text.ends_with('\n') {
+        result.push_str(newline);
+    }
+    result
 }
 
 pub(crate) fn activate(selection: &str) -> bool {
@@ -479,6 +566,33 @@ mod tests {
         assert!(ids.iter().any(|id| id == "brewery-stout"));
         assert!(ids.iter().any(|id| id == "brewery-wine"));
         assert!(resolve_theme_text("brewery-stout").is_some());
+    }
+
+    #[test]
+    fn update_theme_name_replaces_existing() {
+        let cfg = "[editor]\nfont_size = 14\n\n[theme]\nname = \"brewery-stout\"\n";
+        let out = update_theme_name(cfg, "brewery-wine");
+        assert!(out.contains("name = \"brewery-wine\""));
+        assert!(!out.contains("brewery-stout"));
+        assert!(out.contains("[editor]")); // other sections preserved
+    }
+
+    #[test]
+    fn update_theme_name_inserts_when_block_lacks_name() {
+        let cfg = "[theme]\n# pick one\n";
+        let out = update_theme_name(cfg, "catppuccin-mocha");
+        assert!(out.contains("[theme]"));
+        assert!(out.contains("name = \"catppuccin-mocha\""));
+        assert!(out.contains("# pick one")); // comment kept
+    }
+
+    #[test]
+    fn update_theme_name_appends_block_when_absent() {
+        let cfg = "[editor]\nfont_size = 14\n";
+        let out = update_theme_name(cfg, "brewery-wine");
+        assert!(out.contains("[theme]"));
+        assert!(out.contains("name = \"brewery-wine\""));
+        assert!(out.contains("[editor]"));
     }
 
     #[test]
