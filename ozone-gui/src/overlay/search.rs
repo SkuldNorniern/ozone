@@ -11,7 +11,7 @@ use aurea::render::{DrawingContext, Font, Point};
 use ozone_buffer::BufferId;
 use ozone_editor::{DecorationKind, EditorEvent, HlRole, NamespaceId, Workspace};
 
-use crate::baseline_in_rect;
+use crate::layout::baseline_in_rect;
 use crate::components::{draw_panel, top_right_rect};
 use crate::theme::{palette, solid};
 

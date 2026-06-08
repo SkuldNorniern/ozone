@@ -9,7 +9,7 @@
 use ozone_buffer::{BufferId, BufferKind};
 use ozone_editor::{AutocommandRegistry, CommandContext, CommandRegistry, EditorEvent, Workspace};
 
-use crate::minibuffer::Minibuffer;
+use crate::overlay::minibuffer::Minibuffer;
 
 pub(crate) fn run_cmd(
     name: &str,

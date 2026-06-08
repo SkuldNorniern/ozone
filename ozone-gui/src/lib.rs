@@ -36,15 +36,4 @@ mod statusbar;
 mod terminals;
 mod theme;
 
-// Re-export overlay submodules at crate level so existing `crate::minibuffer::*`
-// paths in app.rs, event.rs, keys.rs, etc. continue to resolve unchanged.
-pub(crate) use overlay::minibuffer;
-pub(crate) use overlay::notify;
-pub(crate) use overlay::picker;
-pub(crate) use overlay::search;
-pub(crate) use overlay::whichkey;
-
-pub(crate) use actions::*;
-pub(crate) use layout::*;
-
 pub use app::OzoneGui;

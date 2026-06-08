@@ -18,14 +18,14 @@ use ozone_syntax::Filetype;
 
 use crate::actions::{insert_text_raw, run_cmd};
 use crate::input::{keycode_to_char, keystroke_from};
-use crate::minibuffer::Minibuffer;
-use crate::notify::Notifications;
-use crate::picker::{
+use crate::overlay::minibuffer::Minibuffer;
+use crate::overlay::notify::Notifications;
+use crate::overlay::picker::{
     PickerState, buffer_picker_items, command_picker_items, file_picker_items, select_picker_items,
     theme_picker_items,
 };
-use crate::search::{SearchState, search_recompute, search_select_from_cursor};
-use crate::whichkey::WhichKeyEntry;
+use crate::overlay::search::{SearchState, search_recompute, search_select_from_cursor};
+use crate::overlay::whichkey::WhichKeyEntry;
 
 /// The mutable overlay state the run loop threads into key routing + intent
 /// handling, bundled so it travels as one argument instead of four. Built

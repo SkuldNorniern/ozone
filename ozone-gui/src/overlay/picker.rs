@@ -12,7 +12,9 @@ use crate::components::{
     ListRow, centered_rect, draw_field, draw_list, draw_panel, draw_scrim, fill_round_rect, style,
 };
 use crate::theme::solid;
-use crate::{baseline_in_rect, dispatch_autocmds, editor_font, run_cmd, run_cmd_with_arg};
+use crate::actions::{dispatch_autocmds, run_cmd, run_cmd_with_arg};
+use crate::layout::baseline_in_rect;
+use crate::{editor_font};
 
 /// What committing a picker item does.
 #[derive(Clone)]

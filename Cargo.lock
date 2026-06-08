@@ -22,20 +22,16 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "aurea"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
- "aurea-core",
  "aurea-ffi",
+ "aurea-foundation",
  "aurea-render",
  "aurea-runtime",
  "jni",
  "libc",
  "log",
 ]
-
-[[package]]
-name = "aurea-core"
-version = "0.0.1"
 
 [[package]]
 name = "aurea-ffi"
@@ -46,10 +42,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "aurea-foundation"
+version = "0.0.1"
+
+[[package]]
 name = "aurea-render"
 version = "0.0.1"
 dependencies = [
- "aurea-core",
+ "aurea-foundation",
  "dwrote",
  "fontdb",
  "fontdue",
@@ -60,7 +60,7 @@ dependencies = [
 name = "aurea-runtime"
 version = "0.0.1"
 dependencies = [
- "aurea-core",
+ "aurea-foundation",
  "aurea-render",
  "log",
 ]

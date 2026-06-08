@@ -12,14 +12,14 @@ use crate::canvas::SendableCanvas;
 use crate::input::{corrected_mods, terminal_key_bytes};
 use crate::keys::{Overlays, active_terminal, apply_ui_intents, handle_key};
 use crate::layout::{STATUS_H, max_scroll_line, pane_at};
-use crate::minibuffer::Minibuffer;
+use crate::overlay::minibuffer::Minibuffer;
 use crate::mouse::{
     MouseState, handle_editor_click, handle_editor_drag, handle_scrollbar_drag,
     handle_scrollbar_press,
 };
-use crate::notify::Notifications;
-use crate::picker::{PickerState, handle_palette_key};
-use crate::search::{SearchState, handle_search_key, search_input_text, search_jump};
+use crate::overlay::notify::Notifications;
+use crate::overlay::picker::{PickerState, handle_palette_key};
+use crate::overlay::search::{SearchState, handle_search_key, search_input_text, search_jump};
 use crate::terminals::Terminals;
 use crate::{ImageCache, OzoneGui, lock};
 

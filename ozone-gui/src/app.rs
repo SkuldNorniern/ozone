@@ -19,13 +19,13 @@ use crate::keys::{
     active_filetype_name, apply_filetype_config, filetype_config_name, which_key_entries,
 };
 use crate::layout::{EDITOR_TOP_PAD, STATUS_H};
-use crate::minibuffer::{Minibuffer, draw_minibuffer};
-use crate::notify::Notifications;
-use crate::picker::{PickerState, draw_palette};
+use crate::overlay::minibuffer::{Minibuffer, draw_minibuffer};
+use crate::overlay::notify::Notifications;
+use crate::overlay::picker::{PickerState, draw_palette};
 use crate::render::draw_editor;
-use crate::search::SearchState;
+use crate::overlay::search::SearchState;
 use crate::terminals::{collect_term_rects, rect_to_grid};
-use crate::whichkey::draw_which_key;
+use crate::overlay::whichkey::draw_which_key;
 use crate::{ImageCache, TermCells, editor_font, lock};
 
 pub struct OzoneGui {
