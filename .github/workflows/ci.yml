@@ -55,3 +55,12 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --workspace --release -- -D warnings
+
+  nightly:
+    name: Nightly Release
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/nightly.yml
+    permissions:
+      contents: write
+    secrets: inherit

@@ -1,10 +1,7 @@
 name: Nightly
 
 on:
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
-    branches: [main]
+  workflow_call:
 
 env:
   CARGO_TERM_COLOR: always
@@ -13,7 +10,6 @@ env:
 jobs:
   build:
     name: Build (${{ matrix.target }})
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -24,9 +20,6 @@ jobs:
             artifact: ozone
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact: ozone
-          - os: macos-13
-            target: x86_64-apple-darwin
             artifact: ozone
           - os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -70,15 +63,26 @@ jobs:
         run: |
           BINARY=target/${{ matrix.target }}/release/${{ matrix.artifact }}
           ARCHIVE=ozone-nightly-${{ steps.date.outputs.date }}-${{ matrix.target }}
-          mkdir -p dist
 
           if [[ "${{ runner.os }}" == "Windows" ]]; then
+            mkdir -p dist
             cp "$BINARY" dist/
             cd dist && 7z a "../${ARCHIVE}.zip" ${{ matrix.artifact }} && cd ..
             sha256sum "${ARCHIVE}.zip" > "${ARCHIVE}.zip.sha256"
+          elif [[ "${{ runner.os }}" == "macOS" ]]; then
+            mkdir -p Ozone.app/Contents/MacOS
+            mkdir -p Ozone.app/Contents/Resources
+            cp "$BINARY" Ozone.app/Contents/MacOS/ozone
+            cp packaging/macos/Info.plist Ozone.app/Contents/
+            cp packaging/macos/ozone.icns Ozone.app/Contents/Resources/
+            zip -r "${ARCHIVE}.zip" Ozone.app
+            sha256sum "${ARCHIVE}.zip" > "${ARCHIVE}.zip.sha256"
           else
-            cp "$BINARY" dist/
-            tar -czf "${ARCHIVE}.tar.gz" -C dist ${{ matrix.artifact }}
+            mkdir -p dist
+            cp "$BINARY" dist/ozone
+            cp packaging/linux/ozone.desktop dist/
+            cp -r packaging/linux/icons dist/
+            tar -czf "${ARCHIVE}.tar.gz" -C dist .
             sha256sum "${ARCHIVE}.tar.gz" > "${ARCHIVE}.tar.gz.sha256"
           fi
 
@@ -109,15 +113,22 @@ jobs:
         id: date
         run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
-      - name: Generate changelog (unreleased commits)
+      - name: Generate changelog
         id: cliff
+        continue-on-error: true
         uses: orhun/git-cliff-action@v3
         with:
           config: cliff.toml
-          args: --unreleased --strip header
+          args: --unreleased --strip all
         env:
           OUTPUT: CHANGELOG_NIGHTLY.md
           GITHUB_REPO: ${{ github.repository }}
+
+      - name: Fallback changelog
+        if: steps.cliff.outcome == 'failure'
+        run: |
+          echo "### Changes" > CHANGELOG_NIGHTLY.md
+          git log --oneline -20 >> CHANGELOG_NIGHTLY.md
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -127,16 +138,17 @@ jobs:
       - name: Merge checksums
         run: |
           find artifacts -name "*.sha256" -exec cat {} \; | sort > checksums.sha256
-          echo "--- checksums.sha256 ---"
-          cat checksums.sha256
 
       - name: Publish nightly release
         uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: nightly-${{ steps.date.outputs.date }}
           name: Nightly ${{ steps.date.outputs.date }}
           body_path: CHANGELOG_NIGHTLY.md
           prerelease: true
+          make_latest: false
           files: |
             artifacts/ozone-*/*.tar.gz
             artifacts/ozone-*/*.zip

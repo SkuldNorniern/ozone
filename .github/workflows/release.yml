@@ -49,9 +49,6 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: ozone
-          - os: macos-13
-            target: x86_64-apple-darwin
-            artifact: ozone
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: ozone.exe
@@ -89,15 +86,26 @@ jobs:
         run: |
           BINARY=target/${{ matrix.target }}/release/${{ matrix.artifact }}
           ARCHIVE=ozone-${{ github.ref_name }}-${{ matrix.target }}
-          mkdir -p dist
 
           if [[ "${{ runner.os }}" == "Windows" ]]; then
+            mkdir -p dist
             cp "$BINARY" dist/
             cd dist && 7z a "../${ARCHIVE}.zip" ${{ matrix.artifact }} && cd ..
             sha256sum "${ARCHIVE}.zip" > "${ARCHIVE}.zip.sha256"
+          elif [[ "${{ runner.os }}" == "macOS" ]]; then
+            mkdir -p Ozone.app/Contents/MacOS
+            mkdir -p Ozone.app/Contents/Resources
+            cp "$BINARY" Ozone.app/Contents/MacOS/ozone
+            cp packaging/macos/Info.plist Ozone.app/Contents/
+            cp packaging/macos/ozone.icns Ozone.app/Contents/Resources/
+            zip -r "${ARCHIVE}.zip" Ozone.app
+            sha256sum "${ARCHIVE}.zip" > "${ARCHIVE}.zip.sha256"
           else
-            cp "$BINARY" dist/
-            tar -czf "${ARCHIVE}.tar.gz" -C dist ${{ matrix.artifact }}
+            mkdir -p dist
+            cp "$BINARY" dist/ozone
+            cp packaging/linux/ozone.desktop dist/
+            cp -r packaging/linux/icons dist/
+            tar -czf "${ARCHIVE}.tar.gz" -C dist .
             sha256sum "${ARCHIVE}.tar.gz" > "${ARCHIVE}.tar.gz.sha256"
           fi
 
