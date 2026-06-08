@@ -12,10 +12,11 @@ members = [
     "ozone-config",
     "ozone-term",
 ]
+exclude = ["aurea"]
 resolver = "2"
 
 [workspace.dependencies]
-aurea       = { path = "./aurea" }
+aurea       = "0.0.2"
 toml        = "0.8"
 ozone-buffer = { path = "ozone-buffer" }
 ozone-editor = { path = "ozone-editor" }

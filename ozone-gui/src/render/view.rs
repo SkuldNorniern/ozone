@@ -1,187 +1,25 @@
-//! Editor rendering: the `draw_*` pass over the workspace.
-//!
-//! `draw_editor` is the entry point the run loop calls each frame; everything
-//! else here is private detail (pane tree, per-view text/gutter/cursor, terminal
-//! colour grid, image pane). Status bar lives in `statusbar`; terminal-row
-//! drawing lives in `terminals`. Geometry comes from [`crate::layout`],
-//! colours from [`crate::theme`]; this module owns no state.
-
 use aurea::AureaResult;
-use aurea::render::{Color, DrawingContext, Font, Image, Point, Rect};
+use aurea::render::{DrawingContext, Font, Point, Rect};
 
 use ozone_buffer::{BufferKind, Pos};
 use ozone_config::{Config, CursorStyle, LineNumbers};
-use ozone_editor::{
-    BRACKET_NAMESPACE, Decoration, DecorationKind, HlRole, PaneTree, ViewId, VirtualPos, Workspace,
-    matching_bracket,
-};
+use ozone_editor::{Decoration, DecorationKind, ViewId, VirtualPos, Workspace};
 use ozone_syntax::{Filetype, ScanState, TokenKind, scan_line};
 
-use crate::input::ActiveMods;
 use crate::layout::*;
-use crate::search::{SearchState, draw_search_bar};
-use crate::statusbar::draw_status_bar;
 use crate::terminals::draw_term_row;
 use crate::theme::{palette, solid, stroke, token_color};
-use crate::{ImageCache, TermCells, editor_font};
+use crate::{ImageCache, TermCells};
+use super::TextMetrics;
+use super::decorations::{decoration_highlight_color, decoration_role_color, sync_bracket_decorations};
+use super::image::draw_image_pane;
+use super::text::{
+    draw_highlighted, draw_line_with_inline_virtual_text, line_prefix_end, shift_token_spans,
+    wrap_line_segments,
+};
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn draw_editor(
-    ctx: &mut dyn DrawingContext,
-    ws: &mut Workspace,
-    config: &Config,
-    welcome_bindings: &[(String, String)],
-    search: Option<&SearchState>,
-    term_cells: &TermCells,
-    images: &ImageCache,
-    mods: ActiveMods,
-    cursor_visible: bool,
-    char_w_out: &mut f32,
-) -> AureaResult<()> {
-    let width = ctx.width() as f32;
-    let height = ctx.height() as f32;
-
-    ctx.clear(palette().background)?;
-
-    let font = editor_font(config);
-    let metrics = ctx.measure_text("M", &font).ok();
-    let char_w = metrics
-        .as_ref()
-        .map(|m| m.advance)
-        .unwrap_or(font.size * 0.6);
-    let text_ascent = metrics
-        .as_ref()
-        .map(|m| m.ascent)
-        .unwrap_or(font.size * 0.8);
-    let text_descent = metrics
-        .as_ref()
-        .map(|m| m.descent)
-        .unwrap_or(font.size * 0.2);
-    // Report the real measured cell width so the PTY can be sized to match.
-    *char_w_out = char_w;
-
-    let editor_rect = Rect::new(0.0, 0.0, width, (height - STATUS_H).max(0.0));
-    let metrics = TextMetrics {
-        char_w,
-        text_ascent,
-        text_descent,
-    };
-
-    if let Some(panes) = &ws.panes {
-        let panes = panes.clone();
-        draw_pane_tree(
-            ctx,
-            ws,
-            config,
-            &panes,
-            editor_rect,
-            &font,
-            metrics,
-            welcome_bindings,
-            term_cells,
-            images,
-            cursor_visible,
-        )?;
-    } else if let Some(view_id) = ws.active_view().map(|view| view.id) {
-        draw_view(
-            ctx,
-            ws,
-            config,
-            view_id,
-            editor_rect,
-            &font,
-            metrics,
-            welcome_bindings,
-            term_cells,
-            images,
-            cursor_visible,
-        )?;
-    }
-
-    if let Some(s) = search {
-        draw_search_bar(ctx, s, &font, width)?;
-    }
-
-    draw_status_bar(ctx, width, height, &font, ws, mods)?;
-    Ok(())
-}
-
-#[derive(Debug, Clone, Copy)]
-struct TextMetrics {
-    char_w: f32,
-    text_ascent: f32,
-    text_descent: f32,
-}
-
-#[allow(clippy::too_many_arguments)]
-fn draw_pane_tree(
-    ctx: &mut dyn DrawingContext,
-    ws: &mut Workspace,
-    config: &Config,
-    tree: &PaneTree,
-    rect: Rect,
-    font: &Font,
-    metrics: TextMetrics,
-    welcome_bindings: &[(String, String)],
-    term_cells: &TermCells,
-    images: &ImageCache,
-    cursor_visible: bool,
-) -> AureaResult<()> {
-    match tree {
-        PaneTree::Leaf { view_id } => draw_view(
-            ctx,
-            ws,
-            config,
-            *view_id,
-            rect,
-            font,
-            metrics,
-            welcome_bindings,
-            term_cells,
-            images,
-            cursor_visible,
-        ),
-        PaneTree::Split {
-            axis,
-            ratio,
-            first,
-            second,
-        } => {
-            let (first_rect, second_rect, divider) = split_rect(rect, *axis, *ratio);
-            draw_pane_tree(
-                ctx,
-                ws,
-                config,
-                first,
-                first_rect,
-                font,
-                metrics,
-                welcome_bindings,
-                term_cells,
-                images,
-                cursor_visible,
-            )?;
-            draw_pane_tree(
-                ctx,
-                ws,
-                config,
-                second,
-                second_rect,
-                font,
-                metrics,
-                welcome_bindings,
-                term_cells,
-                images,
-                cursor_visible,
-            )?;
-            ctx.draw_rect(divider, &solid(palette().border))?;
-            Ok(())
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn draw_view(
+pub(super) fn draw_view(
     ctx: &mut dyn DrawingContext,
     ws: &mut Workspace,
     config: &Config,
@@ -203,7 +41,6 @@ fn draw_view(
 
     let is_active_pane = ws.active_view_id == Some(view_id);
 
-    // Image buffers render the picture, not text — handle and return early.
     if matches!(
         ws.buffers.get(&buffer_id).map(|b| &b.kind),
         Some(BufferKind::Image(_))
@@ -243,14 +80,11 @@ fn draw_view(
 
     ctx.draw_rect(rect, &solid(palette().background))?;
 
-    // Filetype for syntax
     let ft = match &buf.kind {
         BufferKind::File(p) => Filetype::from_path(&p.to_string_lossy()),
         _ => Filetype::Plain,
     };
 
-    // Virtual surfaces (terminal, pickers, references) have no line numbers;
-    // real buffers use their buffer-local override, else the global default.
     let line_numbers = match buf.kind {
         BufferKind::Terminal
         | BufferKind::Search
@@ -283,7 +117,6 @@ fn draw_view(
         .floor()
         .max(1.0) as usize;
 
-    // For a live terminal, render the colour grid instead of the text buffer.
     let term_grid: Option<&[Vec<ozone_term::Cell>]> = if matches!(buf.kind, BufferKind::Terminal) {
         term_cells.get(&buffer_id).map(|v| v.as_slice())
     } else {
@@ -304,7 +137,6 @@ fn draw_view(
         .cloned()
         .collect();
 
-    // Gutter strip
     if gutter_w > 0.0 {
         ctx.draw_rect(
             Rect::new(rect.x, rect.y, gutter_w, rect.height),
@@ -312,8 +144,6 @@ fn draw_view(
         )?;
     }
 
-    // Pre-scan: single pass from line 0 to scroll for block-comment state.
-    // Plain and Toml have no cross-line state — skip entirely.
     let mut scan_state = ScanState::clean();
     if !matches!(ft, Filetype::Plain | Filetype::Toml) {
         for text in buf.lines_slice(0, scroll) {
@@ -322,7 +152,6 @@ fn draw_view(
         }
     }
 
-    // Fetch all visible lines in one pass to avoid O(scroll²) repeated nth() scans.
     let visible_line_end = (scroll + visible + 1).min(line_count);
     let visible_texts = buf.lines_slice(scroll, visible_line_end);
 
@@ -380,7 +209,6 @@ fn draw_view(
                 })
                 .collect();
 
-            // Cursor-line highlight
             if is_cursor && is_active_pane {
                 ctx.draw_rect(
                     Rect::new(rect.x, line_top + 1.0, rect.width, line_h - 1.0),
@@ -388,8 +216,6 @@ fn draw_view(
                 )?;
             }
 
-            // Selection is view-local and byte-oriented, matching the editor's
-            // `Pos`/`Span` model. Draw it before search/bracket decorations.
             if let Some(selection) = view.selection
                 && line_idx >= selection.start.line
                 && line_idx <= selection.end.line
@@ -435,7 +261,6 @@ fn draw_view(
                 }
             }
 
-            // Gutter line number (absolute / relative / off per config)
             let gutter_label = if segment_index == 0 {
                 match line_numbers {
                     LineNumbers::Off => None,
@@ -483,7 +308,6 @@ fn draw_view(
                 )?;
             }
 
-            // Line content: terminal colour grid, or syntax-highlighted buffer text.
             if let Some(grid) = term_grid {
                 if let Some(row) = grid.get(line_idx) {
                     let row = &row[..row.len().min(text_cols)];
@@ -606,7 +430,6 @@ fn draw_view(
         line_idx += 1;
     }
 
-    // Gutter divider
     if gutter_w > 0.0 {
         ctx.draw_line(
             rect.x + gutter_w,
@@ -621,7 +444,6 @@ fn draw_view(
         draw_welcome_screen(ctx, rect, font, metrics, text_x, welcome_bindings)?;
     }
 
-    // Scrollbar thumb (right edge), only when content overflows the viewport.
     let viewport_lines = (content_h / line_h).max(1.0);
     if (line_count as f32) > viewport_lines {
         let track_h = rect.height;
@@ -732,424 +554,6 @@ fn draw_welcome_screen(
         )?;
     }
 
-    Ok(())
-}
-
-fn decoration_role_color(role: HlRole) -> Color {
-    match role {
-        HlRole::Search => palette().search_match,
-        HlRole::SearchCurrent => palette().search_match_active,
-        HlRole::Bracket => palette().bracket_match,
-        HlRole::Selection => palette().selection,
-        HlRole::Error => palette().notify_error,
-        HlRole::Warn => palette().notify_warn,
-        HlRole::Info => palette().notify_info,
-        HlRole::Hint => palette().picker_detail,
-    }
-}
-
-fn decoration_highlight_color(role: HlRole) -> Color {
-    let color = decoration_role_color(role);
-    if role == HlRole::Bracket {
-        return color;
-    }
-    Color::rgba(color.r, color.g, color.b, color.a.min(110))
-}
-
-fn sync_bracket_decorations(ws: &mut Workspace, view_id: ViewId) {
-    let pair = ws.views.get(&view_id).and_then(|view| {
-        let buffer = ws.buffers.get(&view.buffer_id)?;
-        let (first, second) = matching_bracket(buffer, view.cursor)?;
-        Some((
-            view.buffer_id,
-            buffer.pos_to_offset(first),
-            buffer.pos_to_offset(second),
-        ))
-    });
-
-    let mut expected = pair.map(|(buffer, first, second)| {
-        let mut starts = [first, second];
-        starts.sort_unstable();
-        (buffer, starts)
-    });
-    let mut current: Vec<_> = ws
-        .decorations()
-        .namespace_for_view(BRACKET_NAMESPACE, view_id)
-        .into_iter()
-        .filter_map(|(buffer, decoration)| {
-            matches!(decoration.kind, DecorationKind::Highlight(HlRole::Bracket)).then_some((
-                buffer,
-                decoration.start,
-                decoration.end,
-            ))
-        })
-        .collect();
-    current.sort_by_key(|(_, start, _)| *start);
-    let unchanged = match (expected.as_ref(), current.as_slice()) {
-        (None, []) => true,
-        (Some((buffer, [first, second])), [(a, a_start, a_end), (b, b_start, b_end)]) => {
-            a == buffer
-                && b == buffer
-                && (*a_start, *a_end) == (*first, first + 1)
-                && (*b_start, *b_end) == (*second, second + 1)
-        }
-        _ => false,
-    };
-    if unchanged {
-        return;
-    }
-
-    ws.decorations_mut()
-        .clear_namespace_for_view(BRACKET_NAMESPACE, view_id);
-    let Some((buffer, [first, second])) = expected.take() else {
-        return;
-    };
-    for start in [first, second] {
-        ws.decorations_mut().add_for_view(
-            buffer,
-            view_id,
-            BRACKET_NAMESPACE,
-            start,
-            start + 1,
-            DecorationKind::Highlight(HlRole::Bracket),
-        );
-    }
-}
-
-fn wrap_line_segments(text: &str, max_cols: usize) -> Vec<(usize, usize)> {
-    let max_cols = max_cols.max(1);
-    if text.is_empty() {
-        return vec![(0, 0)];
-    }
-
-    let mut segments = Vec::new();
-    let mut start = 0usize;
-    while start < text.len() {
-        let mut end = start;
-        let mut cols = 0usize;
-        let mut last_break = None;
-        for (offset, ch) in text[start..].char_indices() {
-            if cols >= max_cols {
-                break;
-            }
-            let absolute = start + offset;
-            end = absolute + ch.len_utf8();
-            cols += 1;
-            if ch.is_whitespace() {
-                last_break = Some(end);
-            }
-        }
-
-        if end >= text.len() {
-            segments.push((start, text.len()));
-            break;
-        }
-
-        let split = last_break
-            .filter(|break_at| *break_at > start)
-            .unwrap_or(end);
-        segments.push((start, split));
-        start = split;
-        while start < text.len() {
-            let Some(ch) = text[start..].chars().next() else {
-                break;
-            };
-            if !ch.is_whitespace() {
-                break;
-            }
-            start += ch.len_utf8();
-        }
-    }
-
-    if segments.is_empty() {
-        segments.push((0, 0));
-    }
-    segments
-}
-
-fn line_prefix_end(text: &str, max_cols: usize) -> usize {
-    if max_cols == 0 {
-        return 0;
-    }
-    text.char_indices()
-        .nth(max_cols)
-        .map(|(offset, _)| offset)
-        .unwrap_or(text.len())
-}
-
-fn shift_token_spans(
-    spans: &[ozone_syntax::TokenSpan],
-    segment_start: usize,
-    segment_end: usize,
-) -> Vec<ozone_syntax::TokenSpan> {
-    spans
-        .iter()
-        .filter_map(|span| {
-            let start = span.start.max(segment_start);
-            let end = (span.start + span.len).min(segment_end);
-            (end > start).then_some(ozone_syntax::TokenSpan {
-                start: start - segment_start,
-                len: end - start,
-                kind: span.kind,
-            })
-        })
-        .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ozone_buffer::Pos;
-    use ozone_editor::SplitAxis;
-
-    #[test]
-    fn bracket_decorations_are_independent_per_split_view() {
-        let mut ws = Workspace::new();
-        let first = ws.active_view_id.unwrap();
-        ws.active_buffer_mut()
-            .unwrap()
-            .insert(Pos::zero(), "(a) [b]");
-        ws.views.get_mut(&first).unwrap().cursor = Pos::new(0, 0);
-        let second = ws.split_active_pane(SplitAxis::Vertical).unwrap();
-        ws.views.get_mut(&second).unwrap().cursor = Pos::new(0, 4);
-        let buffer = ws.active_buffer().unwrap().id;
-
-        sync_bracket_decorations(&mut ws, first);
-        sync_bracket_decorations(&mut ws, second);
-
-        let first_ranges: Vec<_> = ws
-            .decorations()
-            .in_range_for_view(buffer, first, 0, 10)
-            .into_iter()
-            .map(|d| (d.start, d.end))
-            .collect();
-        let second_ranges: Vec<_> = ws
-            .decorations()
-            .in_range_for_view(buffer, second, 0, 10)
-            .into_iter()
-            .map(|d| (d.start, d.end))
-            .collect();
-        assert_eq!(first_ranges, vec![(0, 1), (2, 3)]);
-        assert_eq!(second_ranges, vec![(4, 5), (6, 7)]);
-    }
-
-    #[test]
-    fn wrap_segments_prefer_whitespace_and_skip_leading_wrap_space() {
-        let text = "alpha beta gamma";
-        let segments: Vec<_> = wrap_line_segments(text, 8)
-            .into_iter()
-            .map(|(start, end)| &text[start..end])
-            .collect();
-        assert_eq!(segments, vec!["alpha ", "beta ", "gamma"]);
-    }
-
-    #[test]
-    fn wrap_segments_split_long_words_on_char_boundaries() {
-        let text = "abcλδε";
-        let segments: Vec<_> = wrap_line_segments(text, 4)
-            .into_iter()
-            .map(|(start, end)| &text[start..end])
-            .collect();
-        assert_eq!(segments, vec!["abcλ", "δε"]);
-    }
-
-    #[test]
-    fn shifted_token_spans_are_segment_relative() {
-        let spans = vec![ozone_syntax::TokenSpan {
-            start: 2,
-            len: 6,
-            kind: TokenKind::String,
-        }];
-        let shifted = shift_token_spans(&spans, 4, 10);
-        assert_eq!(shifted.len(), 1);
-        assert_eq!(shifted[0].start, 0);
-        assert_eq!(shifted[0].len, 4);
-    }
-
-    #[test]
-    fn line_prefix_end_clips_on_char_boundaries() {
-        let text = "abλδε";
-        assert_eq!(&text[..line_prefix_end(text, 3)], "abλ");
-        assert_eq!(&text[..line_prefix_end(text, 99)], text);
-        assert_eq!(line_prefix_end(text, 0), 0);
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn draw_line_with_inline_virtual_text(
-    ctx: &mut dyn DrawingContext,
-    text: &str,
-    spans: &[ozone_syntax::TokenSpan],
-    decorations: &[&Decoration],
-    line_start: usize,
-    x0: f32,
-    baseline: f32,
-    char_w: f32,
-    font: &Font,
-) -> AureaResult<()> {
-    let mut decorations = decorations.to_vec();
-    decorations.sort_by_key(|decoration| decoration.start);
-    let mut decoration_index = 0usize;
-    let mut x = x0;
-
-    for (byte, ch) in text.char_indices() {
-        while let Some(decoration) = decorations.get(decoration_index)
-            && decoration.start.saturating_sub(line_start) <= byte
-        {
-            if let DecorationKind::VirtualText { text, role, .. } = &decoration.kind {
-                ctx.draw_text_with_font(
-                    text,
-                    Point::new(x, baseline),
-                    font,
-                    &solid(decoration_role_color(*role)),
-                )?;
-                x += ctx
-                    .measure_text(text, font)
-                    .map(|metrics| metrics.advance)
-                    .unwrap_or(text.chars().count() as f32 * char_w);
-            }
-            decoration_index += 1;
-        }
-
-        let mut encoded = [0u8; 4];
-        let glyph = ch.encode_utf8(&mut encoded);
-        let kind = spans
-            .iter()
-            .find(|span| byte >= span.start && byte < span.start + span.len)
-            .map(|span| span.kind)
-            .unwrap_or(TokenKind::Default);
-        ctx.draw_text_with_font(
-            glyph,
-            Point::new(x, baseline),
-            font,
-            &solid(token_color(kind)),
-        )?;
-        x += char_w;
-    }
-
-    while let Some(decoration) = decorations.get(decoration_index) {
-        if let DecorationKind::VirtualText { text, role, .. } = &decoration.kind {
-            ctx.draw_text_with_font(
-                text,
-                Point::new(x, baseline),
-                font,
-                &solid(decoration_role_color(*role)),
-            )?;
-            x += ctx
-                .measure_text(text, font)
-                .map(|metrics| metrics.advance)
-                .unwrap_or(text.chars().count() as f32 * char_w);
-        }
-        decoration_index += 1;
-    }
-
-    Ok(())
-}
-
-/// Draw a line with per-token colouring. Gaps between spans use Default colour.
-fn draw_highlighted(
-    ctx: &mut dyn DrawingContext,
-    text: &str,
-    spans: &[ozone_syntax::TokenSpan],
-    x0: f32,
-    y: f32,
-    char_w: f32,
-    font: &Font,
-) -> AureaResult<()> {
-    let bytes = text.as_bytes();
-    let mut last = 0usize;
-
-    for span in spans {
-        // Gap before this span
-        if span.start > last {
-            let seg = &text[last..span.start];
-            let sx = x0 + last as f32 * char_w;
-            ctx.draw_text_with_font(
-                seg,
-                Point::new(sx, y),
-                font,
-                &solid(token_color(TokenKind::Default)),
-            )?;
-        }
-
-        let end = (span.start + span.len).min(bytes.len());
-        let seg = &text[span.start..end];
-        let sx = x0 + span.start as f32 * char_w;
-        ctx.draw_text_with_font(seg, Point::new(sx, y), font, &solid(token_color(span.kind)))?;
-
-        last = end;
-    }
-
-    // Trailing gap
-    if last < text.len() {
-        let seg = &text[last..];
-        let sx = x0 + last as f32 * char_w;
-        ctx.draw_text_with_font(
-            seg,
-            Point::new(sx, y),
-            font,
-            &solid(token_color(TokenKind::Default)),
-        )?;
-    }
-
-    Ok(())
-}
-
-/// Draw an image centered in `rect`, scaled to fit while preserving aspect
-/// ratio (never upscaling past 1:1). Shows a label if the image failed to load.
-fn draw_image_pane(
-    ctx: &mut dyn DrawingContext,
-    rect: Rect,
-    image: Option<&Image>,
-    font: &Font,
-    metrics: TextMetrics,
-) -> AureaResult<()> {
-    let Some(img) = image else {
-        // Decode failed or not ready: centered dim label.
-        let msg = "cannot display image";
-        let w = ctx
-            .measure_text(msg, font)
-            .map(|m| m.advance)
-            .unwrap_or(msg.len() as f32 * metrics.char_w);
-        let bl = rect.y + rect.height / 2.0;
-        ctx.draw_text_with_font(
-            msg,
-            Point::new(rect.x + (rect.width - w) / 2.0, bl),
-            font,
-            &solid(palette().picker_detail),
-        )?;
-        return Ok(());
-    };
-    if img.width == 0 || img.height == 0 {
-        return Ok(());
-    }
-
-    let pad = 12.0;
-    let avail_w = (rect.width - pad * 2.0).max(1.0);
-    let avail_h = (rect.height - pad * 2.0).max(1.0);
-    let iw = img.width as f32;
-    let ih = img.height as f32;
-    // Fit; don't upscale beyond native size.
-    let scale = (avail_w / iw).min(avail_h / ih).min(1.0);
-    let dw = iw * scale;
-    let dh = ih * scale;
-    let dx = rect.x + (rect.width - dw) / 2.0;
-    let dy = rect.y + (rect.height - dh) / 2.0;
-    ctx.draw_image_rect(img, Rect::new(dx, dy, dw, dh))?;
-
-    // Dimensions label, bottom-centered.
-    let label = format!("{}×{}", img.width, img.height);
-    let lw = ctx
-        .measure_text(&label, font)
-        .map(|m| m.advance)
-        .unwrap_or(0.0);
-    let ly = (rect.y + rect.height - 6.0).min(rect.y + rect.height);
-    ctx.draw_text_with_font(
-        &label,
-        Point::new(rect.x + (rect.width - lw) / 2.0, ly),
-        font,
-        &solid(palette().picker_detail),
-    )?;
     Ok(())
 }
 
