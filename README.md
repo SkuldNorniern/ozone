@@ -1,5 +1,10 @@
 # Ozone
 
+[![CI](https://github.com/SkuldNorniern/ozone/actions/workflows/ci.yml/badge.svg)](https://github.com/SkuldNorniern/ozone/actions/workflows/ci.yml)
+[![Nightly](https://github.com/SkuldNorniern/ozone/actions/workflows/nightly.yml/badge.svg)](https://github.com/SkuldNorniern/ozone/actions/workflows/nightly.yml)
+[![Latest Release](https://img.shields.io/github/v/release/SkuldNorniern/ozone?include_prereleases&label=release)](https://github.com/SkuldNorniern/ozone/releases/latest)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 Ozone is a small Rust editor built around explicit editor, buffer, syntax, and
 GUI crates. It is made to fit my own editor taste first, while keeping enough
 configuration surface for others to reshape keymaps, themes, filetype behavior,
@@ -8,6 +13,17 @@ global editor state, and no large plugin runtime while the architecture is still
 settling.
 
 ![Ozone editor screenshot](assets/screenshots/ozone-editor.png)
+
+## Downloads
+
+Pre-built binaries are published automatically:
+
+| Channel | Trigger | Platforms |
+| --- | --- | --- |
+| **Nightly** | Every push to `main` | Linux x64 · macOS ARM · macOS x64 · Windows x64 |
+| **Release** | `v*` tag | Linux x64 · macOS ARM · macOS x64 · Windows x64 |
+
+→ [All releases](https://github.com/SkuldNorniern/ozone/releases)
 
 ## Current Shape
 
@@ -21,7 +37,7 @@ navigation, and small project work:
 - in-buffer search/replace and literal workspace search
 - line numbers, cursor-line highlight, selections, scrollbars, and mouse-wheel scrolling
 - pane splits, pane focus movement, and buffer cycling
-- syntax scanning for Rust, Markdown, TOML, Oxygen, and plain text
+- syntax scanning for Rust, Markdown, TOML, JSON, and plain text
 - PNG/JPEG image preview buffers
 - configurable themes, keymaps, filetype defaults, modifier maps, and autocommands
 
@@ -32,10 +48,8 @@ configuration surfaces are stable enough to expose cleanly.
 
 ## Build
 
-Ozone is a Cargo workspace. The local Aurea GUI library is expected at
-`./aurea/crates/aurea`, which is how the workspace dependency is wired today.
-
-Build the editor from the repository root:
+Ozone is a Cargo workspace. All dependencies, including the
+[Aurea](https://crates.io/crates/aurea) GUI toolkit, are pulled from crates.io.
 
 ```sh
 cargo build --release
@@ -45,6 +59,15 @@ For faster development checks:
 
 ```sh
 cargo check
+```
+
+### Linux
+
+A few system libraries are required for the Vulkan/X11 backend:
+
+```sh
+sudo apt-get install -y libvulkan-dev libxcb-xfixes0-dev libxcb-shape0-dev \
+  libxkbcommon-dev pkg-config libegl-mesa0
 ```
 
 ## Run
@@ -121,8 +144,9 @@ Ozone loads user configuration from:
 - Windows: `%APPDATA%\ozone\config.toml`
 - Linux/macOS: `$XDG_CONFIG_HOME/ozone/config.toml`, or `~/.config/ozone/config.toml`
 
-Every field is optional. Missing or malformed values fall back to defaults
-instead of preventing the editor from starting.
+If no config file exists, a default template is written automatically on first
+launch. Every field is optional; missing or malformed values fall back silently
+to defaults.
 
 ```toml
 [editor]
@@ -161,21 +185,22 @@ pattern = "*"
 command = "edit.trim-trailing-whitespace"
 ```
 
-Bundled themes currently include `brewery-stout`, `brewery-wine`, and
-`catppuccin-mocha`. A theme can also be selected by path.
+Bundled themes: `brewery-stout`, `brewery-wine`, `catppuccin-mocha`. A theme can
+also be a path to a custom `.toml` file.
 
 ## Workspace Layout
 
-- `src/`: executable entry point
-- `ozone-buffer/`: text storage, positions, edits, undo/redo, dirty state, and persistence
-- `ozone-editor/`: workspace state, views, commands, keymaps, events, and UI intents
-- `ozone-gui/`: Aurea-based drawing, overlays, input routing, and window integration
-- `ozone-syntax/`: lightweight fallback syntax scanning
-- `ozone-config/`: hand-shaped configuration loading and validation
-- `ozone-term/`: terminal grid and PTY support under construction
-- `themes/`: bundled color themes
-- `packaging/`: platform packaging metadata and icons
-- `aurea/`: local GUI toolkit dependency used by this workspace
+| Crate | Role |
+| --- | --- |
+| `src/` | Executable entry point |
+| `ozone-buffer/` | Text storage, positions, edits, undo/redo, dirty state, persistence |
+| `ozone-editor/` | Workspace, views, commands, keymaps, events, UI intents |
+| `ozone-gui/` | Aurea-based drawing, overlays, input routing, window integration |
+| `ozone-syntax/` | Lightweight line-scanner syntax highlighting |
+| `ozone-config/` | Configuration loading and validation |
+| `ozone-term/` | Terminal grid and PTY support (in progress) |
+| `themes/` | Bundled color themes |
+| `packaging/` | Platform packaging metadata and icons |
 
 ## Notes
 
