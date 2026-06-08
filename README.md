@@ -1,102 +1,115 @@
 # Ozone
 
-Ozone is a small editor experiment written in Rust. It uses the local Aurea GUI
-library, keeps editing state in explicit buffer/editor crates, and starts as a
-plain non-modal text editor rather than a Vim clone.
+Ozone is a small Rust editor built around explicit editor, buffer, syntax, and
+GUI crates. It is a plain text editor first: no Vim-style modes, no hidden
+global editor state, and no large plugin runtime while the architecture is still
+settling.
 
-![Ozone editor screenshot](docs/screenshots/ozone-editor.svg)
+![Ozone editor screenshot](assets/screenshots/ozone-editor.png)
 
 ## Current Shape
 
-Ozone is early, but the GUI path is usable enough for scratch editing and small
-files:
+Ozone is early, but the desktop GUI path is usable for scratch editing,
+navigation, and small project work:
 
-- editable text buffers
-- file opening from the command line
-- dirty buffer tracking in the title and status line
-- line numbers
-- Catppuccin Mocha style colors
-- basic Rust, Markdown, TOML, Oxygen, and plain-text syntax scanning
-- undo, redo, save, cursor movement, word movement, and mouse-wheel scrolling
+- scratch-buffer launch screen with a sample of the active keymap
+- editable text buffers with undo, redo, dirty tracking, and save/save-all
+- command-line file opening
+- workspace file picker, open-buffer picker, and file tree
+- in-buffer search/replace and literal workspace search
+- line numbers, cursor-line highlight, selections, scrollbars, and mouse-wheel scrolling
+- pane splits, pane focus movement, and buffer cycling
+- syntax scanning for Rust, Markdown, TOML, Oxygen, and plain text
+- PNG/JPEG image preview buffers
+- configurable themes, keymaps, filetype defaults, modifier maps, and autocommands
+
+Some pieces are intentionally still thin. Terminal buffers currently render a
+placeholder surface, and LSP configuration is parsed but the LSP runtime remains
+deferred.
 
 ## Build
 
-Ozone expects Aurea next to this repository:
+Ozone is a Cargo workspace. The local Aurea GUI library is expected at
+`./aurea/crates/aurea`, which is how the workspace dependency is wired today.
 
-```text
-Repos/
-  aurea/
-  ozone/
-```
+Build the editor from the repository root:
 
-Build the editor from the Ozone repository root:
-
-```powershell
+```sh
 cargo build --release
 ```
 
 For faster development checks:
 
-```powershell
+```sh
 cargo check
 ```
 
 ## Run
 
-Open an empty scratch buffer:
+Open the welcome/scratch buffer:
 
-```powershell
-.\target\release\ozone.exe
+```sh
+cargo run --release
 ```
 
 Open a file:
 
-```powershell
-.\target\release\ozone.exe PLAN.md
+```sh
+cargo run --release -- README.md
 ```
 
-The debug binary also works, but most manual UI testing should use the release
-binary so performance and memory behavior are close to the real path.
+The debug binary works, but manual UI testing is usually more representative
+with the release binary.
 
-## How To Use
+## Editing
 
-Ozone is currently always in `EDIT` mode. Click the window if it does not have
-focus, then type normally. There is no insert/normal mode switch yet.
-
-The status line shows:
+Ozone is always in edit mode. Click the window if focus is elsewhere, then type
+normally. The status line shows the active buffer, dirty marker, cursor position,
+pane count, and active modifier state.
 
 ```text
-EDIT  file-name*    line:column  UTF-8
+*scratch*    1:1    pane 1/1
 ```
 
-The `*` means the active buffer has unsaved changes. The window title also shows
-the dirty marker.
+An asterisk after the buffer name means the buffer has unsaved changes. The
+window title also carries the dirty marker for file buffers.
 
-## Keymaps
+## Default Keys
 
 | Key | Action |
 | --- | --- |
 | Text input | Insert text at cursor |
-| `Enter` | Insert newline |
-| `Tab` | Insert four spaces |
-| `Backspace` | Delete character before cursor |
-| `Delete` | Delete character after cursor |
-| `Left` / `Right` | Move one character |
-| `Up` / `Down` | Move one line |
+| `Enter` | Insert newline with indentation |
+| `Tab` | Insert one configured indent unit |
+| `Backspace` / `Delete` | Delete backward / forward |
+| Arrow keys | Move cursor |
 | `Home` / `End` | Move to start/end of line |
 | `PageUp` / `PageDown` | Move and scroll one page |
 | `Ctrl+Left` / `Ctrl+Right` | Move by word |
 | `Ctrl+Home` / `Ctrl+End` | Move to start/end of file |
-| `Ctrl+A` | Move to line start |
-| `Ctrl+E` | Move to line end |
-| `Ctrl+B` | Move left |
-| `Ctrl+F` | Move right |
-| `Ctrl+P` | Move up |
-| `Ctrl+N` | Move down |
-| `Ctrl+S` | Save current buffer |
-| `Ctrl+Z` | Undo |
-| `Ctrl+Y` | Redo |
+| `Ctrl+A` / `Ctrl+E` | Move to start/end of line |
+| `Ctrl+B` / `Ctrl+F` / `Ctrl+P` / `Ctrl+N` | Emacs-style left/right/up/down |
+| `Ctrl+S` / `Cmd+S` | Save current buffer |
+| `Ctrl+K Ctrl+S` | Save all buffers |
+| `Ctrl+Z` / `Cmd+Z` | Undo |
+| `Ctrl+Y` / `Cmd+Shift+Z` | Redo |
+| `Ctrl+P` / `Cmd+P` | Open workspace file picker |
+| `Ctrl+X B` | Open buffer picker |
+| `Meta+X` or `Ctrl+Shift+P` / `Cmd+Shift+P` | Open command palette |
+| `Ctrl+Shift+E` / `Cmd+Shift+E` | Open file tree |
+| `Meta+F` | Search current buffer |
+| `Meta+H` | Search and replace current buffer |
+| `Ctrl+Shift+F` / `Cmd+Shift+F` | Search workspace |
+| `Meta+G` | Go to line |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous buffer |
+| `Ctrl+Shift+Right` / `Ctrl+Shift+Down` | Split pane right / down |
+| `Ctrl+Shift+W` | Close active pane |
+| `Ctrl+Meta+Arrow` | Focus pane in that direction |
+| `Ctrl+-` / `Ctrl+=` | Jump back / forward |
 | Mouse wheel | Scroll |
+
+On macOS, `Cmd` maps to Ozone's `super` modifier. The `control`, `meta`, and
+`super` mappings can be changed in config.
 
 ## Configuration
 
@@ -105,41 +118,64 @@ Ozone loads user configuration from:
 - Windows: `%APPDATA%\ozone\config.toml`
 - Linux/macOS: `$XDG_CONFIG_HOME/ozone/config.toml`, or `~/.config/ozone/config.toml`
 
-Example:
+Every field is optional. Missing or malformed values fall back to defaults
+instead of preventing the editor from starting.
 
 ```toml
 [editor]
 font = "Consolas"
-font_size = 14
+font_size = 13
 line_height = 1.4
 tab_width = 4
 soft_tabs = true
-line_numbers = "absolute"
+line_numbers = "relative"
 cursor_style = "bar"
 scroll_off = 8
 word_wrap = false
 trim_trailing_whitespace = true
 auto_save = false
+auto_format = false
+jump_list_size = 100
 
 [theme]
-name = "catppuccin-mocha"
+name = "brewery-stout"
+
+[ui]
+mouse = false
+
+[[keymap]]
+keys = "ctrl+shift+p"
+command = "command.palette"
+
+[[filetype]]
+name = "markdown"
+word_wrap = true
+tab_width = 2
+
+[[autocmd]]
+event = "buffer.pre-save"
+pattern = "*"
+command = "edit.trim-trailing-whitespace"
 ```
 
-Malformed or missing fields fall back to defaults instead of crashing the
-editor.
+Bundled themes currently include `brewery-stout`, `brewery-wine`, and
+`catppuccin-mocha`. A theme can also be selected by path.
 
 ## Workspace Layout
 
-- `src/`: the `ozone` executable entry point
-- `ozone-buffer/`: text storage, positions, edits, undo/redo, dirty state, and file persistence
-- `ozone-editor/`: workspace state, views, commands, and key-facing editor behavior
-- `ozone-gui/`: Aurea-based drawing and input routing
+- `src/`: executable entry point
+- `ozone-buffer/`: text storage, positions, edits, undo/redo, dirty state, and persistence
+- `ozone-editor/`: workspace state, views, commands, keymaps, events, and UI intents
+- `ozone-gui/`: Aurea-based drawing, overlays, input routing, and window integration
 - `ozone-syntax/`: lightweight fallback syntax scanning
-- `ozone-config/`: hand-parsed TOML configuration
-- `oxygen/`: the older Oxygen language work kept in-tree for now
+- `ozone-config/`: hand-shaped configuration loading and validation
+- `ozone-term/`: terminal grid and PTY support under construction
+- `themes/`: bundled color themes
+- `packaging/`: platform packaging metadata and icons
+- `aurea/`: local GUI toolkit dependency used by this workspace
 
 ## Notes
 
-This is not meant to depend on a pile of heavy crates. The config parser uses
-`toml`, but Ozone avoids Serde-derived domain models and keeps editor behavior
-explicit while the architecture settles.
+Ozone avoids a large dependency stack while the editor model is still in motion.
+The config parser uses `toml`, but editor behavior stays in explicit Rust domain
+types instead of generated Serde models.
