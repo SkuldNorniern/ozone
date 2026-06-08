@@ -9,316 +9,14 @@
 //! stroke at a time together with the strokes already pending; it returns
 //! [`KeymapOutcome::Pending`] while a longer binding could still match, so the
 //! caller holds the pending prefix between key events.
-//!
-//! `KeyStroke::key` is a normalized lowercase token (`"a"`, `"enter"`,
-//! `"right"`, `"f5"`, `"1"`, `"space"`). The GUI maps its platform key codes to
-//! these tokens; this crate stays free of any windowing dependency.
 
 use ozone_config::KeymapConfig;
 
-/// A physical modifier key as the platform reports it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PhysicalModifier {
-    Ctrl,
-    Alt,
-    Shift,
-    Meta, // the OS "super" key: Windows key / Command
-}
+mod keys;
+mod stroke;
 
-/// Physical modifier state for a single key event.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct PhysicalMods {
-    pub ctrl: bool,
-    pub alt: bool,
-    pub shift: bool,
-    pub meta: bool,
-}
-
-impl PhysicalMods {
-    pub fn new(ctrl: bool, alt: bool, shift: bool, meta: bool) -> Self {
-        Self {
-            ctrl,
-            alt,
-            shift,
-            meta,
-        }
-    }
-    fn has(&self, m: PhysicalModifier) -> bool {
-        match m {
-            PhysicalModifier::Ctrl => self.ctrl,
-            PhysicalModifier::Alt => self.alt,
-            PhysicalModifier::Shift => self.shift,
-            PhysicalModifier::Meta => self.meta,
-        }
-    }
-}
-
-fn parse_physical_modifier(s: &str) -> Option<PhysicalModifier> {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "ctrl" | "control" => Some(PhysicalModifier::Ctrl),
-        "alt" | "option" => Some(PhysicalModifier::Alt),
-        "shift" => Some(PhysicalModifier::Shift),
-        "meta" | "super" | "cmd" | "command" | "win" => Some(PhysicalModifier::Meta),
-        _ => None,
-    }
-}
-
-/// Maps Emacs-style logical modifiers to physical keys. Editable per platform.
-///
-/// Defaults: Control→Ctrl (Cmd on macOS), Meta→Alt, Super→the OS Win/Cmd key.
-#[derive(Debug, Clone, Copy)]
-pub struct ModifierMap {
-    pub control: PhysicalModifier,
-    pub meta: PhysicalModifier,
-    pub super_: PhysicalModifier,
-}
-
-impl ModifierMap {
-    pub fn platform_default() -> Self {
-        // Uniform on all platforms: physical Ctrl = logical control,
-        // Option/Alt = logical meta, Cmd/Win = logical super.
-        // macOS-specific GUI shortcuts are bound to `super+` in the keymap
-        // so Cmd+S / Cmd+Z work as expected while Ctrl stays the editor key.
-        Self {
-            control: PhysicalModifier::Ctrl,
-            meta: PhysicalModifier::Alt,
-            super_: PhysicalModifier::Meta,
-        }
-    }
-
-    /// Override individual logical→physical mappings from config tokens.
-    pub fn with_overrides(
-        mut self,
-        control: Option<&str>,
-        meta: Option<&str>,
-        super_: Option<&str>,
-    ) -> Self {
-        if let Some(p) = control.and_then(parse_physical_modifier) {
-            self.control = p;
-        }
-        if let Some(p) = meta.and_then(parse_physical_modifier) {
-            self.meta = p;
-        }
-        if let Some(p) = super_.and_then(parse_physical_modifier) {
-            self.super_ = p;
-        }
-        self
-    }
-}
-
-impl Default for ModifierMap {
-    fn default() -> Self {
-        Self::platform_default()
-    }
-}
-
-/// The non-modifier key in a stroke — a structured value, not a raw string.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Key {
-    /// A printable key, stored lowercase (letters, digits, symbols).
-    Char(char),
-    Space,
-    Enter,
-    Escape,
-    Tab,
-    Backspace,
-    Delete,
-    Insert,
-    Home,
-    End,
-    PageUp,
-    PageDown,
-    Up,
-    Down,
-    Left,
-    Right,
-    /// Function key F1..=F12.
-    F(u8),
-}
-
-impl Key {
-    /// Parse a key token (`"enter"`, `"f5"`, `"a"`, `"pgdn"`). `None` if unknown.
-    pub fn parse(token: &str) -> Option<Self> {
-        let t = token.trim().to_ascii_lowercase();
-        Some(match t.as_str() {
-            "space" | "spc" => Key::Space,
-            "enter" | "return" => Key::Enter,
-            "escape" | "esc" => Key::Escape,
-            "tab" => Key::Tab,
-            "backspace" | "bs" => Key::Backspace,
-            "delete" | "del" => Key::Delete,
-            "insert" | "ins" => Key::Insert,
-            "home" => Key::Home,
-            "end" => Key::End,
-            "pageup" | "pgup" => Key::PageUp,
-            "pagedown" | "pgdn" | "pgdown" => Key::PageDown,
-            "up" => Key::Up,
-            "down" => Key::Down,
-            "left" => Key::Left,
-            "right" => Key::Right,
-            _ => {
-                // F-key, e.g. "f5"
-                if let Some(num) = t.strip_prefix('f').and_then(|n| n.parse::<u8>().ok())
-                    && (1..=12).contains(&num)
-                {
-                    return Some(Key::F(num));
-                }
-                // Single printable char.
-                let mut chars = t.chars();
-                let c = chars.next()?;
-                if chars.next().is_none() {
-                    Key::Char(c)
-                } else {
-                    return None;
-                }
-            }
-        })
-    }
-
-    /// Human-readable label (for which-key / chord display).
-    pub fn label(&self) -> String {
-        match self {
-            Key::Char(c) => c.to_uppercase().to_string(),
-            Key::Space => "Space".into(),
-            Key::Enter => "Enter".into(),
-            Key::Escape => "Esc".into(),
-            Key::Tab => "Tab".into(),
-            Key::Backspace => "Backspace".into(),
-            Key::Delete => "Del".into(),
-            Key::Insert => "Ins".into(),
-            Key::Home => "Home".into(),
-            Key::End => "End".into(),
-            Key::PageUp => "PgUp".into(),
-            Key::PageDown => "PgDn".into(),
-            Key::Up => "Up".into(),
-            Key::Down => "Down".into(),
-            Key::Left => "Left".into(),
-            Key::Right => "Right".into(),
-            Key::F(n) => format!("F{n}"),
-        }
-    }
-}
-
-/// A single chorded key press: Emacs-style *logical* modifiers + a [`Key`].
-/// What physical key each modifier means is resolved through a [`ModifierMap`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct KeyStroke {
-    pub control: bool,
-    pub meta: bool,
-    pub super_: bool,
-    pub shift: bool,
-    pub key: Key,
-}
-
-impl KeyStroke {
-    /// A modifier-free stroke for `key`.
-    pub fn key(key: Key) -> Self {
-        Self {
-            control: false,
-            meta: false,
-            super_: false,
-            shift: false,
-            key,
-        }
-    }
-
-    pub fn with_control(mut self) -> Self {
-        self.control = true;
-        self
-    }
-    pub fn with_meta(mut self) -> Self {
-        self.meta = true;
-        self
-    }
-    pub fn with_super(mut self) -> Self {
-        self.super_ = true;
-        self
-    }
-    pub fn with_shift(mut self) -> Self {
-        self.shift = true;
-        self
-    }
-
-    /// Build a logical stroke from a physical key event via the modifier map.
-    pub fn from_physical(phys: PhysicalMods, key: Key, map: &ModifierMap) -> Self {
-        Self {
-            control: phys.has(map.control),
-            meta: phys.has(map.meta),
-            super_: phys.has(map.super_),
-            shift: phys.shift,
-            key,
-        }
-    }
-
-    /// Parse one stroke token like `"ctrl+shift+f"` or `"meta+x"`. Modifier
-    /// tokens: `ctrl`/`control`, `meta`/`alt`/`option`, `super`/`cmd`/`win`,
-    /// `shift`. Returns `None` if there is no recognized key part.
-    pub fn parse(token: &str) -> Option<Self> {
-        let mut control = false;
-        let mut meta = false;
-        let mut super_ = false;
-        let mut shift = false;
-        let mut key = None;
-        for part in token.split('+') {
-            let part = part.trim();
-            if part.is_empty() {
-                continue;
-            }
-            match part.to_ascii_lowercase().as_str() {
-                "ctrl" | "control" => control = true,
-                "meta" | "alt" | "option" => meta = true,
-                "super" | "cmd" | "command" | "win" => super_ = true,
-                "shift" => shift = true,
-                other => key = Key::parse(other),
-            }
-        }
-        Some(Self {
-            control,
-            meta,
-            super_,
-            shift,
-            key: key?,
-        })
-    }
-}
-
-/// Human-readable label for a single stroke (`"C-x"`, `"M-g"`, `"Enter"`),
-/// Emacs-style modifier prefixes. For which-key / chord display.
-pub fn stroke_label(stroke: &KeyStroke) -> String {
-    let mut s = String::new();
-    if stroke.control {
-        s.push_str("C-");
-    }
-    if stroke.meta {
-        s.push_str("M-");
-    }
-    if stroke.super_ {
-        s.push_str("s-");
-    }
-    if stroke.shift {
-        s.push_str("S-");
-    }
-    s.push_str(&stroke.key.label());
-    s
-}
-
-/// Human-readable label for a full chord (`"C-K C-S"`).
-pub fn chord_label(chord: &[KeyStroke]) -> String {
-    chord.iter().map(stroke_label).collect::<Vec<_>>().join(" ")
-}
-
-/// Parse a full chord string like `"ctrl+k ctrl+s"` into its strokes.
-pub fn parse_chord(keys: &str) -> Option<Vec<KeyStroke>> {
-    let strokes: Vec<KeyStroke> = keys
-        .split_whitespace()
-        .filter_map(KeyStroke::parse)
-        .collect();
-    if strokes.is_empty() {
-        None
-    } else {
-        Some(strokes)
-    }
-}
+pub use keys::{ModifierMap, PhysicalModifier, PhysicalMods};
+pub use stroke::{Key, KeyStroke, chord_label, parse_chord, stroke_label};
 
 /// Priority layer a binding belongs to (higher wins on exact-match ties).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -355,13 +53,10 @@ pub struct Keymap {
 
 impl Keymap {
     pub fn new() -> Self {
-        Self {
-            bindings: Vec::new(),
-        }
+        Self { bindings: Vec::new() }
     }
 
-    /// The shipped default layer. These are the keys Ozone binds out of the box;
-    /// user `[[keymap]]` entries layer on top and can override any of them.
+    /// The shipped default layer.
     pub fn with_defaults() -> Self {
         let mut km = Self::new();
         let defaults: &[(&str, &str)] = &[
@@ -371,7 +66,7 @@ impl Keymap {
             ("ctrl+y", "edit.redo"),
             ("ctrl+p", "file.picker"),
             ("ctrl+shift+e", "file.tree"),
-            ("meta+x", "command.palette"), // Emacs M-x
+            ("meta+x", "command.palette"),
             ("ctrl+shift+p", "command.palette"),
             ("ctrl+tab", "buffer.next"),
             ("ctrl+shift+tab", "buffer.previous"),
@@ -382,8 +77,6 @@ impl Keymap {
             ("ctrl+=", "view.jump-forward"),
             ("ctrl+k ctrl+s", "file.save-all"),
             // ── Super+ aliases (Cmd on macOS, Win on Linux) ────────────────────
-            // These provide the platform-native feel: Cmd+S saves, Cmd+Z undoes,
-            // Cmd+P opens the file picker, etc., without disturbing Ctrl bindings.
             ("super+s", "file.save"),
             ("super+z", "edit.undo"),
             ("super+shift+z", "edit.redo"),
@@ -453,11 +146,7 @@ impl Keymap {
             let Some(chord) = parse_chord(&cfg.keys) else {
                 continue;
             };
-            let layer = if cfg.filetype.is_some() {
-                Layer::Filetype
-            } else {
-                Layer::Global
-            };
+            let layer = if cfg.filetype.is_some() { Layer::Filetype } else { Layer::Global };
             self.bindings.push(Binding {
                 chord,
                 command: cfg.command.clone(),
@@ -467,7 +156,6 @@ impl Keymap {
         }
     }
 
-    /// Whether this binding applies given the active filetype.
     fn applies(binding: &Binding, filetype: Option<&str>) -> bool {
         match &binding.filetype {
             None => true,
@@ -476,19 +164,12 @@ impl Keymap {
     }
 
     /// Possible continuations of a pending chord prefix, for a which-key popup.
-    ///
-    /// Given the strokes already typed, returns one entry per *distinct next
-    /// stroke* that could extend `pending` into a binding: the next stroke's
-    /// label and either the command it runs (when that stroke completes a
-    /// binding) or `+prefix` (when it only leads to longer bindings). Highest
-    /// layer wins on ties; results are sorted by label for a stable display.
     pub fn continuations(
         &self,
         pending: &[KeyStroke],
         filetype: Option<&str>,
     ) -> Vec<(String, String)> {
         use std::collections::BTreeMap;
-        // next-stroke label -> (best layer seen, description)
         let mut next: BTreeMap<String, (Layer, String)> = BTreeMap::new();
         for b in &self.bindings {
             if !Self::applies(b, filetype) || b.chord.len() <= pending.len() {
@@ -499,8 +180,6 @@ impl Keymap {
             }
             let stroke = &b.chord[pending.len()];
             let label = stroke_label(stroke);
-            // A binding that ends right here names a command; a longer one is a
-            // further prefix (group).
             let desc = if b.chord.len() == pending.len() + 1 {
                 b.command.clone()
             } else {
@@ -508,7 +187,6 @@ impl Keymap {
             };
             next.entry(label)
                 .and_modify(|(layer, d)| {
-                    // Prefer a concrete command over a group, then higher layer.
                     if b.layer > *layer || (*d == "+prefix" && desc != "+prefix") {
                         *layer = b.layer;
                         *d = desc.clone();
@@ -520,9 +198,6 @@ impl Keymap {
     }
 
     /// A stable sample of active bindings for help/welcome surfaces.
-    ///
-    /// User layers override defaults for the same chord; filetype-scoped
-    /// bindings are included only when they apply to the current buffer.
     pub fn display_bindings(&self, filetype: Option<&str>, limit: usize) -> Vec<(String, String)> {
         let mut rows: Vec<(Vec<KeyStroke>, Layer, String)> = Vec::new();
         for binding in &self.bindings {
@@ -539,11 +214,7 @@ impl Keymap {
                 }
                 continue;
             }
-            rows.push((
-                binding.chord.clone(),
-                binding.layer,
-                binding.command.clone(),
-            ));
+            rows.push((binding.chord.clone(), binding.layer, binding.command.clone()));
         }
         rows.into_iter()
             .take(limit)
@@ -561,7 +232,6 @@ impl Keymap {
         let mut seq: Vec<KeyStroke> = pending.to_vec();
         seq.push(stroke.clone());
 
-        // A longer binding could still match → wait for more input.
         let has_longer = self.bindings.iter().any(|b| {
             Self::applies(b, filetype)
                 && b.chord.len() > seq.len()
@@ -571,7 +241,6 @@ impl Keymap {
             return KeymapOutcome::Pending;
         }
 
-        // Exact match — pick the highest-priority layer.
         let best = self
             .bindings
             .iter()
@@ -597,11 +266,10 @@ mod tests {
         let k = KeyStroke::parse("ctrl+shift+f").unwrap();
         assert!(k.control && k.shift && !k.meta && !k.super_);
         assert_eq!(k.key, Key::Char('f'));
-        assert!(KeyStroke::parse("ctrl").is_none()); // no key part
+        assert!(KeyStroke::parse("ctrl").is_none());
         assert_eq!(KeyStroke::parse("ctrl+k ctrl+s").is_none(), false);
         assert_eq!(Key::parse("f5"), Some(Key::F(5)));
         assert_eq!(Key::parse("pgdn"), Some(Key::PageDown));
-        // option and meta are the same logical modifier (Emacs M-)
         assert_eq!(KeyStroke::parse("option+x"), KeyStroke::parse("meta+x"));
         assert!(KeyStroke::parse("super+p").unwrap().super_);
     }
@@ -613,14 +281,12 @@ mod tests {
             meta: PhysicalModifier::Alt,
             super_: PhysicalModifier::Meta,
         };
-        // physical Ctrl+s -> logical control
         let stroke = KeyStroke::from_physical(
             PhysicalMods::new(true, false, false, false),
             Key::Char('s'),
             &map,
         );
         assert_eq!(stroke, s('s').with_control());
-        // physical Meta+x -> logical meta (M-x)
         let mx = KeyStroke::from_physical(
             PhysicalMods::new(false, true, false, false),
             Key::Char('x'),
@@ -631,9 +297,7 @@ mod tests {
 
     #[test]
     fn modifier_map_override_swaps_physical_key() {
-        // Make logical Control map to the OS Meta/Cmd key.
         let map = ModifierMap::platform_default().with_overrides(Some("meta"), None, None);
-        // physical Meta(cmd)+s now yields logical control
         let stroke = KeyStroke::from_physical(
             PhysicalMods::new(false, false, false, true),
             Key::Char('s'),
@@ -674,16 +338,13 @@ mod tests {
     fn chord_pends_then_executes() {
         let mut km = Keymap::new();
         km.bind_default("ctrl+k ctrl+s", "file.save-all");
-
         let first = s('k').with_control();
         assert_eq!(km.resolve(&[], &first, None), KeymapOutcome::Pending);
-
         let pending = vec![first];
         assert_eq!(
             km.resolve(&pending, &s('s').with_control(), None),
             KeymapOutcome::Execute("file.save-all".to_string())
         );
-        // Wrong continuation cancels the chord.
         assert_eq!(
             km.resolve(&pending, &s('x').with_control(), None),
             KeymapOutcome::NoMatch
@@ -749,15 +410,12 @@ mod tests {
         let mut km = Keymap::new();
         km.bind_default("ctrl+k ctrl+s", "file.save-all");
         km.bind_default("ctrl+k ctrl+w", "pane.close");
-        km.bind_default("ctrl+k r", "file.reload"); // 2-stroke group? no, completes
-        // Pending C-k: three next strokes, each completing a binding.
+        km.bind_default("ctrl+k r", "file.reload");
         let pending = vec![s('k').with_control()];
         let cont = km.continuations(&pending, None);
         assert_eq!(cont.len(), 3);
-        // Key::label uppercases printable chars (used for chord display).
         assert!(cont.iter().any(|(k, c)| k == "C-S" && c == "file.save-all"));
         assert!(cont.iter().any(|(k, c)| k == "C-W" && c == "pane.close"));
-        // No pending prefix and an empty match → empty.
         assert!(km.continuations(&[s('z').with_control()], None).is_empty());
         assert_eq!(stroke_label(&s('x').with_control()), "C-X");
         assert_eq!(
@@ -788,9 +446,6 @@ mod tests {
             km.resolve(&[], &stroke, Some("rust")),
             KeymapOutcome::Execute("lsp.format".to_string())
         );
-        assert_eq!(
-            km.resolve(&[], &stroke, Some("toml")),
-            KeymapOutcome::NoMatch
-        );
+        assert_eq!(km.resolve(&[], &stroke, Some("toml")), KeymapOutcome::NoMatch);
     }
 }
