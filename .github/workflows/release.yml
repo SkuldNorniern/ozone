@@ -79,7 +79,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y libvulkan-dev libxcb-xfixes0-dev libxcb-shape0-dev \
-            libxkbcommon-dev pkg-config libegl-mesa0
+            libxkbcommon-dev pkg-config libegl-mesa0 libgtk-3-dev
 
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
