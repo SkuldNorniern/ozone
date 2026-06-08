@@ -3,6 +3,7 @@ pub mod autocmd;
 pub mod brackets;
 pub mod commands;
 pub mod decoration;
+pub mod diagnostics;
 pub mod events;
 pub mod fold;
 pub mod keymap;
@@ -23,6 +24,7 @@ pub use decoration::{
     BRACKET_NAMESPACE, Decoration, DecorationId, DecorationKind, DecorationStore, Gravity, HlRole,
     NamespaceId, VirtualPos,
 };
+pub use diagnostics::{Diagnostic, Severity};
 pub use events::{EditorEvent, EventKind};
 pub use keymap::{
     Key, KeyStroke, Keymap, KeymapOutcome, ModifierMap, PhysicalModifier, PhysicalMods,

@@ -24,6 +24,7 @@ use std::path::PathBuf;
 use ozone_buffer::{BufferId, Pos, Span};
 
 use crate::decoration::{Decoration, DecorationId, DecorationKind, Gravity, NamespaceId};
+use crate::diagnostics::Diagnostic;
 use crate::events::EditorEvent;
 use crate::options::OptionValue;
 use crate::pane::{FocusDirection, SplitAxis};
@@ -362,6 +363,15 @@ impl<'a> EditorApi<'a> {
             .into_iter()
             .cloned()
             .collect()
+    }
+
+    /// Publish diagnostics for the active buffer into `namespace`, replacing any
+    /// prior set. The LSP-/linter-facing entry point; renders as underlines,
+    /// gutter signs, and end-of-line messages via the decoration store.
+    pub fn set_diagnostics(&mut self, namespace: NamespaceId, diags: &[Diagnostic]) {
+        if let Some(buffer) = self.active_buffer() {
+            self.ws.publish_diagnostics(buffer, namespace, diags);
+        }
     }
 
     // --- integration ---

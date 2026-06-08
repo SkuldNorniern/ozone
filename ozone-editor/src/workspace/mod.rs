@@ -176,6 +176,19 @@ impl Workspace {
         &mut self.decorations
     }
 
+    /// Publish `diags` for `buffer_id` into `namespace`, replacing any prior set
+    /// (see [`crate::diagnostics::publish`]). No-op if the buffer is gone.
+    pub fn publish_diagnostics(
+        &mut self,
+        buffer_id: BufferId,
+        namespace: crate::decoration::NamespaceId,
+        diags: &[crate::diagnostics::Diagnostic],
+    ) {
+        if let Some(buf) = self.buffers.get(&buffer_id) {
+            crate::diagnostics::publish(&mut self.decorations, buf, buffer_id, namespace, diags);
+        }
+    }
+
     pub fn drain_events(&mut self) -> Vec<EditorEvent> {
         self.events.drain(..).collect()
     }
