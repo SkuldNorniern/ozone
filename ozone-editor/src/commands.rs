@@ -136,8 +136,16 @@ impl Default for CommandRegistry {
     }
 }
 
-/// Register all Phase-0 built-in commands.
+/// Register all built-in commands.
 pub fn register_defaults(reg: &mut CommandRegistry) {
+    register_cursor_commands(reg);
+    register_edit_commands(reg);
+    register_file_commands(reg);
+    register_view_commands(reg);
+    register_pane_commands(reg);
+}
+
+fn register_cursor_commands(reg: &mut CommandRegistry) {
     // --- cursor movement ---
 
     reg.register(
@@ -292,7 +300,9 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
         view.col_memory = 0;
         emit_cursor_moved(ctx, old);
     });
+}
 
+fn register_edit_commands(reg: &mut CommandRegistry) {
     // --- editing ---
 
     reg.register(
@@ -477,7 +487,9 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
             }
         },
     );
+}
 
+fn register_file_commands(reg: &mut CommandRegistry) {
     // --- file ---
 
     reg.register("file.save", "Save the current buffer", |ctx| {
@@ -701,7 +713,9 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
             );
         },
     );
+}
 
+fn register_view_commands(reg: &mut CommandRegistry) {
     // --- word movement ---
 
     reg.register(
@@ -780,7 +794,9 @@ pub fn register_defaults(reg: &mut CommandRegistry) {
         view.scroll_line = view.scroll_line.saturating_sub(1);
         view.scroll_y = 0.0;
     });
+}
 
+fn register_pane_commands(reg: &mut CommandRegistry) {
     // --- panes ---
 
     reg.register(

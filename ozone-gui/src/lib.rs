@@ -128,6 +128,8 @@ impl OzoneGui {
         let raw_canvas = Canvas::new(W, H, RendererBackend::Cpu)?;
         let workspace_for_draw = self.workspace.clone();
         let config_for_draw = self.config.clone();
+        let commands_for_draw = self.commands.clone();
+        let keymap_for_draw = self.keymap.clone();
         let palette_for_draw = palette.clone();
         let search_for_draw = search.clone();
         let minibuffer_for_draw = minibuffer.clone();
@@ -144,10 +146,12 @@ impl OzoneGui {
             // Repaint callback: terminal colour grids + PTY sizing are driven
             // by the explicit redraw in the run loop, so none here.
             let mut scratch_char_w = 0.0;
+            let welcome_bindings = welcome_keymap_rows(&keymap_for_draw, &commands_for_draw);
             draw_editor(
                 ctx,
                 &mut ws,
                 &config_for_draw,
+                &welcome_bindings,
                 srch.as_ref(),
                 &TermCells::new(),
                 &ImageCache::new(),
@@ -183,12 +187,14 @@ impl OzoneGui {
             let mut canvas = lock(canvas_arc.as_ref());
             let mut ws = lock(self.workspace.as_ref());
             let config = self.config.clone();
+            let welcome_bindings = welcome_keymap_rows(&self.keymap, &self.commands);
             let mut scratch_char_w = 0.0;
             canvas.draw(|ctx| {
                 draw_editor(
                     ctx,
                     &mut ws,
                     &config,
+                    &welcome_bindings,
                     None,
                     &TermCells::new(),
                     &ImageCache::new(),
@@ -450,11 +456,13 @@ impl OzoneGui {
                 } else {
                     (String::new(), Vec::new())
                 };
+                let welcome_bindings = welcome_keymap_rows(&state.keymap, &state.commands);
                 canvas.draw(|ctx| {
                     draw_editor(
                         ctx,
                         &mut ws,
                         &config,
+                        &welcome_bindings,
                         srch.as_ref(),
                         &state.terms.cells,
                         &state.images,
@@ -491,6 +499,14 @@ impl OzoneGui {
 
         Ok(())
     }
+}
+
+fn welcome_keymap_rows(keymap: &Keymap, commands: &CommandRegistry) -> Vec<(String, String)> {
+    keymap
+        .display_bindings(None, 6)
+        .into_iter()
+        .map(|(key, command)| (key, commands.display_name(&command)))
+        .collect()
 }
 
 fn window_title(ws: &Workspace) -> String {

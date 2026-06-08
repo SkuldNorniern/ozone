@@ -302,6 +302,11 @@ pub fn stroke_label(stroke: &KeyStroke) -> String {
     s
 }
 
+/// Human-readable label for a full chord (`"C-K C-S"`).
+pub fn chord_label(chord: &[KeyStroke]) -> String {
+    chord.iter().map(stroke_label).collect::<Vec<_>>().join(" ")
+}
+
 /// Parse a full chord string like `"ctrl+k ctrl+s"` into its strokes.
 pub fn parse_chord(keys: &str) -> Option<Vec<KeyStroke>> {
     let strokes: Vec<KeyStroke> = keys
@@ -366,7 +371,7 @@ impl Keymap {
             ("ctrl+y", "edit.redo"),
             ("ctrl+p", "file.picker"),
             ("ctrl+shift+e", "file.tree"),
-            ("alt+x", "command.palette"), // Emacs M-x
+            ("meta+x", "command.palette"), // Emacs M-x
             ("ctrl+shift+p", "command.palette"),
             ("ctrl+tab", "buffer.next"),
             ("ctrl+shift+tab", "buffer.previous"),
@@ -392,10 +397,10 @@ impl Keymap {
             ("ctrl+shift+right", "pane.split-right"),
             ("ctrl+shift+down", "pane.split-down"),
             ("ctrl+shift+w", "pane.close"),
-            ("ctrl+alt+right", "pane.focus-right"),
-            ("ctrl+alt+left", "pane.focus-left"),
-            ("ctrl+alt+down", "pane.focus-down"),
-            ("ctrl+alt+up", "pane.focus-up"),
+            ("ctrl+meta+right", "pane.focus-right"),
+            ("ctrl+meta+left", "pane.focus-left"),
+            ("ctrl+meta+down", "pane.focus-down"),
+            ("ctrl+meta+up", "pane.focus-up"),
             // ── Emacs-style movement (Ctrl) ────────────────────────────────────
             ("ctrl+a", "cursor.line-start"),
             ("ctrl+e", "cursor.line-end"),
@@ -514,6 +519,38 @@ impl Keymap {
         next.into_iter().map(|(k, (_, d))| (k, d)).collect()
     }
 
+    /// A stable sample of active bindings for help/welcome surfaces.
+    ///
+    /// User layers override defaults for the same chord; filetype-scoped
+    /// bindings are included only when they apply to the current buffer.
+    pub fn display_bindings(&self, filetype: Option<&str>, limit: usize) -> Vec<(String, String)> {
+        let mut rows: Vec<(Vec<KeyStroke>, Layer, String)> = Vec::new();
+        for binding in &self.bindings {
+            if !Self::applies(binding, filetype) {
+                continue;
+            }
+            if let Some((_, layer, command)) = rows
+                .iter_mut()
+                .find(|(chord, _, _)| chord.as_slice() == binding.chord.as_slice())
+            {
+                if binding.layer >= *layer {
+                    *layer = binding.layer;
+                    *command = binding.command.clone();
+                }
+                continue;
+            }
+            rows.push((
+                binding.chord.clone(),
+                binding.layer,
+                binding.command.clone(),
+            ));
+        }
+        rows.into_iter()
+            .take(limit)
+            .map(|(chord, _, command)| (chord_label(&chord), command))
+            .collect()
+    }
+
     /// Resolve `pending + stroke` against the keymap for the active filetype.
     pub fn resolve(
         &self,
@@ -564,8 +601,8 @@ mod tests {
         assert_eq!(KeyStroke::parse("ctrl+k ctrl+s").is_none(), false);
         assert_eq!(Key::parse("f5"), Some(Key::F(5)));
         assert_eq!(Key::parse("pgdn"), Some(Key::PageDown));
-        // alt and meta are the same logical modifier (Emacs M-)
-        assert_eq!(KeyStroke::parse("alt+x"), KeyStroke::parse("meta+x"));
+        // option and meta are the same logical modifier (Emacs M-)
+        assert_eq!(KeyStroke::parse("option+x"), KeyStroke::parse("meta+x"));
         assert!(KeyStroke::parse("super+p").unwrap().super_);
     }
 
@@ -583,7 +620,7 @@ mod tests {
             &map,
         );
         assert_eq!(stroke, s('s').with_control());
-        // physical Alt+x -> logical meta (M-x)
+        // physical Meta+x -> logical meta (M-x)
         let mx = KeyStroke::from_physical(
             PhysicalMods::new(false, true, false, false),
             Key::Char('x'),
@@ -665,6 +702,25 @@ mod tests {
         assert_eq!(
             km.resolve(&[], &s('p').with_control(), None),
             KeymapOutcome::Execute("command.palette".to_string())
+        );
+    }
+
+    #[test]
+    fn display_bindings_reflect_user_overrides() {
+        let mut km = Keymap::new();
+        km.bind_default("ctrl+p", "file.picker");
+        km.bind_default("meta+x", "command.palette");
+        km.add_user_config(&[KeymapConfig {
+            keys: "ctrl+p".to_string(),
+            command: "buffer.picker".to_string(),
+            filetype: None,
+        }]);
+        assert_eq!(
+            km.display_bindings(None, 2),
+            vec![
+                ("C-P".to_string(), "buffer.picker".to_string()),
+                ("M-X".to_string(), "command.palette".to_string()),
+            ]
         );
     }
 

@@ -30,6 +30,7 @@ pub(crate) fn draw_editor(
     ctx: &mut dyn DrawingContext,
     ws: &mut Workspace,
     config: &Config,
+    welcome_bindings: &[(String, String)],
     search: Option<&SearchState>,
     term_cells: &TermCells,
     images: &ImageCache,
@@ -76,6 +77,7 @@ pub(crate) fn draw_editor(
             editor_rect,
             &font,
             metrics,
+            welcome_bindings,
             term_cells,
             images,
             cursor_visible,
@@ -89,6 +91,7 @@ pub(crate) fn draw_editor(
             editor_rect,
             &font,
             metrics,
+            welcome_bindings,
             term_cells,
             images,
             cursor_visible,
@@ -119,6 +122,7 @@ fn draw_pane_tree(
     rect: Rect,
     font: &Font,
     metrics: TextMetrics,
+    welcome_bindings: &[(String, String)],
     term_cells: &TermCells,
     images: &ImageCache,
     cursor_visible: bool,
@@ -132,6 +136,7 @@ fn draw_pane_tree(
             rect,
             font,
             metrics,
+            welcome_bindings,
             term_cells,
             images,
             cursor_visible,
@@ -151,6 +156,7 @@ fn draw_pane_tree(
                 first_rect,
                 font,
                 metrics,
+                welcome_bindings,
                 term_cells,
                 images,
                 cursor_visible,
@@ -163,6 +169,7 @@ fn draw_pane_tree(
                 second_rect,
                 font,
                 metrics,
+                welcome_bindings,
                 term_cells,
                 images,
                 cursor_visible,
@@ -182,6 +189,7 @@ fn draw_view(
     rect: Rect,
     font: &Font,
     metrics: TextMetrics,
+    welcome_bindings: &[(String, String)],
     term_cells: &TermCells,
     images: &ImageCache,
     cursor_visible: bool,
@@ -231,6 +239,7 @@ fn draw_view(
     let Some(buf) = ws.buffers.get(&buffer_id) else {
         return Ok(());
     };
+    let show_welcome = matches!(buf.kind, BufferKind::Scratch) && buf.text().is_empty();
 
     ctx.draw_rect(rect, &solid(palette().background))?;
 
@@ -321,10 +330,7 @@ fn draw_view(
     let mut line_idx = scroll;
     while visual_i < visible && line_idx < line_count {
         let line_offset = line_idx - scroll;
-        let full_line_text = visible_texts
-            .get(line_offset)
-            .cloned()
-            .unwrap_or_default();
+        let full_line_text = visible_texts.get(line_offset).cloned().unwrap_or_default();
         let wrap_segments = if word_wrap {
             wrap_line_segments(&full_line_text, text_cols)
         } else {
@@ -611,6 +617,10 @@ fn draw_view(
         )?;
     }
 
+    if show_welcome {
+        draw_welcome_screen(ctx, rect, font, metrics, text_x, welcome_bindings)?;
+    }
+
     // Scrollbar thumb (right edge), only when content overflows the viewport.
     let viewport_lines = (content_h / line_h).max(1.0);
     if (line_count as f32) > viewport_lines {
@@ -634,6 +644,91 @@ fn draw_view(
         ctx.draw_rect(
             Rect::new(rect.x, rect.y, rect.width, 2.0),
             &solid(palette().active_pane_border),
+        )?;
+    }
+
+    Ok(())
+}
+
+fn draw_welcome_screen(
+    ctx: &mut dyn DrawingContext,
+    rect: Rect,
+    font: &Font,
+    metrics: TextMetrics,
+    text_x: f32,
+    bindings: &[(String, String)],
+) -> AureaResult<()> {
+    if rect.width < 420.0 || rect.height < 220.0 {
+        return Ok(());
+    }
+
+    let title_font = Font::new(&font.family, font.size + 9.0);
+    let subtitle_font = Font::new(&font.family, font.size + 1.0);
+    let title_metrics = ctx.measure_text("Ozone", &title_font).ok();
+    let title_w = title_metrics
+        .as_ref()
+        .map(|m| m.advance)
+        .unwrap_or(font.size * 5.0);
+
+    let title_x = (rect.x + rect.width * 0.5 - title_w * 0.5).max(text_x);
+    let title_y = rect.y + rect.height * 0.28;
+    ctx.draw_text_with_font(
+        "Ozone",
+        Point::new(title_x, title_y),
+        &title_font,
+        &solid(palette().foreground),
+    )?;
+
+    let subtitle = "scratch buffer";
+    let subtitle_w = ctx
+        .measure_text(subtitle, &subtitle_font)
+        .map(|m| m.advance)
+        .unwrap_or(subtitle.len() as f32 * metrics.char_w);
+    ctx.draw_text_with_font(
+        subtitle,
+        Point::new(
+            (rect.x + rect.width * 0.5 - subtitle_w * 0.5).max(text_x),
+            title_y + 30.0,
+        ),
+        &subtitle_font,
+        &solid(palette().statusbar_dim),
+    )?;
+
+    if bindings.is_empty() {
+        return Ok(());
+    }
+
+    let rows = bindings.iter().take(6).collect::<Vec<_>>();
+    let key_cols = rows
+        .iter()
+        .map(|(key, _)| key.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(8);
+    let command_cols = rows
+        .iter()
+        .map(|(_, command)| command.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(14);
+    let total_w = (key_cols + command_cols + 4) as f32 * metrics.char_w;
+    let start_x = (rect.x + rect.width * 0.5 - total_w * 0.5).max(text_x);
+    let row_h = (font.size * 1.65).max(18.0);
+    let first_y = title_y + 84.0;
+
+    for (i, (key, command)) in rows.into_iter().enumerate() {
+        let y = first_y + i as f32 * row_h;
+        ctx.draw_text_with_font(
+            key,
+            Point::new(start_x, y),
+            font,
+            &solid(palette().picker_prompt),
+        )?;
+        ctx.draw_text_with_font(
+            command,
+            Point::new(start_x + (key_cols as f32 + 4.0) * metrics.char_w, y),
+            font,
+            &solid(palette().line_number_active),
         )?;
     }
 
@@ -1000,7 +1095,6 @@ fn draw_highlighted(
     Ok(())
 }
 
-
 /// Draw an image centered in `rect`, scaled to fit while preserving aspect
 /// ratio (never upscaling past 1:1). Shows a label if the image failed to load.
 fn draw_image_pane(
@@ -1089,4 +1183,3 @@ fn draw_cursor(
     }
     Ok(())
 }
-

@@ -54,7 +54,13 @@ pub(crate) fn draw_status_bar(
             let pane_info = pane_status(ws, view.id);
             (mode, file_name, cursor_info, dirty.to_string(), pane_info)
         } else {
-            ("", String::new(), String::new(), String::new(), String::new())
+            (
+                "",
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            )
         };
 
     let em = ctx.measure_text("M", font).ok();
