@@ -5,6 +5,8 @@
 //! and pull fields out by hand, defaulting anything missing or malformed. A bad
 //! config never crashes the editor — it degrades to defaults field by field.
 
+mod parse;
+
 use std::path::{Path, PathBuf};
 
 /// Global editor settings (mirrors config.toml `[editor]`).
@@ -195,17 +197,17 @@ impl Config {
             {
                 e.font = v.to_string();
             }
-            if let Some(v) = as_f32(editor.get("font_size"))
+            if let Some(v) = parse::as_f32(editor.get("font_size"))
                 && v > 0.0
             {
                 e.font_size = v;
             }
-            if let Some(v) = as_f32(editor.get("line_height"))
+            if let Some(v) = parse::as_f32(editor.get("line_height"))
                 && v > 0.0
             {
                 e.line_height = v;
             }
-            if let Some(v) = as_usize(editor.get("tab_width")) {
+            if let Some(v) = parse::as_usize(editor.get("tab_width")) {
                 e.tab_width = v.max(1);
             }
             if let Some(v) = editor.get("soft_tabs").and_then(|v| v.as_bool()) {
@@ -225,7 +227,7 @@ impl Config {
             {
                 e.cursor_style = v;
             }
-            if let Some(v) = as_usize(editor.get("scroll_off")) {
+            if let Some(v) = parse::as_usize(editor.get("scroll_off")) {
                 e.scroll_off = v;
             }
             if let Some(v) = editor.get("word_wrap").and_then(|v| v.as_bool()) {
@@ -243,7 +245,7 @@ impl Config {
             if let Some(v) = editor.get("auto_format").and_then(|v| v.as_bool()) {
                 e.auto_format = v;
             }
-            if let Some(v) = as_usize(editor.get("jump_list_size")) {
+            if let Some(v) = parse::as_usize(editor.get("jump_list_size")) {
                 e.jump_list_size = v.max(1);
             }
         }
@@ -264,11 +266,11 @@ impl Config {
             config.ui.mouse = mouse;
         }
 
-        config.keymaps = parse_keymaps(&table);
-        config.autocmds = parse_autocmds(&table);
-        config.filetypes = parse_filetypes(&table);
-        config.lsps = parse_lsps(&table);
-        config.modifiers = parse_modifiers(&table);
+        config.keymaps = parse::parse_keymaps(&table);
+        config.autocmds = parse::parse_autocmds(&table);
+        config.filetypes = parse::parse_filetypes(&table);
+        config.lsps = parse::parse_lsps(&table);
+        config.modifiers = parse::parse_modifiers(&table);
 
         Ok(config)
     }
@@ -358,151 +360,6 @@ impl Config {
 
     /// The default configuration template written when no user config exists.
     pub const DEFAULT_TEMPLATE: &'static str = include_str!("../../config.toml");
-}
-
-/// Coerce a TOML value (integer or float) into `f32`.
-fn as_f32(value: Option<&toml::Value>) -> Option<f32> {
-    match value {
-        Some(toml::Value::Float(f)) => Some(*f as f32),
-        Some(toml::Value::Integer(i)) => Some(*i as f32),
-        _ => None,
-    }
-}
-
-/// Coerce a non-negative TOML integer into `usize`.
-fn as_usize(value: Option<&toml::Value>) -> Option<usize> {
-    match value {
-        Some(toml::Value::Integer(i)) if *i >= 0 => Some(*i as usize),
-        _ => None,
-    }
-}
-
-fn table_array<'a>(table: &'a toml::Table, key: &str) -> impl Iterator<Item = &'a toml::Table> {
-    table
-        .get(key)
-        .and_then(|v| v.as_array())
-        .into_iter()
-        .flat_map(|items| items.iter())
-        .filter_map(|item| item.as_table())
-}
-
-fn non_empty_string(table: &toml::Table, key: &str) -> Option<String> {
-    table
-        .get(key)
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-}
-
-fn string_array(table: &toml::Table, key: &str) -> Vec<String> {
-    table
-        .get(key)
-        .and_then(|v| v.as_array())
-        .into_iter()
-        .flat_map(|items| items.iter())
-        .filter_map(|item| item.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .collect()
-}
-
-fn parse_keymaps(table: &toml::Table) -> Vec<KeymapConfig> {
-    table_array(table, "keymap")
-        .filter_map(|entry| {
-            Some(KeymapConfig {
-                keys: non_empty_string(entry, "keys")?,
-                command: non_empty_string(entry, "command")?,
-                filetype: non_empty_string(entry, "filetype"),
-            })
-        })
-        .collect()
-}
-
-fn parse_autocmds(table: &toml::Table) -> Vec<AutocmdConfig> {
-    table_array(table, "autocmd")
-        .filter_map(|entry| {
-            Some(AutocmdConfig {
-                event: non_empty_string(entry, "event")?,
-                pattern: non_empty_string(entry, "pattern").unwrap_or_else(|| "*".to_string()),
-                command: non_empty_string(entry, "command")?,
-            })
-        })
-        .collect()
-}
-
-fn parse_filetypes(table: &toml::Table) -> Vec<FiletypeConfig> {
-    table_array(table, "filetype")
-        .filter_map(|entry| {
-            Some(FiletypeConfig {
-                name: non_empty_string(entry, "name")?,
-                tab_width: as_usize(entry.get("tab_width")).map(|v| v.max(1)),
-                soft_tabs: entry.get("soft_tabs").and_then(|v| v.as_bool()),
-                line_numbers: entry
-                    .get("line_numbers")
-                    .and_then(|v| v.as_str())
-                    .and_then(LineNumbers::parse),
-                word_wrap: entry.get("word_wrap").and_then(|v| v.as_bool()),
-                trim_trailing_whitespace: entry
-                    .get("trim_trailing_whitespace")
-                    .and_then(|v| v.as_bool()),
-                auto_format: entry.get("auto_format").and_then(|v| v.as_bool()),
-            })
-        })
-        .collect()
-}
-
-fn parse_lsps(table: &toml::Table) -> Vec<LspConfig> {
-    table_array(table, "lsp")
-        .filter_map(|entry| {
-            Some(LspConfig {
-                language: non_empty_string(entry, "language")?,
-                server: non_empty_string(entry, "server")?,
-                args: string_array(entry, "args"),
-                lazy: entry.get("lazy").and_then(|v| v.as_bool()).unwrap_or(true),
-                capabilities: parse_lsp_capabilities(entry),
-            })
-        })
-        .collect()
-}
-
-fn parse_lsp_capabilities(entry: &toml::Table) -> LspCapabilities {
-    let Some(caps) = entry.get("capabilities").and_then(|v| v.as_table()) else {
-        return LspCapabilities::default();
-    };
-
-    LspCapabilities {
-        completion: bool_field(caps, "completion"),
-        diagnostics: bool_field(caps, "diagnostics"),
-        hover: bool_field(caps, "hover"),
-        goto_definition: bool_field(caps, "goto_definition"),
-        find_references: bool_field(caps, "find_references"),
-        rename: bool_field(caps, "rename"),
-        format: bool_field(caps, "format"),
-        code_actions: bool_field(caps, "code_actions"),
-        inlay_hints: bool_field(caps, "inlay_hints"),
-        semantic_tokens: bool_field(caps, "semantic_tokens"),
-        code_lens: bool_field(caps, "code_lens"),
-    }
-}
-
-fn bool_field(table: &toml::Table, key: &str) -> bool {
-    table.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
-}
-
-/// Parse the optional `[modifiers]` table.
-fn parse_modifiers(table: &toml::Table) -> ModifierOverrides {
-    let Some(m) = table.get("modifiers").and_then(|v| v.as_table()) else {
-        return ModifierOverrides::default();
-    };
-    let get = |k: &str| m.get(k).and_then(|v| v.as_str()).map(str::to_string);
-    ModifierOverrides {
-        control: get("control"),
-        meta: get("meta"),
-        // accept either `super` or `super_`
-        super_: get("super").or_else(|| get("super_")),
-    }
 }
 
 #[cfg(test)]
