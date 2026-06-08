@@ -75,20 +75,14 @@ pub struct ModifierMap {
 
 impl ModifierMap {
     pub fn platform_default() -> Self {
-        if cfg!(target_os = "macos") {
-            // macOS reports Command as the "Meta" key; Control on Cmd is the
-            // common editor mapping, Meta(M-) on Option, Super on the Ctrl key.
-            Self {
-                control: PhysicalModifier::Meta,
-                meta: PhysicalModifier::Alt,
-                super_: PhysicalModifier::Ctrl,
-            }
-        } else {
-            Self {
-                control: PhysicalModifier::Ctrl,
-                meta: PhysicalModifier::Alt,
-                super_: PhysicalModifier::Meta,
-            }
+        // Uniform on all platforms: physical Ctrl = logical control,
+        // Option/Alt = logical meta, Cmd/Win = logical super.
+        // macOS-specific GUI shortcuts are bound to `super+` in the keymap
+        // so Cmd+S / Cmd+Z work as expected while Ctrl stays the editor key.
+        Self {
+            control: PhysicalModifier::Ctrl,
+            meta: PhysicalModifier::Alt,
+            super_: PhysicalModifier::Meta,
         }
     }
 
@@ -366,7 +360,7 @@ impl Keymap {
     pub fn with_defaults() -> Self {
         let mut km = Self::new();
         let defaults: &[(&str, &str)] = &[
-            // File / edit / buffer
+            // ── File / edit (Ctrl = universal editor key) ──────────────────────
             ("ctrl+s", "file.save"),
             ("ctrl+z", "edit.undo"),
             ("ctrl+y", "edit.redo"),
@@ -376,13 +370,25 @@ impl Keymap {
             ("ctrl+shift+p", "command.palette"),
             ("ctrl+tab", "buffer.next"),
             ("ctrl+shift+tab", "buffer.previous"),
-            ("ctrl+x b", "buffer.picker"),       // Emacs switch-buffer
-            ("meta+left", "view.jump-back"),     // jump list back  (VS Code Alt+Left)
-            ("meta+right", "view.jump-forward"), // jump list forward (Alt+Right)
-            ("ctrl+-", "view.jump-back"),        // plan binding (now that '-' is a keycode)
+            ("ctrl+x b", "buffer.picker"),
+            ("meta+left", "view.jump-back"),
+            ("meta+right", "view.jump-forward"),
+            ("ctrl+-", "view.jump-back"),
             ("ctrl+=", "view.jump-forward"),
-            ("ctrl+k ctrl+s", "file.save-all"), // chord showcase
-            // Panes
+            ("ctrl+k ctrl+s", "file.save-all"),
+            // ── Super+ aliases (Cmd on macOS, Win on Linux) ────────────────────
+            // These provide the platform-native feel: Cmd+S saves, Cmd+Z undoes,
+            // Cmd+P opens the file picker, etc., without disturbing Ctrl bindings.
+            ("super+s", "file.save"),
+            ("super+z", "edit.undo"),
+            ("super+shift+z", "edit.redo"),
+            ("super+p", "file.picker"),
+            ("super+shift+p", "command.palette"),
+            ("super+shift+f", "search.workspace"),
+            ("super+shift+e", "file.tree"),
+            ("super+tab", "buffer.next"),
+            ("super+shift+tab", "buffer.previous"),
+            // ── Panes ─────────────────────────────────────────────────────────
             ("ctrl+shift+right", "pane.split-right"),
             ("ctrl+shift+down", "pane.split-down"),
             ("ctrl+shift+w", "pane.close"),
@@ -390,21 +396,21 @@ impl Keymap {
             ("ctrl+alt+left", "pane.focus-left"),
             ("ctrl+alt+down", "pane.focus-down"),
             ("ctrl+alt+up", "pane.focus-up"),
-            // Emacs-style movement
+            // ── Emacs-style movement (Ctrl) ────────────────────────────────────
             ("ctrl+a", "cursor.line-start"),
             ("ctrl+e", "cursor.line-end"),
             ("ctrl+b", "cursor.move-left"),
             ("ctrl+f", "cursor.move-right"),
             ("ctrl+n", "cursor.move-down"),
-            ("meta+f", "search.start"),   // M-f opens in-buffer find
-            ("meta+h", "search.replace"), // M-h opens find with a replace box
+            ("meta+f", "search.start"),
+            ("meta+h", "search.replace"),
             ("ctrl+shift+f", "search.workspace"),
-            ("meta+g", "edit.goto-line"), // Emacs M-g — prompt for a line
+            ("meta+g", "edit.goto-line"),
             ("ctrl+home", "cursor.file-start"),
             ("ctrl+end", "cursor.file-end"),
             ("ctrl+left", "cursor.word-backward"),
             ("ctrl+right", "cursor.word-forward"),
-            // Plain navigation
+            // ── Plain navigation ──────────────────────────────────────────────
             ("up", "cursor.move-up"),
             ("down", "cursor.move-down"),
             ("left", "cursor.move-left"),
@@ -413,7 +419,7 @@ impl Keymap {
             ("end", "cursor.line-end"),
             ("pageup", "view.page-up"),
             ("pagedown", "view.page-down"),
-            // Editing
+            // ── Editing ───────────────────────────────────────────────────────
             ("backspace", "edit.delete-char-backward"),
             ("delete", "edit.delete-char-forward"),
             ("enter", "edit.insert-newline"),

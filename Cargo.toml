@@ -15,7 +15,7 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-aurea       = { path = "../aurea/crates/aurea" }
+aurea       = { path = "./aurea/crates/aurea" }
 toml        = "0.8"
 ozone-buffer = { path = "ozone-buffer" }
 ozone-editor = { path = "ozone-editor" }
