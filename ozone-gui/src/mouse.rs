@@ -242,7 +242,11 @@ pub(crate) fn handle_scrollbar_drag(
         return false;
     };
     let scroll_line = scroll_line.min(max_scroll);
-    let scroll_y = if scroll_line >= max_scroll { 0.0 } else { scroll_y };
+    let scroll_y = if scroll_line >= max_scroll {
+        0.0
+    } else {
+        scroll_y
+    };
     let changed = view.scroll_line != scroll_line || (view.scroll_y - scroll_y).abs() > 0.01;
     if changed {
         view.scroll_line = scroll_line;
@@ -413,7 +417,10 @@ fn word_span_at(ws: &Workspace, view_id: ViewId, pos: Pos) -> Option<Span> {
     while end < bytes.len() && is_word_byte(bytes[end]) {
         end += 1;
     }
-    Some(Span::new(Pos::new(pos.line, start), Pos::new(pos.line, end)))
+    Some(Span::new(
+        Pos::new(pos.line, start),
+        Pos::new(pos.line, end),
+    ))
 }
 
 fn line_span_at(ws: &Workspace, view_id: ViewId, pos: Pos) -> Option<Span> {
@@ -584,13 +591,19 @@ mod tests {
             view_id,
             ozone_buffer::Pos::new(0, 1),
         ));
-        assert_eq!(ws.active_view().unwrap().cursor, ozone_buffer::Pos::new(0, 1));
+        assert_eq!(
+            ws.active_view().unwrap().cursor,
+            ozone_buffer::Pos::new(0, 1)
+        );
         assert!(ws.active_view().unwrap().selection.is_none());
     }
 
     #[test]
     fn scrollbar_press_scrolls_view() {
-        let text = (0..100).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let text = (0..100)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let mut ws = text_workspace(&text);
         let mut config = Config::default_config();
         config.editor.font_size = 10.0;
@@ -605,7 +618,10 @@ mod tests {
 
     #[test]
     fn scrollbar_drag_clamps_to_bottom() {
-        let text = (0..100).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let text = (0..100)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let mut ws = text_workspace(&text);
         let mut config = Config::default_config();
         config.editor.font_size = 10.0;
@@ -613,13 +629,7 @@ mod tests {
         let view_id = ws.active_view_id.unwrap();
 
         assert!(handle_scrollbar_drag(
-            &mut ws,
-            &config,
-            10_000.0,
-            800.0,
-            600.0,
-            view_id,
-            0.0,
+            &mut ws, &config, 10_000.0, 800.0, 600.0, view_id, 0.0,
         ));
         let view = ws.active_view().unwrap();
         assert_eq!(view.scroll_line, crate::layout::max_scroll_line(100, 28));

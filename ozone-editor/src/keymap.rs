@@ -36,7 +36,12 @@ pub struct PhysicalMods {
 
 impl PhysicalMods {
     pub fn new(ctrl: bool, alt: bool, shift: bool, meta: bool) -> Self {
-        Self { ctrl, alt, shift, meta }
+        Self {
+            ctrl,
+            alt,
+            shift,
+            meta,
+        }
     }
     fn has(&self, m: PhysicalModifier) -> bool {
         match m {
@@ -214,13 +219,31 @@ pub struct KeyStroke {
 impl KeyStroke {
     /// A modifier-free stroke for `key`.
     pub fn key(key: Key) -> Self {
-        Self { control: false, meta: false, super_: false, shift: false, key }
+        Self {
+            control: false,
+            meta: false,
+            super_: false,
+            shift: false,
+            key,
+        }
     }
 
-    pub fn with_control(mut self) -> Self { self.control = true; self }
-    pub fn with_meta(mut self) -> Self { self.meta = true; self }
-    pub fn with_super(mut self) -> Self { self.super_ = true; self }
-    pub fn with_shift(mut self) -> Self { self.shift = true; self }
+    pub fn with_control(mut self) -> Self {
+        self.control = true;
+        self
+    }
+    pub fn with_meta(mut self) -> Self {
+        self.meta = true;
+        self
+    }
+    pub fn with_super(mut self) -> Self {
+        self.super_ = true;
+        self
+    }
+    pub fn with_shift(mut self) -> Self {
+        self.shift = true;
+        self
+    }
 
     /// Build a logical stroke from a physical key event via the modifier map.
     pub fn from_physical(phys: PhysicalMods, key: Key, map: &ModifierMap) -> Self {
@@ -255,7 +278,13 @@ impl KeyStroke {
                 other => key = Key::parse(other),
             }
         }
-        Some(Self { control, meta, super_, shift, key: key? })
+        Some(Self {
+            control,
+            meta,
+            super_,
+            shift,
+            key: key?,
+        })
     }
 }
 
@@ -281,8 +310,15 @@ pub fn stroke_label(stroke: &KeyStroke) -> String {
 
 /// Parse a full chord string like `"ctrl+k ctrl+s"` into its strokes.
 pub fn parse_chord(keys: &str) -> Option<Vec<KeyStroke>> {
-    let strokes: Vec<KeyStroke> = keys.split_whitespace().filter_map(KeyStroke::parse).collect();
-    if strokes.is_empty() { None } else { Some(strokes) }
+    let strokes: Vec<KeyStroke> = keys
+        .split_whitespace()
+        .filter_map(KeyStroke::parse)
+        .collect();
+    if strokes.is_empty() {
+        None
+    } else {
+        Some(strokes)
+    }
 }
 
 /// Priority layer a binding belongs to (higher wins on exact-match ties).
@@ -320,7 +356,9 @@ pub struct Keymap {
 
 impl Keymap {
     pub fn new() -> Self {
-        Self { bindings: Vec::new() }
+        Self {
+            bindings: Vec::new(),
+        }
     }
 
     /// The shipped default layer. These are the keys Ozone binds out of the box;
@@ -334,14 +372,14 @@ impl Keymap {
             ("ctrl+y", "edit.redo"),
             ("ctrl+p", "file.picker"),
             ("ctrl+shift+e", "file.tree"),
-            ("alt+x", "command.palette"),       // Emacs M-x
+            ("alt+x", "command.palette"), // Emacs M-x
             ("ctrl+shift+p", "command.palette"),
             ("ctrl+tab", "buffer.next"),
             ("ctrl+shift+tab", "buffer.previous"),
-            ("ctrl+x b", "buffer.picker"),      // Emacs switch-buffer
-            ("meta+left", "view.jump-back"),    // jump list back  (VS Code Alt+Left)
-            ("meta+right", "view.jump-forward"),// jump list forward (Alt+Right)
-            ("ctrl+-", "view.jump-back"),       // plan binding (now that '-' is a keycode)
+            ("ctrl+x b", "buffer.picker"),       // Emacs switch-buffer
+            ("meta+left", "view.jump-back"),     // jump list back  (VS Code Alt+Left)
+            ("meta+right", "view.jump-forward"), // jump list forward (Alt+Right)
+            ("ctrl+-", "view.jump-back"),        // plan binding (now that '-' is a keycode)
             ("ctrl+=", "view.jump-forward"),
             ("ctrl+k ctrl+s", "file.save-all"), // chord showcase
             // Panes
@@ -358,10 +396,10 @@ impl Keymap {
             ("ctrl+b", "cursor.move-left"),
             ("ctrl+f", "cursor.move-right"),
             ("ctrl+n", "cursor.move-down"),
-            ("meta+f", "search.start"), // M-f opens in-buffer find
+            ("meta+f", "search.start"),   // M-f opens in-buffer find
             ("meta+h", "search.replace"), // M-h opens find with a replace box
             ("ctrl+shift+f", "search.workspace"),
-            ("meta+g", "edit.goto-line"),       // Emacs M-g — prompt for a line
+            ("meta+g", "edit.goto-line"), // Emacs M-g — prompt for a line
             ("ctrl+home", "cursor.file-start"),
             ("ctrl+end", "cursor.file-end"),
             ("ctrl+left", "cursor.word-backward"),
@@ -404,7 +442,11 @@ impl Keymap {
             let Some(chord) = parse_chord(&cfg.keys) else {
                 continue;
             };
-            let layer = if cfg.filetype.is_some() { Layer::Filetype } else { Layer::Global };
+            let layer = if cfg.filetype.is_some() {
+                Layer::Filetype
+            } else {
+                Layer::Global
+            };
             self.bindings.push(Binding {
                 chord,
                 command: cfg.command.clone(),
@@ -478,7 +520,9 @@ impl Keymap {
 
         // A longer binding could still match → wait for more input.
         let has_longer = self.bindings.iter().any(|b| {
-            Self::applies(b, filetype) && b.chord.len() > seq.len() && b.chord[..seq.len()] == seq[..]
+            Self::applies(b, filetype)
+                && b.chord.len() > seq.len()
+                && b.chord[..seq.len()] == seq[..]
         });
         if has_longer {
             return KeymapOutcome::Pending;
@@ -527,10 +571,18 @@ mod tests {
             super_: PhysicalModifier::Meta,
         };
         // physical Ctrl+s -> logical control
-        let stroke = KeyStroke::from_physical(PhysicalMods::new(true, false, false, false), Key::Char('s'), &map);
+        let stroke = KeyStroke::from_physical(
+            PhysicalMods::new(true, false, false, false),
+            Key::Char('s'),
+            &map,
+        );
         assert_eq!(stroke, s('s').with_control());
         // physical Alt+x -> logical meta (M-x)
-        let mx = KeyStroke::from_physical(PhysicalMods::new(false, true, false, false), Key::Char('x'), &map);
+        let mx = KeyStroke::from_physical(
+            PhysicalMods::new(false, true, false, false),
+            Key::Char('x'),
+            &map,
+        );
         assert_eq!(mx, s('x').with_meta());
     }
 
@@ -539,7 +591,11 @@ mod tests {
         // Make logical Control map to the OS Meta/Cmd key.
         let map = ModifierMap::platform_default().with_overrides(Some("meta"), None, None);
         // physical Meta(cmd)+s now yields logical control
-        let stroke = KeyStroke::from_physical(PhysicalMods::new(false, false, false, true), Key::Char('s'), &map);
+        let stroke = KeyStroke::from_physical(
+            PhysicalMods::new(false, false, false, true),
+            Key::Char('s'),
+            &map,
+        );
         assert!(stroke.control);
     }
 
@@ -565,7 +621,10 @@ mod tests {
             km.resolve(&[], &s('s').with_control(), None),
             KeymapOutcome::Execute("file.save".to_string())
         );
-        assert_eq!(km.resolve(&[], &s('x').with_control(), None), KeymapOutcome::NoMatch);
+        assert_eq!(
+            km.resolve(&[], &s('x').with_control(), None),
+            KeymapOutcome::NoMatch
+        );
     }
 
     #[test]
@@ -582,7 +641,10 @@ mod tests {
             KeymapOutcome::Execute("file.save-all".to_string())
         );
         // Wrong continuation cancels the chord.
-        assert_eq!(km.resolve(&pending, &s('x').with_control(), None), KeymapOutcome::NoMatch);
+        assert_eq!(
+            km.resolve(&pending, &s('x').with_control(), None),
+            KeymapOutcome::NoMatch
+        );
     }
 
     #[test]
@@ -636,7 +698,10 @@ mod tests {
         // No pending prefix and an empty match → empty.
         assert!(km.continuations(&[s('z').with_control()], None).is_empty());
         assert_eq!(stroke_label(&s('x').with_control()), "C-X");
-        assert_eq!(stroke_label(&KeyStroke::key(Key::Enter).with_meta()), "M-Enter");
+        assert_eq!(
+            stroke_label(&KeyStroke::key(Key::Enter).with_meta()),
+            "M-Enter"
+        );
     }
 
     #[test]
@@ -661,6 +726,9 @@ mod tests {
             km.resolve(&[], &stroke, Some("rust")),
             KeymapOutcome::Execute("lsp.format".to_string())
         );
-        assert_eq!(km.resolve(&[], &stroke, Some("toml")), KeymapOutcome::NoMatch);
+        assert_eq!(
+            km.resolve(&[], &stroke, Some("toml")),
+            KeymapOutcome::NoMatch
+        );
     }
 }

@@ -96,7 +96,11 @@ impl PaneTree {
         Some(leaves[(idx + leaves.len() - 1) % leaves.len()])
     }
 
-    pub fn neighbor_in_direction(&self, current: ViewId, direction: FocusDirection) -> Option<ViewId> {
+    pub fn neighbor_in_direction(
+        &self,
+        current: ViewId,
+        direction: FocusDirection,
+    ) -> Option<ViewId> {
         let mut rects = Vec::new();
         self.push_rects(UnitRect::new(0.0, 0.0, 1.0, 1.0), &mut rects);
         let current_rect = rects.iter().find(|(id, _)| *id == current)?.1;
@@ -124,7 +128,10 @@ impl PaneTree {
                     FocusDirection::Up | FocusDirection::Down => current_rect.overlaps_x(rect),
                 };
                 let overlap_penalty = if overlaps { 0.0 } else { 10_000.0 };
-                Some((id, overlap_penalty + primary * 1000.0 + secondary + order as f32 * 0.0001))
+                Some((
+                    id,
+                    overlap_penalty + primary * 1000.0 + secondary + order as f32 * 0.0001,
+                ))
             })
             .min_by(|(_, a), (_, b)| a.total_cmp(b))
             .map(|(id, _)| id)
@@ -179,7 +186,12 @@ impl PaneTree {
     fn push_rects(&self, rect: UnitRect, out: &mut Vec<(ViewId, UnitRect)>) {
         match self {
             Self::Leaf { view_id } => out.push((*view_id, rect)),
-            Self::Split { axis, ratio, first, second } => {
+            Self::Split {
+                axis,
+                ratio,
+                first,
+                second,
+            } => {
                 let (first_rect, second_rect) = rect.split(*axis, *ratio);
                 first.push_rects(first_rect, out);
                 second.push_rects(second_rect, out);
@@ -206,7 +218,12 @@ struct UnitRect {
 
 impl UnitRect {
     fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     fn center(self) -> (f32, f32) {
@@ -343,10 +360,22 @@ mod tests {
         assert!(tree.split_leaf(left, top_right, SplitAxis::Vertical, 0.5));
         assert!(tree.split_leaf(top_right, bottom_right, SplitAxis::Horizontal, 0.5));
 
-        assert_eq!(tree.neighbor_in_direction(left, FocusDirection::Right), Some(top_right));
-        assert_eq!(tree.neighbor_in_direction(top_right, FocusDirection::Down), Some(bottom_right));
-        assert_eq!(tree.neighbor_in_direction(bottom_right, FocusDirection::Up), Some(top_right));
-        assert_eq!(tree.neighbor_in_direction(top_right, FocusDirection::Left), Some(left));
+        assert_eq!(
+            tree.neighbor_in_direction(left, FocusDirection::Right),
+            Some(top_right)
+        );
+        assert_eq!(
+            tree.neighbor_in_direction(top_right, FocusDirection::Down),
+            Some(bottom_right)
+        );
+        assert_eq!(
+            tree.neighbor_in_direction(bottom_right, FocusDirection::Up),
+            Some(top_right)
+        );
+        assert_eq!(
+            tree.neighbor_in_direction(top_right, FocusDirection::Left),
+            Some(left)
+        );
         assert_eq!(tree.neighbor_in_direction(left, FocusDirection::Left), None);
     }
 }

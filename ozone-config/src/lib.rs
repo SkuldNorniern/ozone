@@ -179,10 +179,14 @@ impl Config {
 
     /// Parse a TOML config string, falling back to defaults per missing field.
     pub fn parse_str(text: &str) -> Self {
+        Self::parse_str_result(text).unwrap_or_else(|_| Self::default_config())
+    }
+
+    /// Parse a TOML config string, returning TOML syntax errors to callers that
+    /// want to surface diagnostics.
+    pub fn parse_str_result(text: &str) -> Result<Self, toml::de::Error> {
         let mut config = Self::default_config();
-        let Ok(table) = text.parse::<toml::Table>() else {
-            return config;
-        };
+        let table = text.parse::<toml::Table>()?;
 
         if let Some(editor) = table.get("editor").and_then(|v| v.as_table()) {
             let e = &mut config.editor;
@@ -266,14 +270,31 @@ impl Config {
         config.lsps = parse_lsps(&table);
         config.modifiers = parse_modifiers(&table);
 
-        config
+        Ok(config)
     }
 
     /// Load from a TOML file, falling back to defaults if it cannot be read.
     pub fn load(path: &Path) -> Self {
+        Self::load_with_warning(path).0
+    }
+
+    /// Load from a TOML file, returning a warning if the file had to be ignored.
+    pub fn load_with_warning(path: &Path) -> (Self, Option<String>) {
         match std::fs::read_to_string(path) {
-            Ok(text) => Self::parse_str(&text),
-            Err(_) => Self::default_config(),
+            Ok(text) => match Self::parse_str_result(&text) {
+                Ok(config) => (config, None),
+                Err(error) => (
+                    Self::default_config(),
+                    Some(format!(
+                        "could not parse config {}: {error}",
+                        path.display()
+                    )),
+                ),
+            },
+            Err(error) => (
+                Self::default_config(),
+                Some(format!("could not read config {}: {error}", path.display())),
+            ),
         }
     }
 
@@ -305,10 +326,16 @@ impl Config {
     /// otherwise defaults. The local fallback keeps `cargo run` from the repo
     /// root aligned with the checked-in reference config.
     pub fn load_user() -> Self {
+        Self::load_user_with_warning().0
+    }
+
+    /// Load the user/local config, plus a warning when that file is unreadable
+    /// or syntactically invalid.
+    pub fn load_user_with_warning() -> (Self, Option<String>) {
         if let Some(path) = Self::resolved_config_path() {
-            Self::load(&path)
+            Self::load_with_warning(&path)
         } else {
-            Self::default_config()
+            (Self::default_config(), None)
         }
     }
 }
@@ -517,18 +544,35 @@ mod tests {
 
     #[test]
     fn load_uses_requested_font_from_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "ozone-config-font-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("ozone-config-font-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.toml");
-        std::fs::write(&path, "[editor]\nfont = \"Cascadia Mono\"\nfont_size = 15\n").unwrap();
+        std::fs::write(
+            &path,
+            "[editor]\nfont = \"Cascadia Mono\"\nfont_size = 15\n",
+        )
+        .unwrap();
 
         let c = Config::load(&path);
         assert_eq!(c.editor.font, "Cascadia Mono");
         assert_eq!(c.editor.font_size, 15.0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_reports_malformed_config() {
+        let dir =
+            std::env::temp_dir().join(format!("ozone-config-malformed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[theme]\nname = \"name = \"brewery-stout\"\n").unwrap();
+
+        let (c, warning) = Config::load_with_warning(&path);
+        assert_eq!(c.editor.font, EditorConfig::default().font);
+        assert!(warning.is_some_and(|w| w.contains("could not parse config")));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

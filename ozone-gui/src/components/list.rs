@@ -51,7 +51,12 @@ pub(crate) fn draw_list(
             )?;
         }
         let bl = baseline_in_rect(y, line_h, ascent, descent);
-        ctx.draw_text_with_font(row.primary, Point::new(x + pad + 8.0, bl), font, &solid(s.fg))?;
+        ctx.draw_text_with_font(
+            row.primary,
+            Point::new(x + pad + 8.0, bl),
+            font,
+            &solid(s.fg),
+        )?;
 
         if !row.detail.is_empty() {
             let dw = measure(ctx, row.detail);

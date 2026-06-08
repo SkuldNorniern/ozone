@@ -547,14 +547,9 @@ impl OzoneGui {
                                 click_count,
                             ) {
                                 let text_like = ws.active_buffer().is_some_and(|buf| {
-                                    !matches!(
-                                        buf.kind,
-                                        BufferKind::Image(_) | BufferKind::Terminal
-                                    )
+                                    !matches!(buf.kind, BufferKind::Image(_) | BufferKind::Terminal)
                                 });
-                                if text_like
-                                    && let Some(view) = ws.active_view()
-                                {
+                                if text_like && let Some(view) = ws.active_view() {
                                     let anchor = view
                                         .selection
                                         .map(|span| {
@@ -899,7 +894,7 @@ fn window_title(ws: &Workspace) -> String {
 }
 
 pub(crate) fn editor_font(config: &Config) -> Font {
-    Font::new(&config.editor.font, config.editor.font_size)
+    Font::new(config.editor.font.trim(), config.editor.font_size)
 }
 
 fn set_window_icon(window: &Window) {

@@ -23,9 +23,7 @@ use std::path::PathBuf;
 
 use ozone_buffer::{BufferId, Pos, Span};
 
-use crate::decoration::{
-    Decoration, DecorationId, DecorationKind, Gravity, NamespaceId,
-};
+use crate::decoration::{Decoration, DecorationId, DecorationKind, Gravity, NamespaceId};
 use crate::events::EditorEvent;
 use crate::options::OptionValue;
 use crate::pane::{FocusDirection, SplitAxis};
@@ -108,9 +106,13 @@ impl<'a> EditorApi<'a> {
     /// Insert `text` at the cursor, advancing it by the inserted byte length.
     /// Returns false if there is no active buffer.
     pub fn insert(&mut self, text: &str) -> bool {
-        let Some(view) = self.ws.active_view() else { return false };
+        let Some(view) = self.ws.active_view() else {
+            return false;
+        };
         let (cursor, bid) = (view.cursor, view.buffer_id);
-        let Some(buf) = self.ws.buffers.get_mut(&bid) else { return false };
+        let Some(buf) = self.ws.buffers.get_mut(&bid) else {
+            return false;
+        };
         let delta = buf.insert(cursor, text);
         // Columns are byte offsets (see `Pos`), so advance by byte length.
         let bytes = text.len();
@@ -124,8 +126,12 @@ impl<'a> EditorApi<'a> {
 
     /// Delete the half-open range `[start, end)` from the active buffer.
     pub fn delete(&mut self, start: Pos, end: Pos) -> bool {
-        let Some(bid) = self.active_buffer() else { return false };
-        let Some(buf) = self.ws.buffers.get_mut(&bid) else { return false };
+        let Some(bid) = self.active_buffer() else {
+            return false;
+        };
+        let Some(buf) = self.ws.buffers.get_mut(&bid) else {
+            return false;
+        };
         let delta = buf.delete_span(start, end);
         self.ws.emit(EditorEvent::BufferChanged { id: bid, delta });
         true
@@ -134,7 +140,9 @@ impl<'a> EditorApi<'a> {
     /// Undo the last edit; moves the cursor to the change site. Returns whether
     /// anything was undone.
     pub fn undo(&mut self) -> bool {
-        let Some(bid) = self.active_buffer() else { return false };
+        let Some(bid) = self.active_buffer() else {
+            return false;
+        };
         let result = self
             .ws
             .buffers
@@ -152,7 +160,9 @@ impl<'a> EditorApi<'a> {
 
     /// Redo the last undone edit. Returns whether anything was redone.
     pub fn redo(&mut self) -> bool {
-        let Some(bid) = self.active_buffer() else { return false };
+        let Some(bid) = self.active_buffer() else {
+            return false;
+        };
         let result = self
             .ws
             .buffers
@@ -283,14 +293,11 @@ impl<'a> EditorApi<'a> {
     ) -> Option<DecorationId> {
         let view = self.ws.active_view()?;
         let (view_id, buffer) = (view.id, view.buffer_id);
-        Some(self.ws.decorations_mut().add_for_view(
-            buffer,
-            view_id,
-            namespace,
-            start,
-            end,
-            kind,
-        ))
+        Some(
+            self.ws
+                .decorations_mut()
+                .add_for_view(buffer, view_id, namespace, start, end, kind),
+        )
     }
 
     /// Add a decoration to an explicit buffer with configurable endpoint gravity.
@@ -335,12 +342,7 @@ impl<'a> EditorApi<'a> {
     }
 
     /// Copy decorations overlapping `[start, end)` from an explicit buffer.
-    pub fn decorations_in(
-        &self,
-        buffer: BufferId,
-        start: usize,
-        end: usize,
-    ) -> Vec<Decoration> {
+    pub fn decorations_in(&self, buffer: BufferId, start: usize, end: usize) -> Vec<Decoration> {
         self.ws
             .decorations()
             .in_range(buffer, start, end)
@@ -350,12 +352,7 @@ impl<'a> EditorApi<'a> {
     }
 
     /// Copy buffer-global and matching view-scoped decorations in a range.
-    pub fn decorations_in_view(
-        &self,
-        view: ViewId,
-        start: usize,
-        end: usize,
-    ) -> Vec<Decoration> {
+    pub fn decorations_in_view(&self, view: ViewId, start: usize, end: usize) -> Vec<Decoration> {
         let Some(buffer) = self.ws.views.get(&view).map(|view| view.buffer_id) else {
             return Vec::new();
         };
@@ -459,12 +456,7 @@ mod tests {
         let mut api = EditorApi::new(&mut ws);
         api.insert("abcd");
         let ns = api.decoration_namespace();
-        api.add_decoration(
-            ns,
-            1,
-            3,
-            DecorationKind::Highlight(crate::HlRole::Search),
-        );
+        api.add_decoration(ns, 1, 3, DecorationKind::Highlight(crate::HlRole::Search));
 
         api.set_cursor(Pos::new(0, 0));
         api.insert("x");

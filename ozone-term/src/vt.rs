@@ -37,7 +37,13 @@ pub struct Cell {
 
 impl Cell {
     const fn blank() -> Self {
-        Self { ch: ' ', fg: Color::Default, bg: Color::Default, bold: false, inverse: false }
+        Self {
+            ch: ' ',
+            fg: Color::Default,
+            bg: Color::Default,
+            bold: false,
+            inverse: false,
+        }
     }
 }
 
@@ -58,13 +64,24 @@ struct Pen {
 
 impl Pen {
     const fn new() -> Self {
-        Self { fg: Color::Default, bg: Color::Default, bold: false, inverse: false }
+        Self {
+            fg: Color::Default,
+            bg: Color::Default,
+            bold: false,
+            inverse: false,
+        }
     }
     fn reset(&mut self) {
         *self = Self::new();
     }
     fn cell(&self, ch: char) -> Cell {
-        Cell { ch, fg: self.fg, bg: self.bg, bold: self.bold, inverse: self.inverse }
+        Cell {
+            ch,
+            fg: self.fg,
+            bg: self.bg,
+            bold: self.bold,
+            inverse: self.inverse,
+        }
     }
 }
 
@@ -363,7 +380,11 @@ impl Vt {
         }
         let mut next = vec![vec![Cell::blank(); cols]; rows];
         let copy_cols = cols.min(self.cols);
-        for (dst_row, src_row) in next.iter_mut().zip(self.screen.iter()).take(rows.min(self.rows)) {
+        for (dst_row, src_row) in next
+            .iter_mut()
+            .zip(self.screen.iter())
+            .take(rows.min(self.rows))
+        {
             dst_row[..copy_cols].copy_from_slice(&src_row[..copy_cols]);
         }
         self.screen = next;
@@ -484,7 +505,10 @@ mod tests {
 
     #[test]
     fn sgr_colors_are_stripped_from_text() {
-        assert_eq!(render("\u{1b}[31mred\u{1b}[0m").lines().next().unwrap(), "red");
+        assert_eq!(
+            render("\u{1b}[31mred\u{1b}[0m").lines().next().unwrap(),
+            "red"
+        );
     }
 
     #[test]

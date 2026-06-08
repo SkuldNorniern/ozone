@@ -34,7 +34,10 @@ pub struct IndentConfig {
 
 impl Default for IndentConfig {
     fn default() -> Self {
-        Self { width: 4, soft_tabs: true }
+        Self {
+            width: 4,
+            soft_tabs: true,
+        }
     }
 }
 
@@ -116,7 +119,10 @@ impl Workspace {
         let view_id = view.id;
         self.views.insert(view_id, view);
         self.show_view_in_active_pane(view_id);
-        self.emit(EditorEvent::BufferOpened { id: buf_id, path: path.clone() });
+        self.emit(EditorEvent::BufferOpened {
+            id: buf_id,
+            path: path.clone(),
+        });
         self.emit(EditorEvent::BufferFiletype {
             id: buf_id,
             filetype: filetype_name(&path),
@@ -194,7 +200,11 @@ impl Workspace {
     /// Post a transient notification toast with the frontend's default timeout.
     /// Convenience over [`request_ui`](Self::request_ui); see [`EditorApi::notify`].
     pub fn notify(&mut self, level: crate::ui::NotifyLevel, text: impl Into<String>) {
-        self.request_ui(UiIntent::Notify { level, text: text.into(), timeout_ms: None });
+        self.request_ui(UiIntent::Notify {
+            level,
+            text: text.into(),
+            timeout_ms: None,
+        });
     }
 
     /// Buffer-local option overrides for `id`, if any have been set.
@@ -235,13 +245,10 @@ impl Workspace {
     }
 
     pub fn save_buffer(&mut self, id: BufferId) -> std::io::Result<()> {
-        let path = self
-            .buffers
-            .get(&id)
-            .and_then(|buf| match &buf.kind {
-                ozone_buffer::BufferKind::File(path) => Some(path.clone()),
-                _ => None,
-            });
+        let path = self.buffers.get(&id).and_then(|buf| match &buf.kind {
+            ozone_buffer::BufferKind::File(path) => Some(path.clone()),
+            _ => None,
+        });
 
         let Some(buf) = self.buffers.get_mut(&id) else {
             return Ok(());
@@ -290,7 +297,10 @@ impl Workspace {
 
     pub fn focus_pane_in_direction(&mut self, direction: FocusDirection) -> Option<ViewId> {
         let current = self.active_view_id?;
-        let target = self.panes.as_ref()?.neighbor_in_direction(current, direction)?;
+        let target = self
+            .panes
+            .as_ref()?
+            .neighbor_in_direction(current, direction)?;
         self.active_view_id = Some(target);
         Some(target)
     }
@@ -377,7 +387,9 @@ impl Workspace {
     /// Jump to the most recent recorded origin (Ctrl+-). Returns false if there
     /// is nowhere to go back to (skipping origins whose buffer was closed).
     pub fn jump_back(&mut self) -> bool {
-        let Some(cur) = self.current_loc() else { return false };
+        let Some(cur) = self.current_loc() else {
+            return false;
+        };
         while let Some(target) = self.jumps.back.pop() {
             if self.buffers.contains_key(&target.0) {
                 self.jumps.fwd.push(cur);
@@ -389,7 +401,9 @@ impl Workspace {
 
     /// Re-do a jump undone by `jump_back`. Returns false if there is none.
     pub fn jump_forward(&mut self) -> bool {
-        let Some(cur) = self.current_loc() else { return false };
+        let Some(cur) = self.current_loc() else {
+            return false;
+        };
         while let Some(target) = self.jumps.fwd.pop() {
             if self.buffers.contains_key(&target.0) {
                 self.jumps.back.push(cur);
@@ -402,19 +416,28 @@ impl Workspace {
     /// Point the active view at `buffer_id`, placing the cursor at `pos`
     /// (clamped) and scrolling it into view. Returns false if the buffer is gone.
     fn apply_loc(&mut self, buffer_id: BufferId, pos: Pos) -> bool {
-        let Some(buf) = self.buffers.get(&buffer_id) else { return false };
+        let Some(buf) = self.buffers.get(&buffer_id) else {
+            return false;
+        };
         let last_line = buf.line_count().saturating_sub(1);
         let line = pos.line.min(last_line);
         let col = pos.col.min(buf.line_len(line));
-        let Some(view_id) = self.active_view_id else { return false };
-        let Some(view) = self.views.get_mut(&view_id) else { return false };
+        let Some(view_id) = self.active_view_id else {
+            return false;
+        };
+        let Some(view) = self.views.get_mut(&view_id) else {
+            return false;
+        };
         view.buffer_id = buffer_id;
         view.cursor = Pos::new(line, col);
         view.col_memory = col;
         view.selection = None;
         view.scroll_to_cursor(view.page_height.max(1));
         let (id, cursor) = (view.id, view.cursor);
-        self.emit(EditorEvent::CursorMoved { view_id: id, pos: cursor });
+        self.emit(EditorEvent::CursorMoved {
+            view_id: id,
+            pos: cursor,
+        });
         true
     }
 
@@ -437,7 +460,8 @@ impl Workspace {
             return false;
         }
 
-        if matches!(self.panes.as_ref(), Some(PaneTree::Leaf { view_id: pane_view }) if *pane_view == view_id) {
+        if matches!(self.panes.as_ref(), Some(PaneTree::Leaf { view_id: pane_view }) if *pane_view == view_id)
+        {
             let Some(fallback) = self.views.keys().copied().find(|id| *id != view_id) else {
                 return false;
             };
@@ -539,7 +563,10 @@ impl Default for Workspace {
 /// Whether a path is a renderable raster image (by extension).
 pub fn is_image_path(path: &std::path::Path) -> bool {
     matches!(
-        path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(),
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
         Some("png" | "jpg" | "jpeg")
     )
 }
@@ -594,7 +621,10 @@ mod tests {
         assert_eq!(split.buffer_id, original_buffer);
         assert_eq!(split.cursor, original_cursor);
         assert_eq!(split.scroll_line, original_scroll);
-        assert_eq!(ws.panes.as_ref().unwrap().leaves(), vec![original_view, split_view]);
+        assert_eq!(
+            ws.panes.as_ref().unwrap().leaves(),
+            vec![original_view, split_view]
+        );
     }
 
     #[test]
@@ -750,7 +780,10 @@ mod tests {
     fn buffer_local_overrides_indent() {
         use crate::options::OptionValue;
         let mut ws = Workspace::new();
-        ws.indent = IndentConfig { width: 4, soft_tabs: true };
+        ws.indent = IndentConfig {
+            width: 4,
+            soft_tabs: true,
+        };
         let bid = ws.active_buffer().unwrap().id;
         // Global default applies until overridden.
         assert_eq!(ws.indent_for(bid).width, 4);
@@ -786,8 +819,7 @@ mod tests {
 
         let mut ws = Workspace::new();
         let original = ws.active_view_id.unwrap();
-        let (buffer, transient) =
-            ws.open_virtual_buffer(BufferKind::Search, "result".to_string());
+        let (buffer, transient) = ws.open_virtual_buffer(BufferKind::Search, "result".to_string());
         let namespace = ws.decorations_mut().namespace();
         ws.decorations_mut().add(
             buffer,
@@ -802,9 +834,10 @@ mod tests {
 
         assert!(!ws.buffers.contains_key(&buffer));
         assert!(ws.decorations().all(buffer).is_empty());
-        assert!(ws
-            .drain_events()
-            .iter()
-            .any(|event| matches!(event, EditorEvent::BufferClosed { id } if *id == buffer)));
+        assert!(
+            ws.drain_events()
+                .iter()
+                .any(|event| matches!(event, EditorEvent::BufferClosed { id } if *id == buffer))
+        );
     }
 }

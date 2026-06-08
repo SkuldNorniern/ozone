@@ -32,9 +32,18 @@ impl PieceTable {
         let pieces = if original.is_empty() {
             vec![]
         } else {
-            vec![Piece { buf: Buf::Original, start: 0, len: original.len() }]
+            vec![Piece {
+                buf: Buf::Original,
+                start: 0,
+                len: original.len(),
+            }]
         };
-        Self { original, add: Vec::new(), pieces, cache: RefCell::new(None) }
+        Self {
+            original,
+            add: Vec::new(),
+            pieces,
+            cache: RefCell::new(None),
+        }
     }
 
     /// Borrow the materialized full text, building (and caching) it on demand.
@@ -60,7 +69,7 @@ impl PieceTable {
     pub fn total_len(&self) -> usize {
         self.pieces.iter().map(|p| p.len).sum()
     }
-   
+
     /// Collect full text. O(n) on a cold cache, O(1) clone when warm.
     pub fn text(&self) -> String {
         self.materialized().to_string()
@@ -120,7 +129,11 @@ impl PieceTable {
         }
         let add_start = self.add.len();
         self.add.extend_from_slice(text.as_bytes());
-        let new_piece = Piece { buf: Buf::Add, start: add_start, len: text.len() };
+        let new_piece = Piece {
+            buf: Buf::Add,
+            start: add_start,
+            len: text.len(),
+        };
 
         let (pi, inner) = self.find_piece(offset);
 
@@ -130,8 +143,16 @@ impl PieceTable {
             self.pieces.insert(pi, new_piece);
         } else {
             let old = self.pieces[pi].clone();
-            let left  = Piece { buf: old.buf, start: old.start,          len: inner };
-            let right = Piece { buf: old.buf, start: old.start + inner,  len: old.len - inner };
+            let left = Piece {
+                buf: old.buf,
+                start: old.start,
+                len: inner,
+            };
+            let right = Piece {
+                buf: old.buf,
+                start: old.start + inner,
+                len: old.len - inner,
+            };
             self.pieces.splice(pi..=pi, [left, new_piece, right]);
         }
         self.invalidate();
@@ -162,16 +183,28 @@ impl PieceTable {
         // Left fragment of start piece
         if si > 0 {
             let p = &self.pieces[sp];
-            replacement.push(Piece { buf: p.buf, start: p.start, len: si });
+            replacement.push(Piece {
+                buf: p.buf,
+                start: p.start,
+                len: si,
+            });
         }
 
         // Right fragment of end piece (if it exists and has a tail)
         if ep < self.pieces.len() && ei < self.pieces[ep].len {
             let p = &self.pieces[ep];
-            replacement.push(Piece { buf: p.buf, start: p.start + ei, len: p.len - ei });
+            replacement.push(Piece {
+                buf: p.buf,
+                start: p.start + ei,
+                len: p.len - ei,
+            });
         }
 
-        let splice_end = if ep < self.pieces.len() { ep + 1 } else { self.pieces.len() };
+        let splice_end = if ep < self.pieces.len() {
+            ep + 1
+        } else {
+            self.pieces.len()
+        };
         self.pieces.splice(sp..splice_end, replacement);
 
         self.invalidate();
@@ -181,7 +214,10 @@ impl PieceTable {
     // --- helpers ---
 
     fn piece_bytes<'a>(&'a self, p: &Piece) -> &'a [u8] {
-        let buf = match p.buf { Buf::Original => &self.original, Buf::Add => &self.add };
+        let buf = match p.buf {
+            Buf::Original => &self.original,
+            Buf::Add => &self.add,
+        };
         &buf[p.start..p.start + p.len]
     }
 

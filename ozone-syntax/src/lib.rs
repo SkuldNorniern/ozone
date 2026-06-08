@@ -119,7 +119,11 @@ fn scan_rust(line: &str, mut state: ScanState) -> (Vec<TokenSpan>, ScanState) {
     macro_rules! push {
         ($start:expr, $end:expr, $kind:expr) => {
             if $end > $start {
-                spans.push(TokenSpan { start: $start, len: $end - $start, kind: $kind });
+                spans.push(TokenSpan {
+                    start: $start,
+                    len: $end - $start,
+                    kind: $kind,
+                });
             }
         };
     }
@@ -186,11 +190,14 @@ fn scan_rust(line: &str, mut state: ScanState) -> (Vec<TokenSpan>, ScanState) {
             let start = i;
             let mut depth = 0usize;
             while i < n {
-                if b[i] == b'[' { depth += 1; }
-                else if b[i] == b']' {
+                if b[i] == b'[' {
+                    depth += 1;
+                } else if b[i] == b']' {
                     depth -= 1;
                     i += 1;
-                    if depth == 0 { break; }
+                    if depth == 0 {
+                        break;
+                    }
                     continue;
                 }
                 i += 1;
@@ -204,9 +211,14 @@ fn scan_rust(line: &str, mut state: ScanState) -> (Vec<TokenSpan>, ScanState) {
             let start = i;
             i += 1;
             while i < n {
-                if b[i] == b'\\' { i += 2; }
-                else if b[i] == b'"' { i += 1; break; }
-                else { i += 1; }
+                if b[i] == b'\\' {
+                    i += 2;
+                } else if b[i] == b'"' {
+                    i += 1;
+                    break;
+                } else {
+                    i += 1;
+                }
             }
             push!(start, i, TokenKind::String);
             continue;
@@ -217,9 +229,14 @@ fn scan_rust(line: &str, mut state: ScanState) -> (Vec<TokenSpan>, ScanState) {
             let start = i;
             i += 2;
             while i < n {
-                if b[i] == b'\\' { i += 2; }
-                else if b[i] == b'"' { i += 1; break; }
-                else { i += 1; }
+                if b[i] == b'\\' {
+                    i += 2;
+                } else if b[i] == b'"' {
+                    i += 1;
+                    break;
+                } else {
+                    i += 1;
+                }
             }
             push!(start, i, TokenKind::String);
             continue;
@@ -233,8 +250,12 @@ fn scan_rust(line: &str, mut state: ScanState) -> (Vec<TokenSpan>, ScanState) {
                 if b[i] == b'\\' {
                     // Escape char literal: '\n', '\t', '\\', '\'' etc.
                     i += 1;
-                    while i < n && b[i] != b'\'' { i += 1; }
-                    if i < n { i += 1; }
+                    while i < n && b[i] != b'\'' {
+                        i += 1;
+                    }
+                    if i < n {
+                        i += 1;
+                    }
                     push!(start, i, TokenKind::String);
                 } else if i + 1 < n && b[i + 1] == b'\'' {
                     // Single-char literal 'x'
@@ -256,8 +277,12 @@ fn scan_rust(line: &str, mut state: ScanState) -> (Vec<TokenSpan>, ScanState) {
                     }
                 } else {
                     // Non-ascii char literal or something odd — skip
-                    while i < n && b[i] != b'\'' { i += 1; }
-                    if i < n { i += 1; }
+                    while i < n && b[i] != b'\'' {
+                        i += 1;
+                    }
+                    if i < n {
+                        i += 1;
+                    }
                     push!(start, i, TokenKind::String);
                 }
             }
@@ -266,17 +291,25 @@ fn scan_rust(line: &str, mut state: ScanState) -> (Vec<TokenSpan>, ScanState) {
 
         // --- number ---
         if (b[i] as char).is_ascii_digit()
-            || (b[i] == b'-' && i + 1 < n && (b[i + 1] as char).is_ascii_digit()
+            || (b[i] == b'-'
+                && i + 1 < n
+                && (b[i + 1] as char).is_ascii_digit()
                 && (i == 0 || !((b[i - 1] as char).is_ascii_alphanumeric() || b[i - 1] == b')')))
         {
             let start = i;
-            if b[i] == b'-' { i += 1; }
+            if b[i] == b'-' {
+                i += 1;
+            }
             // Hex
             if i + 1 < n && b[i] == b'0' && (b[i + 1] == b'x' || b[i + 1] == b'X') {
                 i += 2;
-                while i < n && (b[i] as char).is_ascii_hexdigit() { i += 1; }
+                while i < n && (b[i] as char).is_ascii_hexdigit() {
+                    i += 1;
+                }
             } else {
-                while i < n && ((b[i] as char).is_ascii_alphanumeric() || b[i] == b'_' || b[i] == b'.') {
+                while i < n
+                    && ((b[i] as char).is_ascii_alphanumeric() || b[i] == b'_' || b[i] == b'.')
+                {
                     i += 1;
                 }
             }
@@ -308,7 +341,21 @@ fn scan_rust(line: &str, mut state: ScanState) -> (Vec<TokenSpan>, ScanState) {
         }
 
         // --- operators (colour a few) ---
-        if matches!(b[i], b'+' | b'-' | b'*' | b'/' | b'%' | b'=' | b'!' | b'<' | b'>' | b'&' | b'|' | b'^' | b'~') {
+        if matches!(
+            b[i],
+            b'+' | b'-'
+                | b'*'
+                | b'/'
+                | b'%'
+                | b'='
+                | b'!'
+                | b'<'
+                | b'>'
+                | b'&'
+                | b'|'
+                | b'^'
+                | b'~'
+        ) {
             push!(i, i + 1, TokenKind::Operator);
             i += 1;
             continue;
@@ -323,25 +370,23 @@ fn scan_rust(line: &str, mut state: ScanState) -> (Vec<TokenSpan>, ScanState) {
 fn rust_keyword_kind(word: &str, is_fn_call: bool) -> TokenKind {
     match word {
         // control-flow keywords
-        "if" | "else" | "match" | "for" | "while" | "loop" | "break" | "continue" |
-        "return" | "yield" => TokenKind::KeywordControl,
+        "if" | "else" | "match" | "for" | "while" | "loop" | "break" | "continue" | "return"
+        | "yield" => TokenKind::KeywordControl,
 
         // declaration keywords
-        "fn" | "let" | "mut" | "const" | "static" | "struct" | "enum" | "union" |
-        "trait" | "impl" | "type" | "where" | "pub" | "use" | "mod" | "extern" |
-        "crate" | "super" | "self" | "Self" | "in" | "as" | "move" | "async" |
-        "await" | "dyn" | "unsafe" | "ref" | "box" => TokenKind::Keyword,
+        "fn" | "let" | "mut" | "const" | "static" | "struct" | "enum" | "union" | "trait"
+        | "impl" | "type" | "where" | "pub" | "use" | "mod" | "extern" | "crate" | "super"
+        | "self" | "Self" | "in" | "as" | "move" | "async" | "await" | "dyn" | "unsafe" | "ref"
+        | "box" => TokenKind::Keyword,
 
         // primitive types
-        "bool" | "char" | "str" |
-        "i8" | "i16" | "i32" | "i64" | "i128" | "isize" |
-        "u8" | "u16" | "u32" | "u64" | "u128" | "usize" |
-        "f32" | "f64" => TokenKind::Type,
+        "bool" | "char" | "str" | "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8"
+        | "u16" | "u32" | "u64" | "u128" | "usize" | "f32" | "f64" => TokenKind::Type,
 
         // common std types (uppercase)
-        "String" | "Vec" | "Option" | "Result" | "Box" | "Rc" | "Arc" |
-        "HashMap" | "HashSet" | "BTreeMap" | "BTreeSet" | "Mutex" | "RwLock" |
-        "PathBuf" | "Path" | "Cow" | "Pin" | "Error" => TokenKind::Type,
+        "String" | "Vec" | "Option" | "Result" | "Box" | "Rc" | "Arc" | "HashMap" | "HashSet"
+        | "BTreeMap" | "BTreeSet" | "Mutex" | "RwLock" | "PathBuf" | "Path" | "Cow" | "Pin"
+        | "Error" => TokenKind::Type,
 
         // boolean literals
         "true" | "false" => TokenKind::Number,
@@ -349,7 +394,13 @@ fn rust_keyword_kind(word: &str, is_fn_call: bool) -> TokenKind {
         _ => {
             if is_fn_call {
                 TokenKind::Function
-            } else if word.len() > 1 && word.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+            } else if word.len() > 1
+                && word
+                    .chars()
+                    .next()
+                    .map(|c| c.is_uppercase())
+                    .unwrap_or(false)
+            {
                 // PascalCase → type/struct name
                 TokenKind::Type
             } else {
@@ -372,13 +423,19 @@ fn scan_toml(line: &str) -> Vec<TokenSpan> {
     macro_rules! push {
         ($start:expr, $end:expr, $kind:expr) => {
             if $end > $start {
-                spans.push(TokenSpan { start: $start, len: $end - $start, kind: $kind });
+                spans.push(TokenSpan {
+                    start: $start,
+                    len: $end - $start,
+                    kind: $kind,
+                });
             }
         };
     }
 
     // Skip leading whitespace
-    while i < n && b[i] == b' ' { i += 1; }
+    while i < n && b[i] == b' ' {
+        i += 1;
+    }
 
     // Comment
     if i < n && b[i] == b'#' {
@@ -395,7 +452,9 @@ fn scan_toml(line: &str) -> Vec<TokenSpan> {
     // Key = value
     // Key (up to =)
     let key_start = i;
-    while i < n && b[i] != b'=' && b[i] != b'#' { i += 1; }
+    while i < n && b[i] != b'=' && b[i] != b'#' {
+        i += 1;
+    }
     let key_end = i;
 
     if i < n && b[i] == b'=' {
@@ -403,9 +462,13 @@ fn scan_toml(line: &str) -> Vec<TokenSpan> {
         i += 1; // skip =
 
         // Skip whitespace before value
-        while i < n && b[i] == b' ' { i += 1; }
+        while i < n && b[i] == b' ' {
+            i += 1;
+        }
 
-        if i >= n { return spans; }
+        if i >= n {
+            return spans;
+        }
 
         // Value
         let val_start = i;
@@ -439,7 +502,11 @@ fn scan_toml(line: &str) -> Vec<TokenSpan> {
 
         let is_number = *val == "true"
             || *val == "false"
-            || val.chars().next().map(|c| c.is_ascii_digit() || c == '-').unwrap_or(false);
+            || val
+                .chars()
+                .next()
+                .map(|c| c.is_ascii_digit() || c == '-')
+                .unwrap_or(false);
         let kind = if val.starts_with('"') || val.starts_with('\'') {
             TokenKind::String
         } else if val.starts_with('[') || val.starts_with('{') {
@@ -474,7 +541,11 @@ fn scan_json(line: &str, mut state: ScanState) -> (Vec<TokenSpan>, ScanState) {
     macro_rules! push {
         ($start:expr, $end:expr, $kind:expr) => {
             if $end > $start {
-                spans.push(TokenSpan { start: $start, len: $end - $start, kind: $kind });
+                spans.push(TokenSpan {
+                    start: $start,
+                    len: $end - $start,
+                    kind: $kind,
+                });
             }
         };
     }
@@ -614,7 +685,11 @@ fn scan_markdown(line: &str, mut state: ScanState) -> (Vec<TokenSpan>, ScanState
     macro_rules! push {
         ($start:expr, $end:expr, $kind:expr) => {
             if $end > $start {
-                spans.push(TokenSpan { start: $start, len: $end - $start, kind: $kind });
+                spans.push(TokenSpan {
+                    start: $start,
+                    len: $end - $start,
+                    kind: $kind,
+                });
             }
         };
     }

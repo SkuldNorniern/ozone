@@ -174,7 +174,11 @@ impl DecorationStore {
             .checked_add(1)
             .expect("decoration id space exhausted");
         let id = DecorationId(self.next_id);
-        let (start, end) = if start <= end { (start, end) } else { (end, start) };
+        let (start, end) = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
         self.by_buffer.entry(buffer).or_default().push(Decoration {
             id,
             namespace,
@@ -232,11 +236,7 @@ impl DecorationStore {
     }
 
     /// Remove a namespace's decorations scoped to one view, across buffers.
-    pub fn clear_namespace_for_view(
-        &mut self,
-        namespace: NamespaceId,
-        view: ViewId,
-    ) -> usize {
+    pub fn clear_namespace_for_view(&mut self, namespace: NamespaceId, view: ViewId) -> usize {
         let mut removed = 0;
         for decorations in self.by_buffer.values_mut() {
             let before = decorations.len();
@@ -306,11 +306,12 @@ impl DecorationStore {
             .iter()
             .filter(|d| {
                 let visible = d.view.is_none() || d.view == view;
-                visible && if d.start == d.end {
-                    d.start >= start && d.start < end
-                } else {
-                    d.start < end && d.end > start
-                }
+                visible
+                    && if d.start == d.end {
+                        d.start >= start && d.start < end
+                    } else {
+                        d.start < end && d.end > start
+                    }
             })
             .collect();
         out.sort_by_key(|d| (d.start, d.end, d.id.0));
@@ -338,9 +339,7 @@ impl DecorationStore {
                 let (o, len) = (*offset, text.len());
                 for d in v.iter_mut() {
                     if d.start == d.end {
-                        if d.start > o
-                            || (d.start == o && d.start_gravity == Gravity::Right)
-                        {
+                        if d.start > o || (d.start == o && d.start_gravity == Gravity::Right) {
                             d.start += len;
                             d.end += len;
                         }
@@ -409,7 +408,13 @@ mod tests {
         }
     }
 
-    fn hl(store: &mut DecorationStore, buf: BufferId, ns: NamespaceId, s: usize, e: usize) -> DecorationId {
+    fn hl(
+        store: &mut DecorationStore,
+        buf: BufferId,
+        ns: NamespaceId,
+        s: usize,
+        e: usize,
+    ) -> DecorationId {
         store.add(buf, ns, s, e, DecorationKind::Highlight(HlRole::Search))
     }
 

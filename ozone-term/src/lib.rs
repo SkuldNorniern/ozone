@@ -17,8 +17,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-pub use vt::{Cell, Color};
 use vt::Vt;
+pub use vt::{Cell, Color};
 
 /// Initial PTY/grid size (cells). The GUI resizes to the visible area.
 const INIT_COLS: u16 = 120;
@@ -92,7 +92,11 @@ impl Terminal {
     }
 }
 
-fn spawn_reader<R: Read + Send + 'static>(mut reader: R, vt: Arc<Mutex<Vt>>, version: Arc<AtomicU64>) {
+fn spawn_reader<R: Read + Send + 'static>(
+    mut reader: R,
+    vt: Arc<Mutex<Vt>>,
+    version: Arc<AtomicU64>,
+) {
     thread::spawn(move || {
         let mut buf = [0u8; 4096];
         loop {

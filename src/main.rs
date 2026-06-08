@@ -8,15 +8,18 @@ fn main() {
 
     // Load user config (~/.config/ozone/config.toml or %APPDATA%\ozone\config.toml),
     // falling back to defaults when absent or malformed.
-    let config = Config::load_user();
+    let (config, config_warning) = Config::load_user_with_warning();
+    if let Some(warning) = config_warning {
+        eprintln!("ozone: {warning}");
+    }
     #[cfg(debug_assertions)]
     {
         let source = Config::resolved_config_path()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "built-in defaults".to_string());
         eprintln!(
-            "ozone: config={} font=\"{}\" size={}",
-            source, config.editor.font, config.editor.font_size
+            "ozone: config={} font=\"{}\" size={} mouse={}",
+            source, config.editor.font, config.editor.font_size, config.ui.mouse
         );
     }
 

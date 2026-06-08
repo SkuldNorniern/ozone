@@ -12,14 +12,14 @@ use aurea::render::{Color, DrawingContext, Font, Image, Point, Rect};
 use ozone_buffer::{BufferKind, Pos};
 use ozone_config::{Config, CursorStyle, LineNumbers};
 use ozone_editor::{
-    BRACKET_NAMESPACE, Decoration, DecorationKind, HlRole, PaneTree, ViewId, VirtualPos,
-    Workspace, matching_bracket,
+    BRACKET_NAMESPACE, Decoration, DecorationKind, HlRole, PaneTree, ViewId, VirtualPos, Workspace,
+    matching_bracket,
 };
 use ozone_syntax::{Filetype, ScanState, TokenKind, scan_line};
 
+use crate::components::draw_pill;
 use crate::input::ActiveMods;
 use crate::layout::*;
-use crate::components::draw_pill;
 use crate::search::{SearchState, draw_search_bar};
 use crate::theme::{palette, solid, stroke, term_color, token_color};
 use crate::{ImageCache, TermCells, editor_font};
@@ -340,253 +340,253 @@ fn draw_view(
                 break;
             }
 
-        let line_top = content_top - scroll_y + i as f32 * line_h;
-        if line_top >= content_top + content_h || line_top >= rect.y + rect.height {
-            break;
-        }
-
-        let baseline =
-            baseline_in_rect(line_top, line_h, metrics.text_ascent, metrics.text_descent);
-        let is_cursor = line_idx == view.cursor.line;
-        let line_text = &full_line_text[segment_start..segment_end];
-        let line_end = line_start + full_line_text.len();
-        let segment_abs_start = line_start + segment_start;
-        let segment_abs_end = line_start + segment_end;
-        let segment_is_line_end =
-            segment_index + 1 == wrap_segments.len() && segment_end == full_line_text.len();
-        let line_decorations: Vec<&Decoration> = decorations
-            .iter()
-            .filter(|decoration| {
-                if decoration.start == decoration.end {
-                    decoration.start >= segment_abs_start && decoration.start <= segment_abs_end
-                } else {
-                    decoration.start < segment_abs_end && decoration.end > segment_abs_start
-                }
-            })
-            .collect();
-
-        // Cursor-line highlight
-        if is_cursor && is_active_pane {
-            ctx.draw_rect(
-                Rect::new(rect.x, line_top + 1.0, rect.width, line_h - 1.0),
-                &solid(palette().cursor_line),
-            )?;
-        }
-
-        // Selection is view-local and byte-oriented, matching the editor's
-        // `Pos`/`Span` model. Draw it before search/bracket decorations.
-        if let Some(selection) = view.selection
-            && line_idx >= selection.start.line
-            && line_idx <= selection.end.line
-        {
-            let line_len = buf.line_len(line_idx);
-            let start_col = if line_idx == selection.start.line {
-                selection.start.col.min(line_len)
-            } else {
-                0
-            };
-            let end_col = if line_idx == selection.end.line {
-                selection.end.col.min(line_len)
-            } else {
-                line_len
-            };
-            let start_col = start_col.max(segment_start).min(segment_end);
-            let end_col = end_col.max(segment_start).min(segment_end);
-            if end_col > start_col {
-                let sx = text_x + (start_col - segment_start) as f32 * metrics.char_w;
-                let sw = (end_col - start_col) as f32 * metrics.char_w;
-                ctx.draw_rect(
-                    Rect::new(sx, line_top + 1.0, sw, line_h - 2.0),
-                    &solid(palette().selection),
-                )?;
+            let line_top = content_top - scroll_y + i as f32 * line_h;
+            if line_top >= content_top + content_h || line_top >= rect.y + rect.height {
+                break;
             }
-        }
 
-        for decoration in &line_decorations {
-            if let DecorationKind::Highlight(role) = &decoration.kind {
-                let start = decoration.start.max(segment_abs_start) - segment_abs_start;
-                let end = decoration.end.min(segment_abs_end) - segment_abs_start;
-                if end > start {
-                    ctx.draw_rect(
-                        Rect::new(
-                            text_x + start as f32 * metrics.char_w,
-                            line_top + 1.0,
-                            (end - start) as f32 * metrics.char_w,
-                            line_h - 2.0,
-                        ),
-                        &solid(decoration_highlight_color(*role)),
-                    )?;
-                }
-            }
-        }
-
-        // Gutter line number (absolute / relative / off per config)
-        let gutter_label = if segment_index == 0 {
-            match line_numbers {
-                LineNumbers::Off => None,
-                LineNumbers::Absolute => Some(format!("{:>4}", line_idx + 1)),
-                LineNumbers::Relative => {
-                    if is_cursor {
-                        Some(format!("{:<4}", line_idx + 1))
-                    } else {
-                        let dist = line_idx.abs_diff(view.cursor.line);
-                        Some(format!("{:>4}", dist))
-                    }
-                }
-            }
-        } else {
-            None
-        };
-        if let Some(num) = gutter_label {
-            let ng = if is_cursor {
-                palette().line_number_active
-            } else {
-                palette().line_number
-            };
-            let num_x =
-                (rect.x + gutter_w - PAD - num.len() as f32 * metrics.char_w).max(rect.x + 4.0);
-            ctx.draw_text_with_font(&num, Point::new(num_x, baseline), font, &solid(ng))?;
-        }
-
-        let gutter_signs: String = line_decorations
-            .iter()
-            .filter_map(|decoration| match &decoration.kind {
-                DecorationKind::GutterSign(sign)
-                    if decoration.start >= line_start && decoration.start <= line_end =>
-                {
-                    Some(sign.as_str())
-                }
-                _ => None,
-            })
-            .collect();
-        if !gutter_signs.is_empty() && gutter_w > 0.0 {
-            ctx.draw_text_with_font(
-                &gutter_signs,
-                Point::new(rect.x + 3.0, baseline),
-                font,
-                &solid(palette().picker_prompt),
-            )?;
-        }
-
-        // Line content: terminal colour grid, or syntax-highlighted buffer text.
-        if let Some(grid) = term_grid {
-            if let Some(row) = grid.get(line_idx) {
-                let row = &row[..row.len().min(text_cols)];
-                draw_term_row(
-                    ctx,
-                    row,
-                    text_x,
-                    line_top,
-                    baseline,
-                    line_h,
-                    metrics.char_w,
-                    font,
-                )?;
-            }
-        } else {
-            let inline_virtual: Vec<&Decoration> = line_decorations
+            let baseline =
+                baseline_in_rect(line_top, line_h, metrics.text_ascent, metrics.text_descent);
+            let is_cursor = line_idx == view.cursor.line;
+            let line_text = &full_line_text[segment_start..segment_end];
+            let line_end = line_start + full_line_text.len();
+            let segment_abs_start = line_start + segment_start;
+            let segment_abs_end = line_start + segment_end;
+            let segment_is_line_end =
+                segment_index + 1 == wrap_segments.len() && segment_end == full_line_text.len();
+            let line_decorations: Vec<&Decoration> = decorations
                 .iter()
-                .copied()
                 .filter(|decoration| {
-                    let anchored_here = decoration.start >= segment_abs_start
-                        && decoration.start <= segment_abs_end;
-                    anchored_here
-                        && matches!(
-                        &decoration.kind,
-                        DecorationKind::VirtualText {
-                            pos: VirtualPos::Inline,
-                            ..
-                        }
-                    )
+                    if decoration.start == decoration.end {
+                        decoration.start >= segment_abs_start && decoration.start <= segment_abs_end
+                    } else {
+                        decoration.start < segment_abs_end && decoration.end > segment_abs_start
+                    }
                 })
                 .collect();
 
-            if !inline_virtual.is_empty() {
-                draw_line_with_inline_virtual_text(
-                    ctx,
-                    line_text,
-                    &shift_token_spans(&spans, segment_start, segment_end),
-                    &inline_virtual,
-                    segment_abs_start,
-                    text_x,
-                    baseline,
-                    metrics.char_w,
-                    font,
-                )?;
-            } else if spans.is_empty() || ft == Filetype::Plain {
-                ctx.draw_text_with_font(
-                    line_text,
-                    Point::new(text_x, baseline),
-                    font,
-                    &solid(token_color(TokenKind::Default)),
-                )?;
-            } else {
-                draw_highlighted(
-                    ctx,
-                    line_text,
-                    &shift_token_spans(&spans, segment_start, segment_end),
-                    text_x,
-                    baseline,
-                    metrics.char_w,
-                    font,
+            // Cursor-line highlight
+            if is_cursor && is_active_pane {
+                ctx.draw_rect(
+                    Rect::new(rect.x, line_top + 1.0, rect.width, line_h - 1.0),
+                    &solid(palette().cursor_line),
                 )?;
             }
-        }
 
-        for decoration in &line_decorations {
-            match &decoration.kind {
-                DecorationKind::Underline(role) => {
+            // Selection is view-local and byte-oriented, matching the editor's
+            // `Pos`/`Span` model. Draw it before search/bracket decorations.
+            if let Some(selection) = view.selection
+                && line_idx >= selection.start.line
+                && line_idx <= selection.end.line
+            {
+                let line_len = buf.line_len(line_idx);
+                let start_col = if line_idx == selection.start.line {
+                    selection.start.col.min(line_len)
+                } else {
+                    0
+                };
+                let end_col = if line_idx == selection.end.line {
+                    selection.end.col.min(line_len)
+                } else {
+                    line_len
+                };
+                let start_col = start_col.max(segment_start).min(segment_end);
+                let end_col = end_col.max(segment_start).min(segment_end);
+                if end_col > start_col {
+                    let sx = text_x + (start_col - segment_start) as f32 * metrics.char_w;
+                    let sw = (end_col - start_col) as f32 * metrics.char_w;
+                    ctx.draw_rect(
+                        Rect::new(sx, line_top + 1.0, sw, line_h - 2.0),
+                        &solid(palette().selection),
+                    )?;
+                }
+            }
+
+            for decoration in &line_decorations {
+                if let DecorationKind::Highlight(role) = &decoration.kind {
                     let start = decoration.start.max(segment_abs_start) - segment_abs_start;
                     let end = decoration.end.min(segment_abs_end) - segment_abs_start;
                     if end > start {
-                        let y = line_top + line_h - 2.0;
-                        ctx.draw_line(
-                            text_x + start as f32 * metrics.char_w,
-                            y,
-                            text_x + end as f32 * metrics.char_w,
-                            y,
-                            &stroke(decoration_role_color(*role), 1.0),
+                        ctx.draw_rect(
+                            Rect::new(
+                                text_x + start as f32 * metrics.char_w,
+                                line_top + 1.0,
+                                (end - start) as f32 * metrics.char_w,
+                                line_h - 2.0,
+                            ),
+                            &solid(decoration_highlight_color(*role)),
                         )?;
                     }
                 }
-                DecorationKind::VirtualText {
-                    text,
-                    pos: VirtualPos::Eol,
-                    role,
-                } if segment_is_line_end
-                    && decoration.start >= line_start
-                    && decoration.start <= line_end =>
-                {
-                    ctx.draw_text_with_font(
-                        text,
-                        Point::new(
-                            text_x + (line_text.len() + 1) as f32 * metrics.char_w,
-                            baseline,
-                        ),
+            }
+
+            // Gutter line number (absolute / relative / off per config)
+            let gutter_label = if segment_index == 0 {
+                match line_numbers {
+                    LineNumbers::Off => None,
+                    LineNumbers::Absolute => Some(format!("{:>4}", line_idx + 1)),
+                    LineNumbers::Relative => {
+                        if is_cursor {
+                            Some(format!("{:<4}", line_idx + 1))
+                        } else {
+                            let dist = line_idx.abs_diff(view.cursor.line);
+                            Some(format!("{:>4}", dist))
+                        }
+                    }
+                }
+            } else {
+                None
+            };
+            if let Some(num) = gutter_label {
+                let ng = if is_cursor {
+                    palette().line_number_active
+                } else {
+                    palette().line_number
+                };
+                let num_x =
+                    (rect.x + gutter_w - PAD - num.len() as f32 * metrics.char_w).max(rect.x + 4.0);
+                ctx.draw_text_with_font(&num, Point::new(num_x, baseline), font, &solid(ng))?;
+            }
+
+            let gutter_signs: String = line_decorations
+                .iter()
+                .filter_map(|decoration| match &decoration.kind {
+                    DecorationKind::GutterSign(sign)
+                        if decoration.start >= line_start && decoration.start <= line_end =>
+                    {
+                        Some(sign.as_str())
+                    }
+                    _ => None,
+                })
+                .collect();
+            if !gutter_signs.is_empty() && gutter_w > 0.0 {
+                ctx.draw_text_with_font(
+                    &gutter_signs,
+                    Point::new(rect.x + 3.0, baseline),
+                    font,
+                    &solid(palette().picker_prompt),
+                )?;
+            }
+
+            // Line content: terminal colour grid, or syntax-highlighted buffer text.
+            if let Some(grid) = term_grid {
+                if let Some(row) = grid.get(line_idx) {
+                    let row = &row[..row.len().min(text_cols)];
+                    draw_term_row(
+                        ctx,
+                        row,
+                        text_x,
+                        line_top,
+                        baseline,
+                        line_h,
+                        metrics.char_w,
                         font,
-                        &solid(decoration_role_color(*role)),
                     )?;
                 }
-                _ => {}
-            }
-        }
+            } else {
+                let inline_virtual: Vec<&Decoration> = line_decorations
+                    .iter()
+                    .copied()
+                    .filter(|decoration| {
+                        let anchored_here = decoration.start >= segment_abs_start
+                            && decoration.start <= segment_abs_end;
+                        anchored_here
+                            && matches!(
+                                &decoration.kind,
+                                DecorationKind::VirtualText {
+                                    pos: VirtualPos::Inline,
+                                    ..
+                                }
+                            )
+                    })
+                    .collect();
 
-        if cursor_visible
-            && is_cursor
-            && is_active_pane
-            && view.cursor.col >= segment_start
-            && (view.cursor.col < segment_end || segment_is_line_end)
-        {
-            draw_cursor(
-                ctx,
-                text_x + view.cursor.col.saturating_sub(segment_start) as f32 * metrics.char_w,
-                line_top,
-                line_h,
-                metrics.char_w,
-                config.editor.cursor_style,
-            )?;
-        }
-        visual_i += 1;
+                if !inline_virtual.is_empty() {
+                    draw_line_with_inline_virtual_text(
+                        ctx,
+                        line_text,
+                        &shift_token_spans(&spans, segment_start, segment_end),
+                        &inline_virtual,
+                        segment_abs_start,
+                        text_x,
+                        baseline,
+                        metrics.char_w,
+                        font,
+                    )?;
+                } else if spans.is_empty() || ft == Filetype::Plain {
+                    ctx.draw_text_with_font(
+                        line_text,
+                        Point::new(text_x, baseline),
+                        font,
+                        &solid(token_color(TokenKind::Default)),
+                    )?;
+                } else {
+                    draw_highlighted(
+                        ctx,
+                        line_text,
+                        &shift_token_spans(&spans, segment_start, segment_end),
+                        text_x,
+                        baseline,
+                        metrics.char_w,
+                        font,
+                    )?;
+                }
+            }
+
+            for decoration in &line_decorations {
+                match &decoration.kind {
+                    DecorationKind::Underline(role) => {
+                        let start = decoration.start.max(segment_abs_start) - segment_abs_start;
+                        let end = decoration.end.min(segment_abs_end) - segment_abs_start;
+                        if end > start {
+                            let y = line_top + line_h - 2.0;
+                            ctx.draw_line(
+                                text_x + start as f32 * metrics.char_w,
+                                y,
+                                text_x + end as f32 * metrics.char_w,
+                                y,
+                                &stroke(decoration_role_color(*role), 1.0),
+                            )?;
+                        }
+                    }
+                    DecorationKind::VirtualText {
+                        text,
+                        pos: VirtualPos::Eol,
+                        role,
+                    } if segment_is_line_end
+                        && decoration.start >= line_start
+                        && decoration.start <= line_end =>
+                    {
+                        ctx.draw_text_with_font(
+                            text,
+                            Point::new(
+                                text_x + (line_text.len() + 1) as f32 * metrics.char_w,
+                                baseline,
+                            ),
+                            font,
+                            &solid(decoration_role_color(*role)),
+                        )?;
+                    }
+                    _ => {}
+                }
+            }
+
+            if cursor_visible
+                && is_cursor
+                && is_active_pane
+                && view.cursor.col >= segment_start
+                && (view.cursor.col < segment_end || segment_is_line_end)
+            {
+                draw_cursor(
+                    ctx,
+                    text_x + view.cursor.col.saturating_sub(segment_start) as f32 * metrics.char_w,
+                    line_top,
+                    line_h,
+                    metrics.char_w,
+                    config.editor.cursor_style,
+                )?;
+            }
+            visual_i += 1;
         }
         line_idx += 1;
     }
@@ -673,11 +673,11 @@ fn sync_bracket_decorations(ws: &mut Workspace, view_id: ViewId) {
         .namespace_for_view(BRACKET_NAMESPACE, view_id)
         .into_iter()
         .filter_map(|(buffer, decoration)| {
-            matches!(
-                decoration.kind,
-                DecorationKind::Highlight(HlRole::Bracket)
-            )
-            .then_some((buffer, decoration.start, decoration.end))
+            matches!(decoration.kind, DecorationKind::Highlight(HlRole::Bracket)).then_some((
+                buffer,
+                decoration.start,
+                decoration.end,
+            ))
         })
         .collect();
     current.sort_by_key(|(_, start, _)| *start);

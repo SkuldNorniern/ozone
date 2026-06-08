@@ -51,7 +51,10 @@ impl Span {
         Self { start, end }
     }
     pub const fn empty(pos: Pos) -> Self {
-        Self { start: pos, end: pos }
+        Self {
+            start: pos,
+            end: pos,
+        }
     }
     pub fn is_empty(self) -> bool {
         self.start == self.end
@@ -88,7 +91,11 @@ impl Buffer {
     }
 
     pub fn from_text(content: &str) -> Self {
-        Self::init(BufferId::next(), BufferKind::Scratch, PieceTable::new(content))
+        Self::init(
+            BufferId::next(),
+            BufferKind::Scratch,
+            PieceTable::new(content),
+        )
     }
 
     pub fn virtual_buffer(kind: BufferKind, content: &str) -> Self {
@@ -107,7 +114,11 @@ impl Buffer {
     /// An image buffer: the file is rendered, not loaded as text. Holds no
     /// piece-table content; the GUI decodes the path on demand.
     pub fn open_image(path: PathBuf) -> Self {
-        Self::init(BufferId::next(), BufferKind::Image(path), PieceTable::new(""))
+        Self::init(
+            BufferId::next(),
+            BufferKind::Image(path),
+            PieceTable::new(""),
+        )
     }
 
     fn init(id: BufferId, kind: BufferKind, table: PieceTable) -> Self {
@@ -175,7 +186,12 @@ impl Buffer {
     pub fn insert(&mut self, pos: Pos, text: &str) -> Delta {
         let offset = self.pos_to_offset(pos);
         self.table.insert(offset, text);
-        let delta = Delta { kind: DeltaKind::Insert { offset, text: text.to_string() } };
+        let delta = Delta {
+            kind: DeltaKind::Insert {
+                offset,
+                text: text.to_string(),
+            },
+        };
         self.push_undo(delta.clone());
         delta
     }
@@ -185,10 +201,20 @@ impl Buffer {
         let a = self.pos_to_offset(start);
         let b = self.pos_to_offset(end);
         if a >= b {
-            return Delta { kind: DeltaKind::Insert { offset: a, text: String::new() } };
+            return Delta {
+                kind: DeltaKind::Insert {
+                    offset: a,
+                    text: String::new(),
+                },
+            };
         }
         let deleted = self.table.delete(a, b - a);
-        let delta = Delta { kind: DeltaKind::Delete { offset: a, text: deleted } };
+        let delta = Delta {
+            kind: DeltaKind::Delete {
+                offset: a,
+                text: deleted,
+            },
+        };
         self.push_undo(delta.clone());
         delta
     }
@@ -202,7 +228,12 @@ impl Buffer {
         if deleted.is_empty() {
             return None;
         }
-        let delta = Delta { kind: DeltaKind::Delete { offset, text: deleted } };
+        let delta = Delta {
+            kind: DeltaKind::Delete {
+                offset,
+                text: deleted,
+            },
+        };
         self.push_undo(delta.clone());
         Some(delta)
     }

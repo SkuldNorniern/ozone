@@ -7,9 +7,9 @@
 
 use std::io::{self, Read};
 
+pub mod inhouse;
 #[cfg(feature = "portable")]
 pub mod portable_backend;
-pub mod inhouse;
 
 /// A spawned pseudo-terminal: a reader for output, a writer for input, plus
 /// resize and liveness. Concrete backends own the child process.
@@ -38,6 +38,8 @@ pub fn spawn_default() -> io::Result<Box<dyn Pty>> {
     }
     #[cfg(not(any(feature = "portable", feature = "inhouse")))]
     {
-        Err(io::Error::other("no PTY backend enabled (enable `portable` or `inhouse`)"))
+        Err(io::Error::other(
+            "no PTY backend enabled (enable `portable` or `inhouse`)",
+        ))
     }
 }

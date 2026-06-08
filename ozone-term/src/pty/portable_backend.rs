@@ -14,7 +14,12 @@ fn oerr<E: std::fmt::Display>(e: E) -> io::Error {
 pub fn spawn() -> io::Result<Box<dyn Pty>> {
     let system = native_pty_system();
     let pair = system
-        .openpty(PtySize { rows: 40, cols: 120, pixel_width: 0, pixel_height: 0 })
+        .openpty(PtySize {
+            rows: 40,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
         .map_err(oerr)?;
 
     let mut cmd = CommandBuilder::new_default_prog();
@@ -48,14 +53,22 @@ impl Pty for PortablePty {
     }
 
     fn write(&self, data: &[u8]) -> io::Result<()> {
-        let mut w = self.writer.lock().map_err(|_| io::Error::other("pty writer poisoned"))?;
+        let mut w = self
+            .writer
+            .lock()
+            .map_err(|_| io::Error::other("pty writer poisoned"))?;
         w.write_all(data)?;
         w.flush()
     }
 
     fn resize(&self, cols: u16, rows: u16) {
         if let Ok(master) = self.master.lock() {
-            let _ = master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+            let _ = master.resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            });
         }
     }
 
