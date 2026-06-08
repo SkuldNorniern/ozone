@@ -114,21 +114,15 @@ jobs:
         run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
       - name: Generate changelog
-        id: cliff
-        continue-on-error: true
-        uses: orhun/git-cliff-action@v3
-        with:
-          config: cliff.toml
-          args: --unreleased --strip all
-        env:
-          OUTPUT: CHANGELOG_NIGHTLY.md
-          GITHUB_REPO: ${{ github.repository }}
-
-      - name: Fallback changelog
-        if: steps.cliff.outcome == 'failure'
         run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
           echo "### Changes" > CHANGELOG_NIGHTLY.md
-          git log --oneline -20 >> CHANGELOG_NIGHTLY.md
+          echo "" >> CHANGELOG_NIGHTLY.md
+          if [ -n "$LAST_TAG" ]; then
+            git log "${LAST_TAG}..HEAD" --pretty=format:"- %s" >> CHANGELOG_NIGHTLY.md
+          else
+            git log --pretty=format:"- %s" -30 >> CHANGELOG_NIGHTLY.md
+          fi
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
