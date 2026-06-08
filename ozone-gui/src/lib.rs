@@ -266,6 +266,10 @@ impl OzoneGui {
                         let _ = (width, height);
                         needs_redraw = true;
                     }
+                    WindowEvent::ScaleFactorChanged { scale_factor } => {
+                        let _ = scale_factor;
+                        needs_redraw = true;
+                    }
 
                     // Modifier release: refresh the live modifier indicator. The
                     // native modifier snapshot is unreliable for a modifier's own
