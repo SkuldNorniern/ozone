@@ -6,21 +6,22 @@ use ozone_buffer::{Buffer, BufferId, BufferKind, Pos};
 use crate::decoration::DecorationStore;
 use crate::events::EditorEvent;
 use crate::options::{BufferLocal, OptionValue};
-use crate::pane::{FocusDirection, PaneTree, SplitAxis};
+use crate::pane::PaneTree;
 use crate::ui::UiIntent;
 use crate::view::{View, ViewId};
 
+mod nav;
+mod pane;
+
 /// A point in the jump list: which buffer and where in it.
-type Loc = (BufferId, Pos);
+pub(super) type Loc = (BufferId, Pos);
 
 /// Maximum remembered jump origins (per direction).
-const JUMP_CAP: usize = 100;
+pub(super) const JUMP_CAP: usize = 100;
 
-/// Browser-style back/forward history of cursor jump origins. `push` records a
-/// place you are leaving (clearing the forward stack); `back`/`forward` move
-/// between recorded locations.
+/// Browser-style back/forward history of cursor jump origins.
 #[derive(Default)]
-struct JumpList {
+pub(super) struct JumpList {
     back: Vec<Loc>,
     fwd: Vec<Loc>,
 }
@@ -59,13 +60,11 @@ pub struct Workspace {
     pub active_view_id: Option<ViewId>,
     pub panes: Option<PaneTree>,
     pub indent: IndentConfig,
-    /// Per-buffer setting overrides (`[[filetype]]`, autocommands, plugins).
-    buffer_options: HashMap<BufferId, BufferLocal>,
-    /// Edit-tracked annotations over buffer ranges (highlights, signs, hints).
-    decorations: DecorationStore,
-    events: Vec<EditorEvent>,
-    ui_intents: Vec<UiIntent>,
-    jumps: JumpList,
+    pub(super) buffer_options: HashMap<BufferId, BufferLocal>,
+    pub(super) decorations: DecorationStore,
+    pub(super) events: Vec<EditorEvent>,
+    pub(super) ui_intents: Vec<UiIntent>,
+    pub(super) jumps: JumpList,
 }
 
 impl Workspace {
@@ -82,7 +81,6 @@ impl Workspace {
             ui_intents: Vec::new(),
             jumps: JumpList::default(),
         };
-        // Always have a *scratch* buffer open.
         ws.open_scratch();
         ws
     }
@@ -99,10 +97,8 @@ impl Workspace {
     }
 
     pub fn open_file(&mut self, path: PathBuf) -> std::io::Result<(BufferId, ViewId)> {
-        // Opening a file is a jump: record where we were so Ctrl+- returns.
         self.push_jump();
         let path = std::fs::canonicalize(&path).unwrap_or(path);
-        // Images render in the pane instead of loading as (binary) text.
         let buf = if is_image_path(&path) {
             Buffer::open_image(path.clone())
         } else {
@@ -161,7 +157,6 @@ impl Workspace {
 
     pub fn emit(&mut self, event: EditorEvent) {
         match &event {
-            // Decorations follow edits before observers receive the event.
             EditorEvent::BufferChanged { id, delta } => {
                 self.decorations.apply_delta(*id, delta);
             }
@@ -173,12 +168,10 @@ impl Workspace {
         self.events.push(event);
     }
 
-    /// The decoration store (read): highlights, gutter signs, virtual text.
     pub fn decorations(&self) -> &DecorationStore {
         &self.decorations
     }
 
-    /// The decoration store (mutate): add/clear annotations, reserve namespaces.
     pub fn decorations_mut(&mut self) -> &mut DecorationStore {
         &mut self.decorations
     }
@@ -187,8 +180,6 @@ impl Workspace {
         self.events.drain(..).collect()
     }
 
-    /// Queue a frontend action (see [`UiIntent`]). Commands use this to drive
-    /// overlays without depending on the GUI; the frontend drains it each frame.
     pub fn request_ui(&mut self, intent: UiIntent) {
         self.ui_intents.push(intent);
     }
@@ -197,8 +188,6 @@ impl Workspace {
         self.ui_intents.drain(..).collect()
     }
 
-    /// Post a transient notification toast with the frontend's default timeout.
-    /// Convenience over [`request_ui`](Self::request_ui); see [`EditorApi::notify`].
     pub fn notify(&mut self, level: crate::ui::NotifyLevel, text: impl Into<String>) {
         self.request_ui(UiIntent::Notify {
             level,
@@ -207,23 +196,18 @@ impl Workspace {
         });
     }
 
-    /// Buffer-local option overrides for `id`, if any have been set.
     pub fn buffer_local(&self, id: BufferId) -> Option<&BufferLocal> {
         self.buffer_options.get(&id)
     }
 
-    /// Mutable buffer-local overrides for `id`, creating an empty set if needed.
     pub fn buffer_local_mut(&mut self, id: BufferId) -> &mut BufferLocal {
         self.buffer_options.entry(id).or_default()
     }
 
-    /// Set one buffer-local option by name (config / plugin surface).
     pub fn set_local(&mut self, id: BufferId, key: &str, value: OptionValue) {
         self.buffer_options.entry(id).or_default().set(key, value);
     }
 
-    /// Effective indent settings for a buffer: buffer-local overrides layered
-    /// over the global default.
     pub fn indent_for(&self, id: BufferId) -> IndentConfig {
         let mut cfg = self.indent;
         if let Some(local) = self.buffer_options.get(&id) {
@@ -237,7 +221,6 @@ impl Workspace {
         cfg
     }
 
-    /// Indent settings for the active buffer (falls back to global).
     pub fn active_indent(&self) -> IndentConfig {
         self.active_view()
             .map(|v| self.indent_for(v.buffer_id))
@@ -259,298 +242,6 @@ impl Workspace {
             self.emit(EditorEvent::BufferSaved { id, path });
         }
         Ok(())
-    }
-
-    pub fn split_active_pane(&mut self, axis: SplitAxis) -> Option<ViewId> {
-        let active_view_id = self.active_view_id?;
-        let new_view = self.views.get(&active_view_id)?.duplicate_for_split();
-        let new_view_id = new_view.id;
-        self.views.insert(new_view_id, new_view);
-
-        let split = self
-            .panes
-            .as_mut()
-            .map(|panes| panes.split_leaf(active_view_id, new_view_id, axis, 0.5))
-            .unwrap_or(false);
-        if !split {
-            self.panes = Some(PaneTree::leaf(new_view_id));
-        }
-
-        self.active_view_id = Some(new_view_id);
-        self.emit(EditorEvent::PaneSplit { new_view_id });
-        Some(new_view_id)
-    }
-
-    pub fn focus_next_pane(&mut self) -> Option<ViewId> {
-        let current = self.active_view_id?;
-        let next = self.panes.as_ref()?.next_leaf_after(current)?;
-        self.active_view_id = Some(next);
-        Some(next)
-    }
-
-    pub fn focus_previous_pane(&mut self) -> Option<ViewId> {
-        let current = self.active_view_id?;
-        let previous = self.panes.as_ref()?.previous_leaf_before(current)?;
-        self.active_view_id = Some(previous);
-        Some(previous)
-    }
-
-    pub fn focus_pane_in_direction(&mut self, direction: FocusDirection) -> Option<ViewId> {
-        let current = self.active_view_id?;
-        let target = self
-            .panes
-            .as_ref()?
-            .neighbor_in_direction(current, direction)?;
-        self.active_view_id = Some(target);
-        Some(target)
-    }
-
-    /// Switch the active pane to the next/previous open buffer (by id order,
-    /// wrapping). Repoints the active view and clamps its cursor to the new
-    /// buffer. Returns true if the buffer changed.
-    pub fn cycle_buffer(&mut self, forward: bool) -> bool {
-        // Only cycle real, editable buffers — skip transient picker/terminal surfaces.
-        let mut ids: Vec<BufferId> = self
-            .buffers
-            .iter()
-            .filter(|(_, buf)| matches!(buf.kind, BufferKind::File(_) | BufferKind::Scratch))
-            .map(|(id, _)| *id)
-            .collect();
-        if ids.len() <= 1 {
-            return false;
-        }
-        ids.sort_by_key(|id| id.raw());
-
-        let Some(view_id) = self.active_view_id else {
-            return false;
-        };
-        let Some(current) = self.views.get(&view_id).map(|v| v.buffer_id) else {
-            return false;
-        };
-        let idx = ids.iter().position(|id| *id == current).unwrap_or(0);
-        let next = if forward {
-            (idx + 1) % ids.len()
-        } else {
-            (idx + ids.len() - 1) % ids.len()
-        };
-        let target = ids[next];
-        if target == current {
-            return false;
-        }
-
-        let (last_line, line_len) = {
-            let buf = match self.buffers.get(&target) {
-                Some(buf) => buf,
-                None => return false,
-            };
-            let last_line = buf.line_count().saturating_sub(1);
-            (last_line, buf.line_len(last_line))
-        };
-
-        let cursor = if let Some(view) = self.views.get_mut(&view_id) {
-            view.buffer_id = target;
-            view.cursor.line = view.cursor.line.min(last_line);
-            view.cursor.col = view.cursor.col.min(line_len);
-            view.col_memory = view.cursor.col;
-            view.scroll_line = 0;
-            view.scroll_y = 0.0;
-            Some((view.id, view.cursor))
-        } else {
-            None
-        };
-        if let Some((id, pos)) = cursor {
-            self.emit(EditorEvent::CursorMoved { view_id: id, pos });
-        }
-        true
-    }
-
-    /// The active view's current location, if any.
-    fn current_loc(&self) -> Option<Loc> {
-        let view = self.active_view()?;
-        Some((view.buffer_id, view.cursor))
-    }
-
-    /// Record the active location as a jump origin (clears the forward stack).
-    /// Call before a navigation that should be reachable with `jump_back`.
-    pub fn push_jump(&mut self) {
-        if let Some(loc) = self.current_loc() {
-            if self.jumps.back.last() != Some(&loc) {
-                self.jumps.back.push(loc);
-                if self.jumps.back.len() > JUMP_CAP {
-                    self.jumps.back.remove(0);
-                }
-            }
-            self.jumps.fwd.clear();
-        }
-    }
-
-    /// Jump to the most recent recorded origin (Ctrl+-). Returns false if there
-    /// is nowhere to go back to (skipping origins whose buffer was closed).
-    pub fn jump_back(&mut self) -> bool {
-        let Some(cur) = self.current_loc() else {
-            return false;
-        };
-        while let Some(target) = self.jumps.back.pop() {
-            if self.buffers.contains_key(&target.0) {
-                self.jumps.fwd.push(cur);
-                return self.apply_loc(target.0, target.1);
-            }
-        }
-        false
-    }
-
-    /// Re-do a jump undone by `jump_back`. Returns false if there is none.
-    pub fn jump_forward(&mut self) -> bool {
-        let Some(cur) = self.current_loc() else {
-            return false;
-        };
-        while let Some(target) = self.jumps.fwd.pop() {
-            if self.buffers.contains_key(&target.0) {
-                self.jumps.back.push(cur);
-                return self.apply_loc(target.0, target.1);
-            }
-        }
-        false
-    }
-
-    /// Point the active view at `buffer_id`, placing the cursor at `pos`
-    /// (clamped) and scrolling it into view. Returns false if the buffer is gone.
-    fn apply_loc(&mut self, buffer_id: BufferId, pos: Pos) -> bool {
-        let Some(buf) = self.buffers.get(&buffer_id) else {
-            return false;
-        };
-        let last_line = buf.line_count().saturating_sub(1);
-        let line = pos.line.min(last_line);
-        let col = pos.col.min(buf.line_len(line));
-        let Some(view_id) = self.active_view_id else {
-            return false;
-        };
-        let Some(view) = self.views.get_mut(&view_id) else {
-            return false;
-        };
-        view.buffer_id = buffer_id;
-        view.cursor = Pos::new(line, col);
-        view.col_memory = col;
-        view.selection = None;
-        view.scroll_to_cursor(view.page_height.max(1));
-        let (id, cursor) = (view.id, view.cursor);
-        self.emit(EditorEvent::CursorMoved {
-            view_id: id,
-            pos: cursor,
-        });
-        true
-    }
-
-    /// Switch the active pane to a specific open buffer (used by the buffer
-    /// picker). Records a jump so Ctrl+- returns to the previous buffer.
-    pub fn switch_active_buffer(&mut self, target: BufferId) -> bool {
-        if !self.buffers.contains_key(&target) {
-            return false;
-        }
-        if self.current_loc().map(|l| l.0) == Some(target) {
-            return false; // already here
-        }
-        self.push_jump();
-        // Land at the top of the target buffer.
-        self.apply_loc(target, Pos::zero())
-    }
-
-    pub fn close_view(&mut self, view_id: ViewId) -> bool {
-        if self.views.len() <= 1 {
-            return false;
-        }
-
-        if matches!(self.panes.as_ref(), Some(PaneTree::Leaf { view_id: pane_view }) if *pane_view == view_id)
-        {
-            let Some(fallback) = self.views.keys().copied().find(|id| *id != view_id) else {
-                return false;
-            };
-            if let Some(removed) = self.views.remove(&view_id) {
-                self.decorations.forget_view(view_id);
-                self.remove_unreferenced_virtual_buffer(removed.buffer_id);
-            }
-            self.panes = Some(PaneTree::leaf(fallback));
-            self.active_view_id = Some(fallback);
-            return true;
-        }
-
-        if let Some(panes) = self.panes.as_mut()
-            && panes.remove_leaf(view_id).is_none()
-        {
-            return false;
-        }
-        if let Some(removed) = self.views.remove(&view_id) {
-            self.decorations.forget_view(view_id);
-            self.remove_unreferenced_virtual_buffer(removed.buffer_id);
-        }
-
-        if self.active_view_id == Some(view_id) {
-            self.active_view_id = self
-                .panes
-                .as_ref()
-                .map(PaneTree::first_leaf)
-                .or_else(|| self.views.keys().next().copied());
-        }
-        true
-    }
-
-    /// Drop a view that is no longer shown in any pane (e.g. a picker view that
-    /// was replaced when its selection opened a file), cleaning up its transient
-    /// virtual buffer. No-op if the view is still active or still in the tree.
-    pub fn discard_orphan_view(&mut self, view_id: ViewId) {
-        if self.active_view_id == Some(view_id) {
-            return;
-        }
-        let in_tree = self
-            .panes
-            .as_ref()
-            .map(|panes| panes.leaves().contains(&view_id))
-            .unwrap_or(false);
-        if in_tree {
-            return;
-        }
-        if let Some(removed) = self.views.remove(&view_id) {
-            self.decorations.forget_view(view_id);
-            self.remove_unreferenced_virtual_buffer(removed.buffer_id);
-        }
-    }
-
-    fn show_view_in_active_pane(&mut self, view_id: ViewId) {
-        if let (Some(active), Some(panes)) = (self.active_view_id, self.panes.as_mut())
-            && panes.replace_leaf(active, view_id)
-        {
-            self.active_view_id = Some(view_id);
-            return;
-        }
-
-        self.active_view_id = Some(view_id);
-        self.panes = Some(PaneTree::leaf(view_id));
-    }
-
-    fn remove_unreferenced_virtual_buffer(&mut self, buffer_id: BufferId) {
-        if self.views.values().any(|view| view.buffer_id == buffer_id) {
-            return;
-        }
-
-        let should_remove = self
-            .buffers
-            .get(&buffer_id)
-            .map(|buffer| {
-                matches!(
-                    buffer.kind,
-                    BufferKind::Search
-                        | BufferKind::References
-                        | BufferKind::FileTree
-                        | BufferKind::Terminal
-                )
-            })
-            .unwrap_or(false);
-        if should_remove {
-            if self.buffers.remove(&buffer_id).is_some() {
-                self.buffer_options.remove(&buffer_id);
-                self.emit(EditorEvent::BufferClosed { id: buffer_id });
-            }
-        }
     }
 }
 
@@ -698,21 +389,16 @@ mod tests {
 
     #[test]
     fn cycle_buffer_switches_active_view_between_buffers() {
-        let mut ws = Workspace::new(); // starts with one scratch buffer
+        let mut ws = Workspace::new();
         let scratch = ws.active_buffer().unwrap().id;
 
-        // Open a real file buffer so two editable buffers exist.
         let tmp = std::env::temp_dir().join(format!("ozone_cycle_{}.txt", std::process::id()));
         std::fs::write(&tmp, "alpha\nbeta\n").unwrap();
         let (file_buf, _) = ws.open_file(tmp.clone()).unwrap();
 
         assert_eq!(ws.active_view().unwrap().buffer_id, file_buf);
-
-        // Cycling forward wraps to scratch (2 editable buffers total).
         assert!(ws.cycle_buffer(true));
         assert_eq!(ws.active_view().unwrap().buffer_id, scratch);
-
-        // Cycling again returns to the file buffer.
         assert!(ws.cycle_buffer(true));
         assert_eq!(ws.active_view().unwrap().buffer_id, file_buf);
 
@@ -732,19 +418,13 @@ mod tests {
 
         let tmp = std::env::temp_dir().join(format!("ozone_jump_{}.txt", std::process::id()));
         std::fs::write(&tmp, "alpha\nbeta\n").unwrap();
-        // open_file records a jump (scratch) and switches to the file buffer.
         let (file_buf, _) = ws.open_file(tmp.clone()).unwrap();
         assert_eq!(ws.active_buffer().unwrap().id, file_buf);
 
-        // Jump back lands on the scratch buffer again.
         assert!(ws.jump_back());
         assert_eq!(ws.active_buffer().unwrap().id, scratch);
-
-        // Forward returns to the file buffer.
         assert!(ws.jump_forward());
         assert_eq!(ws.active_buffer().unwrap().id, file_buf);
-
-        // No further forward target.
         assert!(!ws.jump_forward());
 
         let _ = std::fs::remove_file(&tmp);
@@ -760,9 +440,7 @@ mod tests {
 
         assert!(ws.switch_active_buffer(scratch));
         assert_eq!(ws.active_buffer().unwrap().id, scratch);
-        // Switching to the already-active buffer is a no-op.
         assert!(!ws.switch_active_buffer(scratch));
-        // The switch recorded a jump back to the file buffer.
         assert!(ws.jump_back());
         assert_eq!(ws.active_buffer().unwrap().id, file_buf);
 
@@ -780,19 +458,14 @@ mod tests {
     fn buffer_local_overrides_indent() {
         use crate::options::OptionValue;
         let mut ws = Workspace::new();
-        ws.indent = IndentConfig {
-            width: 4,
-            soft_tabs: true,
-        };
+        ws.indent = IndentConfig { width: 4, soft_tabs: true };
         let bid = ws.active_buffer().unwrap().id;
-        // Global default applies until overridden.
         assert_eq!(ws.indent_for(bid).width, 4);
         ws.set_local(bid, "tab_width", OptionValue::Int(2));
         ws.set_local(bid, "soft_tabs", OptionValue::Bool(false));
         let eff = ws.indent_for(bid);
         assert_eq!(eff.width, 2);
         assert!(!eff.soft_tabs);
-        // A second, untouched buffer keeps the global default.
         let other = ozone_buffer::Buffer::from_text("x");
         let oid = other.id;
         ws.buffers.insert(oid, other);
