@@ -18,6 +18,7 @@ use ozone_config::{Config, LineNumbers};
 use ozone_editor::{EditorEvent, ViewId, Workspace};
 
 use crate::layout::{EDITOR_TOP_PAD, PAD, STATUS_H, gutter_width, pane_at, pane_rect};
+use ozone_editor::fold;
 
 /// Run-loop pointer state. See the module docs for the planned growth.
 #[derive(Default)]
@@ -254,6 +255,77 @@ pub(crate) fn handle_scrollbar_drag(
         ws.active_view_id = Some(view_id);
     }
     changed
+}
+
+/// Click on the gutter fold indicator or the inline fold badge → toggle fold.
+/// Returns `true` if a fold was toggled (caller should redraw).
+pub(crate) fn handle_fold_click(
+    ws: &mut Workspace,
+    config: &Config,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    char_w: f32,
+) -> bool {
+    let editor_rect = Rect::new(0.0, 0.0, width, (height - STATUS_H).max(0.0));
+    let Some((view_id, rect)) = ws
+        .panes
+        .as_ref()
+        .and_then(|tree| pane_at(tree, editor_rect, x, y))
+        .or_else(|| ws.active_view_id.map(|id| (id, editor_rect)))
+    else {
+        return false;
+    };
+    let Some(buffer_id) = ws.views.get(&view_id).map(|v| v.buffer_id) else {
+        return false;
+    };
+    let Some(buf) = ws.buffers.get(&buffer_id) else {
+        return false;
+    };
+    if matches!(buf.kind, BufferKind::Image(_) | BufferKind::Terminal) {
+        return false;
+    }
+    let line_count = buf.line_count();
+    if line_count == 0 {
+        return false;
+    }
+    let line_numbers = match buf.kind {
+        BufferKind::Search | BufferKind::References | BufferKind::FileTree => LineNumbers::Off,
+        _ => ws
+            .buffer_local(buffer_id)
+            .and_then(|local| local.line_numbers)
+            .unwrap_or(config.editor.line_numbers),
+    };
+    let gutter_w = gutter_width(line_count, char_w.max(1.0), line_numbers);
+    if gutter_w == 0.0 || x >= rect.x + gutter_w {
+        return false;
+    }
+    let line_h = (config.editor.font_size * config.editor.line_height).max(1.0);
+    let (scroll, scroll_y) = ws
+        .views
+        .get(&view_id)
+        .map(|v| (v.scroll_line, v.scroll_y))
+        .unwrap_or((0, 0.0));
+    let relative_y = (y - rect.y - EDITOR_TOP_PAD).max(0.0);
+    let line_idx =
+        (scroll + ((relative_y + scroll_y) / line_h).floor() as usize).min(line_count - 1);
+
+    let header = if fold::is_foldable(buf, line_idx) {
+        Some(line_idx)
+    } else {
+        fold::header_for(buf, line_idx)
+    };
+    let Some(header) = header else {
+        return false;
+    };
+    let Some(view) = ws.views.get_mut(&view_id) else {
+        return false;
+    };
+    if !view.folds.remove(&header) {
+        view.folds.insert(header);
+    }
+    true
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -13,7 +13,7 @@ use crate::input::{corrected_mods, terminal_key_bytes};
 use crate::keys::{Overlays, active_terminal, apply_ui_intents, handle_key};
 use crate::layout::{STATUS_H, max_scroll_line, pane_at};
 use crate::mouse::{
-    MouseState, handle_editor_click, handle_editor_drag, handle_scrollbar_drag,
+    MouseState, handle_editor_click, handle_editor_drag, handle_fold_click, handle_scrollbar_drag,
     handle_scrollbar_press,
 };
 use crate::overlay::minibuffer::Minibuffer;
@@ -386,6 +386,16 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                         state.needs_redraw = true;
                     }
                     state.cursor_activity = true;
+                } else if handle_fold_click(
+                    &mut workspace,
+                    &state.config,
+                    x,
+                    y,
+                    width,
+                    height,
+                    state.measured_char_w,
+                ) {
+                    state.needs_redraw = true;
                 } else if let Some(press) =
                     handle_scrollbar_press(&mut workspace, &state.config, x, y, width, height)
                 {
