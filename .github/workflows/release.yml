@@ -103,6 +103,42 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        run: |
+          # Find the previous versioned tag (skip the tag we're currently cutting).
+          PREV_TAG=$(git tag -l 'v*' --sort=-v:refname | grep -v "^${GITHUB_REF_NAME}$" | head -1 || true)
+          RANGE="${PREV_TAG:+${PREV_TAG}..HEAD}"
+          [ -z "$PREV_TAG" ] && RANGE="HEAD"
+
+          section() {
+            git log "$RANGE" --pretty=format:"%s" \
+              | grep -E "^${1}(\([^)]*\))?: " \
+              | sed -E "s/^${1}(\([^)]*\))?: /- /" \
+              || true
+          }
+
+          FEATS=$(section feat)
+          FIXES=$(section fix)
+          DOCS=$(section docs)
+          REFACTORS=$(section refactor)
+          CI=$(section ci)
+          OTHERS=$(git log "$RANGE" --pretty=format:"%s" \
+            | grep -Ev "^(feat|fix|docs|refactor|ci|chore|style|test|perf|build)(\([^)]*\))?: " \
+            || true)
+
+          {
+            echo "## What's Changed"
+            echo ""
+            if [ -n "$FEATS" ];     then echo "### Features";      echo "$FEATS";     echo ""; fi
+            if [ -n "$FIXES" ];     then echo "### Bug Fixes";     echo "$FIXES";     echo ""; fi
+            if [ -n "$DOCS" ];      then echo "### Documentation"; echo "$DOCS";      echo ""; fi
+            if [ -n "$REFACTORS" ]; then echo "### Refactor";      echo "$REFACTORS"; echo ""; fi
+            if [ -n "$CI" ];        then echo "### CI";            echo "$CI";        echo ""; fi
+            if [ -n "$OTHERS" ];    then echo "### Other";         echo "$OTHERS" | sed 's/^/- /'; echo ""; fi
+          } > CHANGELOG.md
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -125,13 +161,12 @@ jobs:
             artifacts/*.zip
             checksums.sha256
 
-      - name: Append downloads table
+      - name: Update release notes with changelog and downloads table
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          CURRENT=$(gh release view ${{ github.ref_name }} --json body --jq '.body')
           {
-            echo "$CURRENT"
+            cat CHANGELOG.md
             echo ""
             echo "---"
             echo ""
