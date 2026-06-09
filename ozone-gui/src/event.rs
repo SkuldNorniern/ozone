@@ -370,7 +370,12 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                 || lock(state.search.as_ref()).is_some()
                 || lock(state.minibuffer.as_ref()).is_some();
             if !overlays_open {
-                let (width, height) = (state.window_width as f32, state.window_height as f32);
+                // Use canvas dimensions (same source as rendering) so that dot
+                // centers in hit-testing match their drawn positions exactly.
+                let (width, height) = {
+                    let cv = lock(state.canvas.as_ref());
+                    (cv.width() as f32, cv.height() as f32)
+                };
                 let mut workspace = lock(state.workspace.as_ref());
                 if let Some(target) =
                     crate::statusbar::buffer_dot_at(&workspace, width, height, x, y)
