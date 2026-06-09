@@ -460,6 +460,15 @@ impl OzoneGui {
                 state.needs_redraw = true;
             }
 
+            // --- LSP sync: lazily start the server, mirror open Rust buffers,
+            // and route diagnostics into the decoration store. ---
+            {
+                let mut ws = lock(state.workspace.as_ref());
+                if state.lsp.sync(&mut ws, &state.config) {
+                    state.needs_redraw = true;
+                }
+            }
+
             // Bare-modifier which-key hint: holding Ctrl/Meta alone (no pending
             // chord) reveals its bindings after a short delay, so quick chords
             // like C-s don't flash the panel. Recomputed each frame; flips drive

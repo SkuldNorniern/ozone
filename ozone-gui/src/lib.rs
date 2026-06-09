@@ -29,6 +29,7 @@ mod event;
 mod input;
 mod keys;
 mod layout;
+mod lsp;
 mod mouse;
 mod overlay;
 mod render;

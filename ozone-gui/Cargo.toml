@@ -9,6 +9,7 @@ ozone-buffer = { workspace = true }
 ozone-syntax = { workspace = true }
 ozone-config = { workspace = true }
 ozone-term   = { workspace = true }
+ozone-lsp    = { workspace = true }
 aurea        = { workspace = true }
 # Pure-Rust decoders only (no system/C deps): covers the common raster formats.
 image = { version = "0.25", default-features = false, features = [

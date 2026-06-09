@@ -59,6 +59,8 @@ pub(crate) struct AppState {
     /// trigger a redraw only when its visibility flips).
     pub(crate) mod_hint_visible: bool,
     pub(crate) mouse: MouseState,
+    /// GUI-side LSP orchestration (lazy server, doc sync, diagnostics routing).
+    pub(crate) lsp: crate::lsp::Lsp,
     pub(crate) cursor_visible: bool,
     pub(crate) last_cursor_blink: Instant,
     pub(crate) needs_redraw: bool,
@@ -108,6 +110,7 @@ impl AppState {
             mod_hint_start: None,
             mod_hint_visible: false,
             mouse: MouseState::default(),
+            lsp: crate::lsp::Lsp::new(),
             cursor_visible: true,
             last_cursor_blink: Instant::now(),
             needs_redraw: false,

@@ -4,16 +4,19 @@
 //! the project's hand-parsed-config philosophy:
 //!
 //! - [`json`] — a minimal JSON value + parser + serializer (the wire format).
-//! - JSON-RPC framing (`Content-Length` headers), the server process lifecycle,
-//!   the capability handshake, and turning `publishDiagnostics` notifications
-//!   into [`ozone_editor::Diagnostic`]s are layered on top (follow-up slices).
+//! - [`rpc`] — JSON-RPC framing (`Content-Length` headers) + stream splitting.
+//! - [`protocol`] — decode server messages into editor types (diagnostics).
+//! - [`client`] — the live connection: server process + handshake + reader
+//!   thread, exposing `didOpen`/`didChange` and a [`ServerMessage`] channel.
 //!
 //! The client is a *producer*: it feeds diagnostics/hints into the editor's
 //! decoration store and answers requests; it never draws.
 
+pub mod client;
 pub mod json;
 pub mod protocol;
 pub mod rpc;
 
+pub use client::{LspClient, ServerMessage};
 pub use json::{Json, parse as parse_json};
 pub use protocol::parse_publish_diagnostics;
