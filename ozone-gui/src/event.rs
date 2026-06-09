@@ -372,7 +372,15 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
             if !overlays_open {
                 let (width, height) = (state.window_width as f32, state.window_height as f32);
                 let mut workspace = lock(state.workspace.as_ref());
-                if let Some(press) =
+                if let Some(target) =
+                    crate::statusbar::buffer_dot_at(&workspace, width, height, x, y)
+                {
+                    // A status-bar buffer dot: switch to that buffer.
+                    if workspace.switch_active_buffer(target) {
+                        state.needs_redraw = true;
+                    }
+                    state.cursor_activity = true;
+                } else if let Some(press) =
                     handle_scrollbar_press(&mut workspace, &state.config, x, y, width, height)
                 {
                     state

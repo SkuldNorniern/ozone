@@ -2,7 +2,7 @@
 
 use aurea::AureaResult;
 use aurea::render::{DrawingContext, Font, Point, Rect};
-use ozone_buffer::BufferKind;
+use ozone_buffer::{BufferId, BufferKind};
 use ozone_editor::{ViewId, Workspace};
 use ozone_syntax::Filetype;
 
@@ -126,6 +126,8 @@ pub(crate) fn draw_status_bar(
         }
     }
 
+    draw_buffer_dots(ctx, ws, width, bar_top, baseline, font)?;
+
     let right = if pane_info.is_empty() {
         "UTF-8".to_string()
     } else {
@@ -143,6 +145,119 @@ pub(crate) fn draw_status_bar(
         &solid(palette().statusbar_dim),
     )?;
 
+    Ok(())
+}
+
+// --- buffer dots -----------------------------------------------------------
+
+/// Horizontal gap between buffer dots (also the click target width).
+const DOT_SPACING: f32 = 16.0;
+/// Most dots drawn before collapsing the remainder into a `+N` label.
+const DOT_MAX: usize = 16;
+
+/// The buffers represented by status-bar dots, in stable creation order.
+/// Transient UI surfaces (pickers, file tree, references) are excluded; only
+/// real content buffers count.
+pub(crate) fn switchable_buffers(ws: &Workspace) -> Vec<BufferId> {
+    let mut ids: Vec<BufferId> = ws
+        .buffers
+        .iter()
+        .filter(|(_, b)| {
+            matches!(
+                b.kind,
+                BufferKind::File(_)
+                    | BufferKind::Scratch
+                    | BufferKind::Image(_)
+                    | BufferKind::Terminal
+            )
+        })
+        .map(|(id, _)| *id)
+        .collect();
+    ids.sort_by_key(|id| id.raw());
+    ids
+}
+
+/// Center x of each *shown* dot, centered horizontally in the bar. Deterministic
+/// from `(count, width)` alone so the renderer and the click hit-test agree
+/// without sharing geometry.
+fn dot_centers(count: usize, width: f32) -> Vec<f32> {
+    let shown = count.min(DOT_MAX);
+    if shown == 0 {
+        return Vec::new();
+    }
+    let total = (shown as f32 - 1.0) * DOT_SPACING;
+    let start = (width - total) / 2.0;
+    (0..shown).map(|i| start + i as f32 * DOT_SPACING).collect()
+}
+
+/// The buffer whose dot is under `(x, y)`, or `None`. Used by the mouse handler
+/// (opt-in) to switch buffers on click. Hidden with 0–1 buffers.
+pub(crate) fn buffer_dot_at(
+    ws: &Workspace,
+    width: f32,
+    height: f32,
+    x: f32,
+    y: f32,
+) -> Option<BufferId> {
+    let bar_top = height - STATUS_H;
+    if y < bar_top {
+        return None;
+    }
+    let ids = switchable_buffers(ws);
+    if ids.len() <= 1 {
+        return None;
+    }
+    let cy = bar_top + STATUS_H / 2.0;
+    dot_centers(ids.len(), width)
+        .into_iter()
+        .zip(ids)
+        .find(|(cx, _)| (x - cx).abs() <= DOT_SPACING / 2.0 && (y - cy).abs() <= STATUS_H / 2.0)
+        .map(|(_, id)| id)
+}
+
+/// Draw the buffer dots: filled accent for the active buffer, a warn tint for
+/// other dirty buffers, dim for the rest. Collapses to `+N` past `DOT_MAX`.
+/// Hidden with 0–1 buffers (no value, just noise).
+fn draw_buffer_dots(
+    ctx: &mut dyn DrawingContext,
+    ws: &Workspace,
+    width: f32,
+    bar_top: f32,
+    baseline: f32,
+    font: &Font,
+) -> AureaResult<()> {
+    let ids = switchable_buffers(ws);
+    if ids.len() <= 1 {
+        return Ok(());
+    }
+    let active = ws.active_view().map(|v| v.buffer_id);
+    let centers = dot_centers(ids.len(), width);
+    let cy = bar_top + STATUS_H / 2.0;
+    let pal = palette();
+
+    for (cx, id) in centers.iter().zip(&ids) {
+        let is_active = Some(*id) == active;
+        let dirty = ws.buffers.get(id).map(|b| b.is_dirty()).unwrap_or(false);
+        let (radius, color) = if is_active {
+            (4.0, pal.picker_prompt)
+        } else if dirty {
+            (3.0, pal.notify_warn)
+        } else {
+            (2.5, pal.statusbar_dim)
+        };
+        ctx.draw_circle(Point::new(*cx, cy), radius, &solid(color))?;
+    }
+
+    if ids.len() > DOT_MAX {
+        let label = format!(" +{}", ids.len() - DOT_MAX);
+        let x = centers.last().copied().unwrap_or(width / 2.0) + DOT_SPACING / 2.0;
+        ctx.draw_text_with_font(
+            &label,
+            Point::new(x, baseline),
+            font,
+            &solid(pal.statusbar_dim),
+        )?;
+    }
     Ok(())
 }
 

@@ -585,7 +585,15 @@ fn window_title(ws: &Workspace) -> String {
 }
 
 fn decode_image(path: &std::path::Path) -> Option<Image> {
-    let rgba = image::open(path).ok()?.to_rgba8();
+    // Sniff the format from the content rather than the extension, so a
+    // mislabeled or extensionless file still decodes when it's a supported type.
+    let rgba = image::ImageReader::open(path)
+        .ok()?
+        .with_guessed_format()
+        .ok()?
+        .decode()
+        .ok()?
+        .to_rgba8();
     let (w, h) = rgba.dimensions();
     Some(Image::new(w, h, rgba.into_raw()))
 }
