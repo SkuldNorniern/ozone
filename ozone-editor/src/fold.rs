@@ -55,16 +55,15 @@ pub fn is_foldable(buf: &Buffer, header: usize) -> bool {
 /// Used to filter out continuation lines, split assignments, etc. from showing
 /// as fold headers — only real block-openers get the gutter indicator.
 fn is_block_opener(line: &str) -> bool {
-    matches!(
-        line.trim_end().chars().last(),
-        Some('{' | '(' | '[' | ':')
-    )
+    matches!(line.trim_end().chars().last(), Some('{' | '(' | '[' | ':'))
 }
 
 /// Whether `header` should show a fold indicator: must both open a region AND
 /// end with a block-opener character so continuation lines are excluded.
 pub fn is_visual_fold_header(buf: &Buffer, header: usize) -> bool {
-    let Some(line) = buf.line(header) else { return false };
+    let Some(line) = buf.line(header) else {
+        return false;
+    };
     is_block_opener(&line) && fold_region(buf, header).is_some()
 }
 
@@ -83,9 +82,10 @@ pub fn header_for(buf: &Buffer, line: usize) -> Option<usize> {
     if is_visual_fold_header(buf, line) {
         return Some(line);
     }
-    (0..line)
-        .rev()
-        .find(|&h| is_visual_fold_header(buf, h) && fold_region(buf, h).is_some_and(|(start, end)| line > start && line <= end))
+    (0..line).rev().find(|&h| {
+        is_visual_fold_header(buf, h)
+            && fold_region(buf, h).is_some_and(|(start, end)| line > start && line <= end)
+    })
 }
 
 /// Every visual fold header line in the buffer (for "fold all").
@@ -138,16 +138,16 @@ mod tests {
 
     #[test]
     fn header_for_finds_enclosing_fold() {
-        let b = buf("a\n  b\n    c\n  d\ne");
-        assert_eq!(header_for(&b, 0), Some(0)); // on a foldable header
-        assert_eq!(header_for(&b, 2), Some(1)); // line 2 not foldable → nearest enclosing (1)
+        let b = buf("a:\n  b:\n    c\n  d\ne");
+        assert_eq!(header_for(&b, 0), Some(0)); // on a visual fold header
+        assert_eq!(header_for(&b, 2), Some(1)); // line 2 not a header → nearest enclosing (1)
         assert_eq!(header_for(&b, 3), Some(0)); // inside line 0's region, not 1's
         assert_eq!(header_for(&b, 4), None); // tail, no fold
     }
 
     #[test]
     fn all_headers_lists_foldables() {
-        let b = buf("a\n  b\nc\n  d\n    e");
+        let b = buf("a:\n  b\nc:\n  d:\n    e");
         assert_eq!(all_headers(&b), vec![0, 2, 3]);
     }
 }

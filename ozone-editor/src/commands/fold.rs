@@ -79,7 +79,7 @@ mod tests {
 
     #[test]
     fn toggle_from_inside_uses_enclosing_header() {
-        let mut ws = ws_with("root\n  a\n  b\ntail", 2);
+        let mut ws = ws_with("root:\n  a\n  b\ntail", 2);
         run(&mut ws, "fold.toggle");
         assert!(ws.active_view().unwrap().folds.contains(&0));
         // cursor moved onto the visible header.
@@ -88,7 +88,7 @@ mod tests {
 
     #[test]
     fn fold_all_then_open_all() {
-        let mut ws = ws_with("a\n  b\nc\n  d", 0);
+        let mut ws = ws_with("a:\n  b\nc:\n  d", 0);
         run(&mut ws, "fold.all");
         assert_eq!(ws.active_view().unwrap().folds.len(), 2);
         run(&mut ws, "fold.open-all");
