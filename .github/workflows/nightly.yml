@@ -131,3 +131,30 @@ jobs:
             artifacts/*.tar.gz
             artifacts/*.zip
             checksums.sha256
+
+      - name: Append downloads table
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CURRENT=$(gh release view latest --json body --jq '.body')
+          {
+            echo "$CURRENT"
+            echo ""
+            echo "---"
+            echo ""
+            echo "### Downloads"
+            echo ""
+            echo "| Platform | File | SHA256 |"
+            echo "|----------|------|--------|"
+            while read -r hash file; do
+              case "$file" in
+                *linux*)   platform="Linux x86_64"   ;;
+                *darwin*)  platform="macOS ARM64"     ;;
+                *windows*) platform="Windows x86_64"  ;;
+                *)         platform="Other"           ;;
+              esac
+              echo "| $platform | \`$file\` | \`${hash:0:16}...\` |"
+            done < checksums.sha256
+          } > notes.md
+          gh release edit latest --notes-file notes.md
+
