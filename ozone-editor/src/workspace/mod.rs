@@ -256,6 +256,52 @@ impl Workspace {
         }
         Ok(())
     }
+
+    /// Replace a buffer's entire contents with `new_text` as undoable edits
+    /// (delete-all + insert), emit `BufferChanged` so decorations track, and
+    /// clamp every cursor on the buffer to the new bounds. Returns whether the
+    /// text actually changed. Used by shell-filter commands and formatters.
+    pub fn replace_buffer_text(&mut self, id: BufferId, new_text: &str) -> bool {
+        let Some(buf) = self.buffers.get_mut(&id) else {
+            return false;
+        };
+        if buf.text() == new_text {
+            return false;
+        }
+        let len = buf.text().len();
+        if let Some(delta) = buf.delete_at(0, len) {
+            self.emit(EditorEvent::BufferChanged { id, delta });
+        }
+        let Some(buf) = self.buffers.get_mut(&id) else {
+            return false;
+        };
+        let delta = buf.insert(Pos::zero(), new_text);
+        self.emit(EditorEvent::BufferChanged { id, delta });
+
+        let line_count = self.buffers.get(&id).map(|b| b.line_count()).unwrap_or(1);
+        let fixes: Vec<(ViewId, usize, usize)> = self
+            .views
+            .iter()
+            .filter(|(_, v)| v.buffer_id == id)
+            .map(|(vid, v)| {
+                let line = v.cursor.line.min(line_count.saturating_sub(1));
+                let line_len = self
+                    .buffers
+                    .get(&id)
+                    .and_then(|b| b.line(line))
+                    .map(|s| s.len())
+                    .unwrap_or(0);
+                (*vid, line, v.cursor.col.min(line_len))
+            })
+            .collect();
+        for (vid, line, col) in fixes {
+            if let Some(view) = self.views.get_mut(&vid) {
+                view.cursor = Pos::new(line, col);
+                view.col_memory = col;
+            }
+        }
+        true
+    }
 }
 
 impl Default for Workspace {
@@ -302,6 +348,29 @@ mod tests {
         let ws = Workspace::new();
         let active = ws.active_view_id.unwrap();
         assert_eq!(ws.panes.as_ref().unwrap().leaves(), vec![active]);
+    }
+
+    #[test]
+    fn replace_buffer_text_swaps_content_and_clamps_cursor() {
+        let mut ws = Workspace::new();
+        let id = ws.active_view().unwrap().buffer_id;
+        ws.active_buffer_mut()
+            .unwrap()
+            .set_text("aaaa\nbbbb\ncccc\n");
+        ws.active_view_mut().unwrap().cursor = Pos::new(2, 3);
+
+        assert!(ws.replace_buffer_text(id, "x\n"));
+        assert_eq!(ws.active_buffer().unwrap().text(), "x\n");
+        // Cursor clamped into the now-shorter buffer.
+        let c = ws.active_view().unwrap().cursor;
+        assert!(c.line < ws.active_buffer().unwrap().line_count());
+        assert!(c.col <= 1);
+        // Undoable: the change can be reverted.
+        assert!(ws.active_buffer_mut().unwrap().undo().is_some());
+
+        // No-op when the text is identical.
+        let same = ws.active_buffer().unwrap().text();
+        assert!(!ws.replace_buffer_text(id, &same));
     }
 
     #[test]
