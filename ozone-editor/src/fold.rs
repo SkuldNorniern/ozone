@@ -51,6 +51,23 @@ pub fn is_foldable(buf: &Buffer, header: usize) -> bool {
     fold_region(buf, header).is_some()
 }
 
+/// Whether the line looks like it opens a block (ends with `{`, `(`, `[`, or `:`).
+/// Used to filter out continuation lines, split assignments, etc. from showing
+/// as fold headers — only real block-openers get the gutter indicator.
+fn is_block_opener(line: &str) -> bool {
+    matches!(
+        line.trim_end().chars().last(),
+        Some('{' | '(' | '[' | ':')
+    )
+}
+
+/// Whether `header` should show a fold indicator: must both open a region AND
+/// end with a block-opener character so continuation lines are excluded.
+pub fn is_visual_fold_header(buf: &Buffer, header: usize) -> bool {
+    let Some(line) = buf.line(header) else { return false };
+    is_block_opener(&line) && fold_region(buf, header).is_some()
+}
+
 /// Whether `line` is hidden by some collapsed fold in `folds` — i.e. it lies
 /// strictly inside a folded header's region. The header line itself stays
 /// visible (it shows the fold marker).
@@ -60,21 +77,21 @@ pub fn is_hidden(buf: &Buffer, folds: &HashSet<usize>, line: usize) -> bool {
     })
 }
 
-/// The nearest foldable header at or above `line` whose region contains `line`
+/// The nearest visual fold header at or above `line` whose region contains `line`
 /// (or `line` itself if it is a header). Used by "toggle fold at cursor".
 pub fn header_for(buf: &Buffer, line: usize) -> Option<usize> {
-    if is_foldable(buf, line) {
+    if is_visual_fold_header(buf, line) {
         return Some(line);
     }
     (0..line)
         .rev()
-        .find(|&h| fold_region(buf, h).is_some_and(|(start, end)| line > start && line <= end))
+        .find(|&h| is_visual_fold_header(buf, h) && fold_region(buf, h).is_some_and(|(start, end)| line > start && line <= end))
 }
 
-/// Every foldable header line in the buffer (for "fold all").
+/// Every visual fold header line in the buffer (for "fold all").
 pub fn all_headers(buf: &Buffer) -> Vec<usize> {
     (0..buf.line_count())
-        .filter(|&l| is_foldable(buf, l))
+        .filter(|&l| is_visual_fold_header(buf, l))
         .collect()
 }
 

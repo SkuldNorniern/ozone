@@ -301,7 +301,7 @@ pub(super) fn draw_view(
                 // Fold gutter indicator: filled triangle, no font required.
                 if gutter_w > 0.0 {
                     let is_folded = view.folds.contains(&line_idx);
-                    if is_folded || fold::is_foldable(buf, line_idx) {
+                    if is_folded || fold::is_visual_fold_header(buf, line_idx) {
                         let color = if is_folded {
                             palette().picker_prompt
                         } else {

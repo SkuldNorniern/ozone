@@ -23,8 +23,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 [[package]]
 name = "aurea"
 version = "0.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e4f648dce668545b0af475c9ceabee93fc9c9d5df3c7cda83a69f115ead9e74"
+source = "git+https://github.com/SkuldNorniern/aurea#fcaaa72f1d108eb8169d424d90855090bf786b03"
 dependencies = [
  "aurea-ffi",
  "aurea-foundation",
@@ -38,8 +37,7 @@ dependencies = [
 [[package]]
 name = "aurea-ffi"
 version = "0.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69300e32f2678e52cd2fe475521cc494cce54f29f74f062afe50de0d005a807d"
+source = "git+https://github.com/SkuldNorniern/aurea#fcaaa72f1d108eb8169d424d90855090bf786b03"
 dependencies = [
  "cc",
  "pkg-config",
@@ -48,14 +46,12 @@ dependencies = [
 [[package]]
 name = "aurea-foundation"
 version = "0.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a98b9297488d72e243e457f981c790e27dbbc500115486a47a99d9db43716395"
+source = "git+https://github.com/SkuldNorniern/aurea#fcaaa72f1d108eb8169d424d90855090bf786b03"
 
 [[package]]
 name = "aurea-render"
 version = "0.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1007a13986112c56c981e6faa330c8b931410c85ddac56581c2fb88a7e7926b"
+source = "git+https://github.com/SkuldNorniern/aurea#fcaaa72f1d108eb8169d424d90855090bf786b03"
 dependencies = [
  "aurea-foundation",
  "dwrote",
@@ -67,8 +63,7 @@ dependencies = [
 [[package]]
 name = "aurea-runtime"
 version = "0.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7cc8fc5ad1804291c2dcc3a2f1309f195923590ed888b8ee0fb6efca86f879f"
+source = "git+https://github.com/SkuldNorniern/aurea#fcaaa72f1d108eb8169d424d90855090bf786b03"
 dependencies = [
  "aurea-foundation",
  "aurea-render",
@@ -132,6 +127,12 @@ name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
+
+[[package]]
+name = "color_quant"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d7b894f5411737b7867f4827955924d7c254fc9f4d91a6aad6b097804b1018b"
 
 [[package]]
 name = "combine"
@@ -254,6 +255,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gif"
+version = "0.14.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee8cfcc411d9adbbaba82fb72661cc1bcca13e8bba98b364e62b2dba8f960159"
+dependencies = [
+ "color_quant",
+ "weezl",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -278,11 +289,25 @@ checksum = "85ab80394333c02fe689eaf900ab500fbd0c2213da414687ebf995a65d5a6104"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
+ "color_quant",
+ "gif",
+ "image-webp",
  "moxcms",
  "num-traits",
  "png",
+ "qoi",
  "zune-core",
  "zune-jpeg",
+]
+
+[[package]]
+name = "image-webp"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "525e9ff3e1a4be2fbea1fdf0e98686a6d98b4d8f937e1bf7402245af1909e8c3"
+dependencies = [
+ "byteorder-lite",
+ "quick-error",
 ]
 
 [[package]]
@@ -476,6 +501,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ozone-lsp"
+version = "0.1.0"
+dependencies = [
+ "ozone-buffer",
+ "ozone-editor",
+]
+
+[[package]]
 name = "ozone-syntax"
 version = "0.1.0"
 dependencies = [
@@ -549,6 +582,21 @@ name = "pxfm"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e0c5ccf5294c6ccd63a74f1565028353830a9c2f5eb0c682c355c471726a6e3f"
+
+[[package]]
+name = "qoi"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f6d64c71eb498fe9eae14ce4ec935c555749aef511cca85b5568910d6e48001"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
+name = "quick-error"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
 
 [[package]]
 name = "quote"
@@ -820,6 +868,12 @@ dependencies = [
  "same-file",
  "winapi-util",
 ]
+
+[[package]]
+name = "weezl"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 
 [[package]]
 name = "winapi"

@@ -311,7 +311,7 @@ pub(crate) fn handle_fold_click(
     let line_idx =
         (scroll + ((relative_y + scroll_y) / line_h).floor() as usize).min(line_count - 1);
 
-    let header = if fold::is_foldable(buf, line_idx) {
+    let header = if fold::is_visual_fold_header(buf, line_idx) {
         Some(line_idx)
     } else {
         fold::header_for(buf, line_idx)
