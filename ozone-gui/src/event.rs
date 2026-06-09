@@ -49,7 +49,7 @@ pub(crate) struct AppState {
     pub(crate) terms: Terminals,
     pub(crate) measured_char_w: f32,
     pub(crate) buffer_mru: Vec<BufferId>,
-    pub(crate) images: ImageCache,
+    pub(crate) images: Arc<Mutex<ImageCache>>,
     pub(crate) ft_applied: HashSet<BufferId>,
     pub(crate) live_mods: aurea::Modifiers,
     /// When a bare modifier (Ctrl/Meta) started being held alone, used to delay
@@ -79,6 +79,7 @@ impl AppState {
         notifications: Arc<Mutex<Notifications>>,
         which_key: Arc<Mutex<WhichKeyView>>,
         canvas: Arc<Mutex<SendableCanvas>>,
+        images: Arc<Mutex<ImageCache>>,
         window_width: u32,
         window_height: u32,
     ) -> Self {
@@ -101,7 +102,7 @@ impl AppState {
             terms: Terminals::new(),
             measured_char_w,
             buffer_mru: Vec::new(),
-            images: ImageCache::new(),
+            images,
             ft_applied: HashSet::new(),
             live_mods: aurea::Modifiers::default(),
             mod_hint_start: None,

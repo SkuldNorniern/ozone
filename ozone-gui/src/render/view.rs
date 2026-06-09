@@ -1,5 +1,5 @@
 use aurea::AureaResult;
-use aurea::render::{DrawingContext, Font, Point, Rect};
+use aurea::render::{DrawingContext, Font, Path, PathCommand, Point, Rect};
 
 use ozone_buffer::{BufferKind, Pos};
 use ozone_config::{Config, CursorStyle, LineNumbers};
@@ -15,6 +15,7 @@ use super::text::{
     draw_highlighted, draw_line_with_inline_virtual_text, line_prefix_end, shift_token_spans,
     wrap_line_segments,
 };
+use crate::components::pill::draw_pill;
 use crate::layout::*;
 use crate::terminals::draw_term_row;
 use crate::theme::{palette, solid, stroke, token_color};
@@ -296,6 +297,43 @@ pub(super) fn draw_view(
                 let num_x =
                     (rect.x + gutter_w - PAD - num.len() as f32 * metrics.char_w).max(rect.x + 4.0);
                 ctx.draw_text_with_font(&num, Point::new(num_x, baseline), font, &solid(ng))?;
+
+                // Fold gutter indicator: filled triangle, no font required.
+                if gutter_w > 0.0 {
+                    let is_folded = view.folds.contains(&line_idx);
+                    if is_folded || fold::is_foldable(buf, line_idx) {
+                        let color = if is_folded {
+                            palette().picker_prompt
+                        } else {
+                            palette().line_number
+                        };
+                        let cx = rect.x + 7.0;
+                        let cy = line_top + line_h / 2.0;
+                        let r = 3.5_f32;
+                        let tri = if is_folded {
+                            // right-pointing: tip at right
+                            Path {
+                                commands: vec![
+                                    PathCommand::MoveTo(Point::new(cx - r, cy - r)),
+                                    PathCommand::LineTo(Point::new(cx + r, cy)),
+                                    PathCommand::LineTo(Point::new(cx - r, cy + r)),
+                                    PathCommand::Close,
+                                ],
+                            }
+                        } else {
+                            // down-pointing: tip at bottom
+                            Path {
+                                commands: vec![
+                                    PathCommand::MoveTo(Point::new(cx - r, cy - r)),
+                                    PathCommand::LineTo(Point::new(cx + r, cy - r)),
+                                    PathCommand::LineTo(Point::new(cx, cy + r)),
+                                    PathCommand::Close,
+                                ],
+                            }
+                        };
+                        ctx.draw_path(&tri, &solid(color))?;
+                    }
+                }
             }
 
             let gutter_signs: String = line_decorations
@@ -382,15 +420,35 @@ pub(super) fn draw_view(
                 }
             }
 
-            // Fold marker: a dim ellipsis after a collapsed header's content.
+            // Fold badge: rounded rect + 3 drawn dots, no font required.
             if segment_is_line_end && view.folds.contains(&line_idx) {
-                let marker_x = text_x + (line_text.len() + 1) as f32 * metrics.char_w;
-                ctx.draw_text_with_font(
-                    "⋯",
-                    Point::new(marker_x, baseline),
+                let badge_x = text_x + (line_text.len() + 1) as f32 * metrics.char_w;
+                let badge_h = (line_h * 0.55).max(8.0);
+                let badge_w = badge_h * 1.8;
+                let badge_top = line_top + (line_h - badge_h) / 2.0;
+                draw_pill(
+                    ctx,
+                    "",
+                    badge_x,
+                    badge_top,
+                    badge_h,
+                    baseline,
+                    0.0,
                     font,
-                    &solid(palette().line_number),
+                    palette().gutter,
+                    palette().line_number_active,
                 )?;
+                // 3 small circles as dots
+                let dot_r = (badge_h * 0.12).max(1.5);
+                let dot_y = badge_top + badge_h / 2.0;
+                let gap = badge_w / 4.0;
+                for i in 1..=3_u8 {
+                    ctx.draw_circle(
+                        Point::new(badge_x + gap * i as f32, dot_y),
+                        dot_r,
+                        &solid(palette().line_number_active),
+                    )?;
+                }
             }
 
             for decoration in &line_decorations {

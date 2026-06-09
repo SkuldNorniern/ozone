@@ -169,6 +169,7 @@ impl OzoneGui {
         let minibuffer: Arc<Mutex<Option<Minibuffer>>> = Arc::new(Mutex::new(None));
         let notifications: Arc<Mutex<Notifications>> = Arc::new(Mutex::new(Notifications::new()));
         let which_key: Arc<Mutex<WhichKeyView>> = Arc::new(Mutex::new(None));
+        let images: Arc<Mutex<ImageCache>> = Arc::new(Mutex::new(ImageCache::new()));
 
         let raw_canvas = Canvas::new(W, H, RendererBackend::Cpu)?;
         let workspace_for_draw = self.workspace.clone();
@@ -180,6 +181,7 @@ impl OzoneGui {
         let minibuffer_for_draw = minibuffer.clone();
         let notifications_for_draw = notifications.clone();
         let which_key_for_draw = which_key.clone();
+        let images_for_draw = images.clone();
 
         raw_canvas.set_draw_callback(move |ctx| {
             let pal = lock(palette_for_draw.as_ref());
@@ -187,6 +189,7 @@ impl OzoneGui {
             let mb = lock(minibuffer_for_draw.as_ref());
             let notes = lock(notifications_for_draw.as_ref());
             let mut ws = lock(workspace_for_draw.as_ref());
+            let imgs = lock(images_for_draw.as_ref());
 
             let mut scratch_char_w = 0.0;
             let welcome_bindings = welcome_keymap_rows(&keymap_for_draw, &commands_for_draw);
@@ -197,7 +200,7 @@ impl OzoneGui {
                 &welcome_bindings,
                 srch.as_ref(),
                 &TermCells::new(),
-                &ImageCache::new(),
+                &imgs,
                 ActiveMods::default(),
                 true,
                 &mut scratch_char_w,
@@ -261,6 +264,7 @@ impl OzoneGui {
             notifications,
             which_key,
             canvas_arc,
+            images,
             W,
             H,
         );
@@ -416,15 +420,16 @@ impl OzoneGui {
             // --- image sync ---
             {
                 let ws = lock(state.workspace.as_ref());
+                let mut imgs = lock(state.images.as_ref());
                 for (id, buf) in ws.buffers.iter() {
                     if let BufferKind::Image(path) = &buf.kind
-                        && !state.images.contains_key(id)
+                        && !imgs.contains_key(id)
                     {
-                        state.images.insert(*id, decode_image(path));
+                        imgs.insert(*id, decode_image(path));
                         state.needs_redraw = true;
                     }
                 }
-                state.images.retain(|id, _| ws.buffers.contains_key(id));
+                imgs.retain(|id, _| ws.buffers.contains_key(id));
             }
 
             // --- filetype-local settings ---
@@ -506,6 +511,7 @@ impl OzoneGui {
                 let notes = lock(state.notifications.as_ref());
                 let mut ws = lock(state.workspace.as_ref());
                 let mut canvas = lock(state.canvas.as_ref());
+                let imgs = lock(state.images.as_ref());
                 let config = state.config.clone();
                 let active_mods = ActiveMods::from_physical(state.live_mods, &state.modmap);
                 let frame_wk = lock(state.which_key.as_ref()).clone();
@@ -518,7 +524,7 @@ impl OzoneGui {
                         &welcome_bindings,
                         srch.as_ref(),
                         &state.terms.cells,
-                        &state.images,
+                        &imgs,
                         active_mods,
                         state.cursor_visible,
                         &mut state.measured_char_w,
