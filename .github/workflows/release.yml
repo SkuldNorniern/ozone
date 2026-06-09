@@ -10,39 +10,6 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  changelog:
-    name: Generate Changelog
-    runs-on: ubuntu-latest
-    outputs:
-      body: ${{ steps.read.outputs.content }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Generate changelog
-        id: read
-        run: |
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          echo "### Changes" > CHANGELOG.md
-          echo "" >> CHANGELOG.md
-          if [ -n "$PREV_TAG" ]; then
-            git log "${PREV_TAG}..HEAD" --pretty=format:"- %s" >> CHANGELOG.md
-          else
-            git log --pretty=format:"- %s" >> CHANGELOG.md
-          fi
-          {
-            echo 'content<<EOF'
-            cat CHANGELOG.md
-            echo EOF
-          } >> $GITHUB_OUTPUT
-
-      - name: Upload changelog artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: changelog
-          path: CHANGELOG.md
-
   build:
     name: Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
@@ -129,7 +96,7 @@ jobs:
 
   release:
     name: Publish Release
-    needs: [changelog, build]
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -141,21 +108,19 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          merge-multiple: true
 
       - name: Merge checksums
-        run: |
-          find artifacts -name "*.sha256" -exec cat {} \; | sort > checksums.sha256
-          echo "--- checksums.sha256 ---"
-          cat checksums.sha256
+        run: find artifacts -name "*.sha256" -exec cat {} \; | sort > checksums.sha256
 
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
+      - name: Publish release
+        uses: marvinpinto/action-automatic-releases@latest
         with:
-          name: Ozone ${{ github.ref_name }}
-          body: ${{ needs.changelog.outputs.body }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          automatic_release_tag: ${{ github.ref_name }}
           prerelease: ${{ contains(github.ref_name, '-') }}
+          title: "Ozone ${{ github.ref_name }}"
           files: |
-            artifacts/ozone-*/*.tar.gz
-            artifacts/ozone-*/*.zip
+            artifacts/*.tar.gz
+            artifacts/*.zip
             checksums.sha256
-          fail_on_unmatched_files: false

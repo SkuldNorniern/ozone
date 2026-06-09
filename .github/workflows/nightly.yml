@@ -56,7 +56,7 @@ jobs:
       - name: Get date
         id: date
         shell: bash
-        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+        run: echo "date=$(date -u +'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
       - name: Package and checksum
         shell: bash
@@ -106,45 +106,28 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Get date
-        id: date
-        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
-
-      - name: Generate changelog
-        run: |
-          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          echo "### Changes" > CHANGELOG_NIGHTLY.md
-          echo "" >> CHANGELOG_NIGHTLY.md
-          if [ -n "$LAST_TAG" ]; then
-            git log "${LAST_TAG}..HEAD" --pretty=format:"- %s" >> CHANGELOG_NIGHTLY.md
-          else
-            git log --pretty=format:"- %s" -30 >> CHANGELOG_NIGHTLY.md
-          fi
+        id: meta
+        run: echo "date=$(date -u +'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          merge-multiple: true
 
       - name: Merge checksums
-        run: |
-          find artifacts -name "*.sha256" -exec cat {} \; | sort > checksums.sha256
+        run: find artifacts -name "*.sha256" -exec cat {} \; | sort > checksums.sha256
 
       - name: Publish nightly release
-        uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: marvinpinto/action-automatic-releases@latest
         with:
-          tag_name: nightly-${{ steps.date.outputs.date }}
-          name: Nightly ${{ steps.date.outputs.date }}
-          body_path: CHANGELOG_NIGHTLY.md
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          automatic_release_tag: latest
           prerelease: true
-          make_latest: false
+          title: "Nightly (${{ steps.meta.outputs.date }})"
           files: |
-            artifacts/ozone-*/*.tar.gz
-            artifacts/ozone-*/*.zip
+            artifacts/*.tar.gz
+            artifacts/*.zip
             checksums.sha256
-          fail_on_unmatched_files: false
