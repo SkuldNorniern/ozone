@@ -61,6 +61,43 @@ impl Span {
     }
 }
 
+/// A file's line-ending style. Ozone stores text as LF internally (so columns,
+/// search, and line splitting never see `\r`) and restores the original style
+/// on save.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LineEnding {
+    /// `\n` (Unix).
+    #[default]
+    Lf,
+    /// `\r\n` (Windows).
+    Crlf,
+}
+
+impl LineEnding {
+    /// Detect from raw file bytes: CRLF if any `\r\n` is present, else LF.
+    pub fn detect(s: &str) -> Self {
+        if s.contains("\r\n") {
+            Self::Crlf
+        } else {
+            Self::Lf
+        }
+    }
+
+    /// Convert raw file text to the internal LF form.
+    pub fn normalize(s: &str) -> String {
+        // Handle CRLF and stray lone CR; both would otherwise render as a glyph.
+        s.replace("\r\n", "\n").replace('\r', "\n")
+    }
+
+    /// Convert internal LF text back to this ending for writing to disk.
+    pub fn restore(self, s: &str) -> String {
+        match self {
+            Self::Lf => s.to_string(),
+            Self::Crlf => s.replace('\n', "\r\n"),
+        }
+    }
+}
+
 /// What kind of content a buffer holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BufferKind {
@@ -87,6 +124,8 @@ pub struct Buffer {
     /// redo, set_text). Cheap O(1) change detection for consumers like the LSP
     /// document mirror; unlike the undo-stack length it never decreases.
     revision: u64,
+    /// The file's line-ending style, restored on save. LF for non-file buffers.
+    eol: LineEnding,
 }
 
 impl Buffer {
@@ -107,12 +146,16 @@ impl Buffer {
     }
 
     pub fn open(path: PathBuf) -> std::io::Result<Self> {
-        let content = std::fs::read_to_string(&path)?;
-        Ok(Self::init(
+        let raw = std::fs::read_to_string(&path)?;
+        let eol = LineEnding::detect(&raw);
+        let content = LineEnding::normalize(&raw);
+        let mut buf = Self::init(
             BufferId::next(),
             BufferKind::File(path),
             PieceTable::new(&content),
-        ))
+        );
+        buf.eol = eol;
+        Ok(buf)
     }
 
     /// An image buffer: the file is rendered, not loaded as text. Holds no
@@ -135,16 +178,22 @@ impl Buffer {
             dirty: false,
             save_marker: 0,
             revision: 0,
+            eol: LineEnding::Lf,
         }
     }
 
     pub fn save(&mut self) -> std::io::Result<()> {
         if let BufferKind::File(path) = &self.kind {
-            std::fs::write(path, self.table.text())?;
+            std::fs::write(path, self.eol.restore(&self.table.text()))?;
         }
         self.dirty = false;
         self.save_marker = self.undo_stack.len();
         Ok(())
+    }
+
+    /// The file's line-ending style (LF for non-file buffers).
+    pub fn line_ending(&self) -> LineEnding {
+        self.eol
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -391,5 +440,25 @@ mod tests {
         let r3 = buf.revision();
         buf.set_text("fresh");
         assert!(buf.revision() > r3, "set_text should bump revision");
+    }
+
+    #[test]
+    fn crlf_is_normalized_on_open_and_restored_on_save() {
+        let path = std::env::temp_dir().join(format!("ozone_crlf_{}.txt", std::process::id()));
+        std::fs::write(&path, "one\r\ntwo\r\nthree").unwrap();
+
+        let mut buf = Buffer::open(path.clone()).unwrap();
+        // Internal text is LF — no stray carriage returns to render as glyphs.
+        assert_eq!(buf.text(), "one\ntwo\nthree");
+        assert!(!buf.text().contains('\r'));
+        assert_eq!(buf.line(0).as_deref(), Some("one"));
+        assert_eq!(buf.line_ending(), LineEnding::Crlf);
+
+        // Saving restores CRLF on disk.
+        buf.save().unwrap();
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(on_disk, "one\r\ntwo\r\nthree");
+
+        let _ = std::fs::remove_file(&path);
     }
 }

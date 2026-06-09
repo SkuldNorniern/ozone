@@ -269,6 +269,8 @@ impl Workspace {
         let Ok(disk) = std::fs::read_to_string(&path) else {
             return false;
         };
+        // Normalize to internal LF; the buffer restores its own ending on save.
+        let disk = ozone_buffer::LineEnding::normalize(&disk);
         let changed = self.replace_buffer_text(id, &disk);
         // The buffer now matches disk; clear the dirty flag (undo still works).
         if let Some(buf) = self.buffers.get_mut(&id) {

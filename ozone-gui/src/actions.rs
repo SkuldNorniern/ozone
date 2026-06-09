@@ -90,7 +90,8 @@ fn run_shell_filter(cmd_line: &str, ws: &mut Workspace) {
 
     match pipe_through_shell(cmd_line, &input) {
         Ok(output) => {
-            ws.replace_buffer_text(id, &output);
+            // A filter may emit CRLF (e.g. a Windows tool); keep the buffer LF.
+            ws.replace_buffer_text(id, &ozone_buffer::LineEnding::normalize(&output));
         }
         Err(e) => ws.notify(NotifyLevel::Warn, format!("{cmd_line}: {e}")),
     }
