@@ -7,20 +7,26 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
-use ozone_buffer::{BufferId, BufferKind};
+use ozone_buffer::{Buffer, BufferId, BufferKind, Pos};
 use ozone_config::Config;
-use ozone_editor::{NamespaceId, NotifyLevel, Workspace};
+use ozone_editor::{Diagnostic, NamespaceId, NotifyLevel, Workspace};
 use ozone_lsp::{LspClient, ServerMessage};
 use ozone_syntax::Filetype;
 
+/// Coalesce rapid edits: send at most one `didChange` per document per window.
+const CHANGE_DEBOUNCE: Duration = Duration::from_millis(150);
+
 /// One mirrored document: its file URI, the canonical path (for matching server
-/// diagnostics back to a buffer), the last text we sent, and the LSP version.
+/// diagnostics back to a buffer), the last synced buffer revision, the LSP
+/// version, and when we last sent a change (for debouncing).
 struct Doc {
     uri: String,
     canonical: PathBuf,
-    text: String,
+    revision: u64,
     version: i64,
+    last_change: Instant,
 }
 
 /// Frontend LSP state. Holds at most one server for now (Rust); generalizing to
@@ -78,15 +84,19 @@ impl Lsp {
         changed
     }
 
-    /// `didOpen` new Rust buffers and `didChange` ones whose text changed.
+    /// `didOpen` new Rust buffers and `didChange` ones whose revision advanced
+    /// (cheap O(1) check; full text sent only when we actually fire a change).
     fn open_and_update(&mut self, ws: &mut Workspace, open: &[(BufferId, PathBuf)]) -> bool {
         let Some(client) = self.client.as_mut() else {
             return false;
         };
         for (id, path) in open {
-            let text = ws.buffers.get(id).map(|b| b.text()).unwrap_or_default();
+            let Some(revision) = ws.buffers.get(id).map(Buffer::revision) else {
+                continue;
+            };
             match self.docs.get_mut(id) {
                 None => {
+                    let text = ws.buffers.get(id).map(Buffer::text).unwrap_or_default();
                     let uri = path_to_uri(path);
                     client.did_open(&uri, "rust", 1, &text);
                     self.docs.insert(
@@ -94,15 +104,22 @@ impl Lsp {
                         Doc {
                             uri,
                             canonical: canonicalize(path),
-                            text,
+                            revision,
                             version: 1,
+                            last_change: Instant::now(),
                         },
                     );
                 }
-                Some(doc) if doc.text != text => {
-                    doc.version += 1;
-                    doc.text = text;
-                    client.did_change(&doc.uri, doc.version, &doc.text);
+                // Revision advanced — sync, but no more than once per debounce
+                // window. Deferred frames keep the stale revision and retry.
+                Some(doc) if doc.revision != revision => {
+                    if doc.last_change.elapsed() >= CHANGE_DEBOUNCE {
+                        let text = ws.buffers.get(id).map(Buffer::text).unwrap_or_default();
+                        doc.version += 1;
+                        doc.revision = revision;
+                        doc.last_change = Instant::now();
+                        client.did_change(&doc.uri, doc.version, &text);
+                    }
                 }
                 Some(_) => {}
             }
@@ -151,13 +168,62 @@ impl Lsp {
             let Some(target) = uri_to_path(&uri).map(|p| canonicalize(&p)) else {
                 continue;
             };
-            if let Some((id, _)) = self.docs.iter().find(|(_, d)| d.canonical == target) {
-                ws.publish_diagnostics(*id, ns, &diagnostics);
-                changed = true;
-            }
+            let Some(id) = self
+                .docs
+                .iter()
+                .find(|(_, d)| d.canonical == target)
+                .map(|(id, _)| *id)
+            else {
+                continue;
+            };
+            // LSP columns are UTF-16 code units; remap to byte columns first.
+            let remapped = remap_to_byte_cols(ws, id, diagnostics);
+            ws.publish_diagnostics(id, ns, &remapped);
+            changed = true;
         }
         changed
     }
+}
+
+/// Remap each diagnostic's `character` (a UTF-16 code-unit offset, per the LSP
+/// spec) to a byte column using the buffer's line text. Correct for non-ASCII
+/// lines; a no-op for ASCII. Unknown lines are left unchanged.
+fn remap_to_byte_cols(ws: &Workspace, id: BufferId, diags: Vec<Diagnostic>) -> Vec<Diagnostic> {
+    let Some(buf) = ws.buffers.get(&id) else {
+        return diags;
+    };
+    diags
+        .into_iter()
+        .map(|d| Diagnostic {
+            start: byte_pos(buf, d.start),
+            end: byte_pos(buf, d.end),
+            ..d
+        })
+        .collect()
+}
+
+/// Convert a `(line, utf16_col)` position to `(line, byte_col)`.
+fn byte_pos(buf: &Buffer, pos: Pos) -> Pos {
+    match buf.line(pos.line) {
+        Some(line) => Pos::new(pos.line, utf16_to_byte_col(&line, pos.col)),
+        None => pos,
+    }
+}
+
+/// Byte offset of the `utf16`-th UTF-16 code unit within `line`. Clamps to the
+/// line length if the offset runs past the end.
+fn utf16_to_byte_col(line: &str, utf16: usize) -> usize {
+    if utf16 == 0 {
+        return 0;
+    }
+    let mut units = 0;
+    for (byte_idx, ch) in line.char_indices() {
+        if units >= utf16 {
+            return byte_idx;
+        }
+        units += ch.len_utf16();
+    }
+    line.len()
 }
 
 /// Open file buffers whose filetype is Rust.
@@ -252,5 +318,20 @@ mod tests {
     #[test]
     fn uri_to_path_rejects_non_file() {
         assert!(uri_to_path("http://example.com").is_none());
+    }
+
+    #[test]
+    fn utf16_col_maps_to_byte_col() {
+        // ASCII: byte == utf16.
+        assert_eq!(utf16_to_byte_col("let x = 1;", 4), 4);
+        assert_eq!(utf16_to_byte_col("abc", 0), 0);
+        // "café" — 'é' is 1 UTF-16 unit but 2 bytes. Column after it:
+        // utf16 4 → byte 5.
+        assert_eq!(utf16_to_byte_col("café", 4), 5);
+        assert_eq!(utf16_to_byte_col("café", 3), 3); // before 'é'
+        // Emoji '😀' is 2 UTF-16 units (surrogate pair) and 4 bytes.
+        assert_eq!(utf16_to_byte_col("a😀b", 3), 5); // a(1) + 😀(2) → byte 5
+        // Past end clamps to len.
+        assert_eq!(utf16_to_byte_col("hi", 99), 2);
     }
 }

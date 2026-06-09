@@ -83,6 +83,10 @@ pub struct Buffer {
     redo_stack: Vec<Delta>,
     dirty: bool,
     save_marker: usize,
+    /// Monotonic edit counter — bumped on every content mutation (edits, undo,
+    /// redo, set_text). Cheap O(1) change detection for consumers like the LSP
+    /// document mirror; unlike the undo-stack length it never decreases.
+    revision: u64,
 }
 
 impl Buffer {
@@ -130,6 +134,7 @@ impl Buffer {
             redo_stack: Vec::new(),
             dirty: false,
             save_marker: 0,
+            revision: 0,
         }
     }
 
@@ -164,6 +169,7 @@ impl Buffer {
         self.table = PieceTable::new(content);
         self.undo_stack.clear();
         self.redo_stack.clear();
+        self.revision += 1;
     }
 
     pub fn line_count(&self) -> usize {
@@ -263,6 +269,7 @@ impl Buffer {
         let applied = delta.inverse();
         self.redo_stack.push(delta);
         self.dirty = self.undo_stack.len() != self.save_marker;
+        self.revision += 1;
         Some((pos, applied))
     }
 
@@ -277,6 +284,7 @@ impl Buffer {
         let pos = self.reapply(&delta);
         self.undo_stack.push(delta.clone());
         self.dirty = true;
+        self.revision += 1;
         Some((pos, delta))
     }
 
@@ -284,6 +292,13 @@ impl Buffer {
         self.undo_stack.push(delta);
         self.redo_stack.clear();
         self.dirty = true;
+        self.revision += 1;
+    }
+
+    /// Monotonic edit counter (see field docs). Equal values mean identical
+    /// content since the last observation; cheap change detection.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     fn invert_and_apply(&mut self, delta: &Delta) -> Pos {
@@ -352,5 +367,29 @@ impl BufferStore {
 
     pub fn ids(&self) -> impl Iterator<Item = BufferId> + '_ {
         self.buffers.keys().copied()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn revision_advances_on_edit_undo_redo() {
+        let mut buf = Buffer::from_text("abc");
+        let r0 = buf.revision();
+        buf.insert(Pos::new(0, 3), "d");
+        let r1 = buf.revision();
+        assert!(r1 > r0, "edit should bump revision");
+
+        buf.undo();
+        assert!(buf.revision() > r1, "undo should bump revision");
+        let r2 = buf.revision();
+        buf.redo();
+        assert!(buf.revision() > r2, "redo should bump revision");
+
+        let r3 = buf.revision();
+        buf.set_text("fresh");
+        assert!(buf.revision() > r3, "set_text should bump revision");
     }
 }
