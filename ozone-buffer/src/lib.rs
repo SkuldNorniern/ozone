@@ -146,6 +146,14 @@ impl Buffer {
         self.dirty
     }
 
+    /// Mark the buffer as matching its file on disk *without* writing — used
+    /// after reloading on-disk content (e.g. an external formatter rewrote the
+    /// file). Undo history is kept, so the change can still be undone.
+    pub fn mark_saved(&mut self) {
+        self.dirty = false;
+        self.save_marker = self.undo_stack.len();
+    }
+
     pub fn text(&self) -> String {
         self.table.text()
     }

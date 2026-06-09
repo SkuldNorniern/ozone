@@ -42,12 +42,20 @@ fn execute_command(name: &str, ws: &mut Workspace, reg: &CommandRegistry) {
 }
 
 fn execute_command_arg(name: &str, arg: Option<String>, ws: &mut Workspace, reg: &CommandRegistry) {
-    // A command beginning with `|` is a shell filter, not a registry command:
-    // the active buffer is piped through it (stdin → stdout → buffer). Lets the
-    // config wire up `rustfmt`, `prettier`, `black -`, `gofmt`, … on save with
-    // no per-tool code. E.g. `command = "|rustfmt --edition 2021"`.
+    // Two shell sigils (not registry commands):
+    //   `|cmd` — *filter*: pipe the buffer through cmd (stdin → stdout → buffer).
+    //            For stdin/stdout tools (rustfmt, prettier, black -); works on
+    //            unsaved content. Use on `buffer.pre-save`.
+    //   `!cmd` — *run*: run cmd on the file/workspace (it edits files on disk),
+    //            then reload the buffer. For tools that take a path or operate on
+    //            the project (cargo fmt, gofmt -w). `%` expands to the file path;
+    //            cwd is the file's directory. Use on `buffer.saved` (post-write).
     if let Some(cmd_line) = name.strip_prefix('|') {
         run_shell_filter(cmd_line.trim(), ws);
+        return;
+    }
+    if let Some(cmd_line) = name.strip_prefix('!') {
+        run_shell_on_file(cmd_line.trim(), ws);
         return;
     }
     if let Some(ctx) = CommandContext::new(ws) {
@@ -86,6 +94,65 @@ fn run_shell_filter(cmd_line: &str, ws: &mut Workspace) {
         }
         Err(e) => ws.notify(NotifyLevel::Warn, format!("{cmd_line}: {e}")),
     }
+}
+
+/// Run `cmd_line` against the active file on disk (it edits the file/project in
+/// place), then reload the buffer from disk. `%` in the command expands to the
+/// file path; the command runs with the file's directory as cwd so project tools
+/// (e.g. `cargo fmt`) find their manifest. Non-file buffers are ignored.
+fn run_shell_on_file(cmd_line: &str, ws: &mut Workspace) {
+    if cmd_line.is_empty() {
+        return;
+    }
+    let Some(id) = ws.active_view().map(|v| v.buffer_id) else {
+        return;
+    };
+    let path = match ws.buffers.get(&id).map(|b| &b.kind) {
+        Some(BufferKind::File(p)) => p.clone(),
+        _ => return,
+    };
+
+    let expanded = cmd_line.replace('%', &path.to_string_lossy());
+    let cwd = path.parent().map(|p| p.to_path_buf());
+    match run_shell(&expanded, cwd.as_deref()) {
+        Ok(()) => {
+            ws.reload_buffer(id);
+        }
+        Err(e) => ws.notify(NotifyLevel::Warn, format!("{cmd_line}: {e}")),
+    }
+}
+
+/// Run `cmd_line` in the platform shell (optionally in `cwd`), inheriting no
+/// stdin and discarding output. Returns an error on spawn failure or non-zero
+/// exit (first stderr line).
+fn run_shell(cmd_line: &str, cwd: Option<&std::path::Path>) -> Result<(), String> {
+    let mut command = if cfg!(windows) {
+        let mut c = Command::new("cmd");
+        c.args(["/C", cmd_line]);
+        c
+    } else {
+        let mut c = Command::new("sh");
+        c.args(["-c", cmd_line]);
+        c
+    };
+    if let Some(dir) = cwd {
+        command.current_dir(dir);
+    }
+    let out = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("could not run ({e})"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    Err(stderr
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("command failed")
+        .to_string())
 }
 
 /// Run `cmd_line` in the platform shell, feeding `input` on stdin and returning

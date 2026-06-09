@@ -257,6 +257,26 @@ impl Workspace {
         Ok(())
     }
 
+    /// Re-read a file buffer from disk (e.g. after an external command rewrote
+    /// the file) as an undoable edit, then mark it clean since it now matches
+    /// disk. Returns whether the content changed. No-op for non-file buffers or
+    /// unreadable files.
+    pub fn reload_buffer(&mut self, id: BufferId) -> bool {
+        let path = match self.buffers.get(&id).map(|b| &b.kind) {
+            Some(BufferKind::File(p)) => p.clone(),
+            _ => return false,
+        };
+        let Ok(disk) = std::fs::read_to_string(&path) else {
+            return false;
+        };
+        let changed = self.replace_buffer_text(id, &disk);
+        // The buffer now matches disk; clear the dirty flag (undo still works).
+        if let Some(buf) = self.buffers.get_mut(&id) {
+            buf.mark_saved();
+        }
+        changed
+    }
+
     /// Replace a buffer's entire contents with `new_text` as undoable edits
     /// (delete-all + insert), emit `BufferChanged` so decorations track, and
     /// clamp every cursor on the buffer to the new bounds. Returns whether the
@@ -348,6 +368,24 @@ mod tests {
         let ws = Workspace::new();
         let active = ws.active_view_id.unwrap();
         assert_eq!(ws.panes.as_ref().unwrap().leaves(), vec![active]);
+    }
+
+    #[test]
+    fn reload_buffer_rereads_disk_and_marks_clean() {
+        let path = std::env::temp_dir().join(format!("ozone_reload_{}.txt", std::process::id()));
+        std::fs::write(&path, "before\n").unwrap();
+        let mut ws = Workspace::new();
+        let (id, _) = ws.open_file(path.clone()).unwrap();
+
+        // An external tool rewrites the file on disk.
+        std::fs::write(&path, "after\n").unwrap();
+        assert!(ws.reload_buffer(id));
+        assert_eq!(ws.buffers.get(&id).unwrap().text(), "after\n");
+        // Matches disk now — not dirty — but the reload is still undoable.
+        assert!(!ws.buffers.get(&id).unwrap().is_dirty());
+        assert!(ws.buffers.get_mut(&id).unwrap().undo().is_some());
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
