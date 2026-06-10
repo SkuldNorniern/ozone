@@ -12,6 +12,7 @@ use crate::canvas::SendableCanvas;
 use crate::input::{corrected_mods, terminal_key_bytes};
 use crate::keys::{Overlays, active_terminal, apply_ui_intents, handle_key};
 use crate::layout::{STATUS_H, max_scroll_line, pane_at};
+use crate::lsp::Lsp;
 use crate::mouse::{
     MouseState, handle_editor_click, handle_editor_drag, handle_fold_click, handle_scrollbar_drag,
     handle_scrollbar_press,
@@ -21,6 +22,7 @@ use crate::overlay::notify::Notifications;
 use crate::overlay::picker::{PickerState, handle_palette_key};
 use crate::overlay::search::{SearchState, handle_search_key, search_input_text, search_jump};
 use crate::overlay::whichkey::WhichKeyView;
+use crate::statusbar::buffer_dot_at;
 use crate::terminals::Terminals;
 use crate::{ImageCache, OzoneGui, lock};
 
@@ -60,7 +62,7 @@ pub(crate) struct AppState {
     pub(crate) mod_hint_visible: bool,
     pub(crate) mouse: MouseState,
     /// GUI-side LSP orchestration (lazy server, doc sync, diagnostics routing).
-    pub(crate) lsp: crate::lsp::Lsp,
+    pub(crate) lsp: Lsp,
     pub(crate) cursor_visible: bool,
     pub(crate) last_cursor_blink: Instant,
     pub(crate) needs_redraw: bool,
@@ -110,7 +112,7 @@ impl AppState {
             mod_hint_start: None,
             mod_hint_visible: false,
             mouse: MouseState::default(),
-            lsp: crate::lsp::Lsp::new(),
+            lsp: Lsp::new(),
             cursor_visible: true,
             last_cursor_blink: Instant::now(),
             needs_redraw: false,
@@ -381,9 +383,7 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                     (cv.width() as f32, cv.height() as f32)
                 };
                 let mut workspace = lock(state.workspace.as_ref());
-                if let Some(target) =
-                    crate::statusbar::buffer_dot_at(&workspace, width, height, x, y)
-                {
+                if let Some(target) = buffer_dot_at(&workspace, width, height, x, y) {
                     // A status-bar buffer dot: switch to that buffer.
                     if workspace.switch_active_buffer(target) {
                         state.needs_redraw = true;

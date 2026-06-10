@@ -3,11 +3,12 @@ use std::path::PathBuf;
 
 use ozone_buffer::{Buffer, BufferId, BufferKind, Pos};
 
-use crate::decoration::DecorationStore;
+use crate::decoration::{DecorationStore, NamespaceId};
+use crate::diagnostics::{Diagnostic, publish};
 use crate::events::EditorEvent;
 use crate::options::{BufferLocal, OptionValue};
 use crate::pane::PaneTree;
-use crate::ui::UiIntent;
+use crate::ui::{NotifyLevel, UiIntent};
 use crate::view::{View, ViewId};
 
 mod nav;
@@ -181,11 +182,11 @@ impl Workspace {
     pub fn publish_diagnostics(
         &mut self,
         buffer_id: BufferId,
-        namespace: crate::decoration::NamespaceId,
-        diags: &[crate::diagnostics::Diagnostic],
+        namespace: NamespaceId,
+        diags: &[Diagnostic],
     ) {
         if let Some(buf) = self.buffers.get(&buffer_id) {
-            crate::diagnostics::publish(&mut self.decorations, buf, buffer_id, namespace, diags);
+            publish(&mut self.decorations, buf, buffer_id, namespace, diags);
         }
     }
 
@@ -201,7 +202,7 @@ impl Workspace {
         self.ui_intents.drain(..).collect()
     }
 
-    pub fn notify(&mut self, level: crate::ui::NotifyLevel, text: impl Into<String>) {
+    pub fn notify(&mut self, level: NotifyLevel, text: impl Into<String>) {
         self.request_ui(UiIntent::Notify {
             level,
             text: text.into(),

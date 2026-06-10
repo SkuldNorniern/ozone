@@ -11,6 +11,8 @@ mod rust;
 pub mod symbols;
 mod toml;
 
+use taste::{Language, detect_path};
+
 pub use symbols::{Symbol, SymbolKind, symbols};
 
 // ---------------------------------------------------------------------------
@@ -59,14 +61,16 @@ pub enum Filetype {
 }
 
 impl Filetype {
+    /// Detect a filetype from a path with the `taste` detector, mapped down to
+    /// the languages Ozone has Layer-0 scanners for. taste handles extensions,
+    /// special filenames/paths, and case-insensitivity; anything it doesn't
+    /// recognize (or a language with no scanner) falls back to `Plain`.
     pub fn from_path(path: &str) -> Self {
-        // Match on the lowercased final extension.
-        let ext = path.rsplit('.').next().unwrap_or("");
-        match ext.to_ascii_lowercase().as_str() {
-            "rs" => Filetype::Rust,
-            "toml" => Filetype::Toml,
-            "json" | "jsonc" => Filetype::Json,
-            "md" | "markdown" | "mdown" | "mkd" => Filetype::Markdown,
+        match detect_path(path).map(|d| d.language) {
+            Some(Language::RUST) => Filetype::Rust,
+            Some(Language::TOML) => Filetype::Toml,
+            Some(Language::JSON) => Filetype::Json,
+            Some(Language::MARKDOWN) => Filetype::Markdown,
             _ => Filetype::Plain,
         }
     }

@@ -14,7 +14,7 @@ use crate::components::{
 };
 use crate::editor_font;
 use crate::layout::baseline_in_rect;
-use crate::theme::solid;
+use crate::theme::{activate, available_themes, persist_theme_name, solid};
 
 /// What committing a picker item does.
 #[derive(Clone)]
@@ -226,7 +226,7 @@ pub(crate) fn select_picker_items(items: Vec<ozone_editor::SelectItem>) -> Vec<P
 }
 
 pub(crate) fn theme_picker_items() -> Vec<PickerItem> {
-    crate::theme::available_themes()
+    available_themes()
         .into_iter()
         .map(|theme| PickerItem {
             haystack: format!("{} {}", theme.name, theme.id).to_lowercase(),
@@ -266,9 +266,9 @@ pub(crate) fn handle_palette_key(
                     None => run_cmd(&cmd, ws, reg, autocmds),
                 },
                 Some(PickerAction::ApplyTheme(name)) => {
-                    if crate::theme::activate(&name) {
+                    if activate(&name) {
                         // Persist the choice so it survives a restart.
-                        crate::theme::persist_theme_name(&name);
+                        persist_theme_name(&name);
                     }
                 }
                 Some(PickerAction::OpenFile(path)) => {

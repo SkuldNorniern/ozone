@@ -363,6 +363,20 @@ impl Config {
 
         config.merge_section_files(path.parent(), &mut warnings);
 
+        // Bindings are config-driven with no hardcoded fallback layer: a config
+        // without any `[keymap]`/`[[keymap]]` (typically one written before the
+        // keymap.toml split) leaves *every* key — including Ctrl/Meta chords —
+        // unbound. Surface that loudly rather than silently rewriting the
+        // user's config directory.
+        if config.keymaps.is_empty() {
+            warnings.push(format!(
+                "no keybindings configured in {} (or its keymap.toml) — Ctrl/Meta \
+                 shortcuts are unbound; run `ozone --reset-config` to regenerate the \
+                 default keymap",
+                path.display()
+            ));
+        }
+
         let warning = (!warnings.is_empty()).then(|| warnings.join("; "));
         (config, warning)
     }
@@ -437,6 +451,20 @@ impl Config {
         (Self::default_config(), None)
     }
 
+    /// Write any of [`Self::SECTION_TEMPLATES`] not already present in `dir`.
+    /// Existing section files are left untouched. Creates `dir` if needed.
+    fn write_missing_section_files(dir: &Path) -> Result<(), String> {
+        std::fs::create_dir_all(dir).map_err(|e| format!("create config dir: {e}"))?;
+        for (name, template) in Self::SECTION_TEMPLATES {
+            let section = dir.join(name);
+            if !section.exists() {
+                std::fs::write(&section, template)
+                    .map_err(|e| format!("write {}: {e}", section.display()))?;
+            }
+        }
+        Ok(())
+    }
+
     /// Write the default config to `path`, generating the **split layout**:
     /// the base `config.toml` plus a sibling file per section (`keymap.toml`,
     /// `autocmd.toml`, `filetype.toml`, `lsp.toml`). Creates parent directories
@@ -444,13 +472,32 @@ impl Config {
     /// `config.toml` is written at `path`.
     pub fn write_default_to(path: &std::path::Path) -> Result<(), String> {
         if let Some(parent) = path.parent() {
+            Self::write_missing_section_files(parent)?;
+        }
+        std::fs::write(path, Self::DEFAULT_TEMPLATE).map_err(|e| format!("write config: {e}"))
+    }
+
+    /// Force-regenerate the user config's split layout: `config.toml` plus
+    /// every section file (`keymap.toml`, `autocmd.toml`, `filetype.toml`,
+    /// `lsp.toml`) are overwritten with the shipped defaults, even if they
+    /// already exist. Unlike [`Self::write_default_to`], this is destructive —
+    /// it is the explicit `--reset-config` escape hatch for a config that
+    /// predates the split layout (and so has no keybindings at all).
+    /// Returns the path written to.
+    pub fn reset_user_config() -> Result<PathBuf, String> {
+        let path = Self::user_config_path().ok_or("cannot determine user config directory")?;
+        Self::reset_at(&path)?;
+        Ok(path)
+    }
+
+    /// Implementation of [`Self::reset_user_config`], taking an explicit path
+    /// so it can be exercised against a temp directory in tests.
+    fn reset_at(path: &Path) -> Result<(), String> {
+        if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("create config dir: {e}"))?;
             for (name, template) in Self::SECTION_TEMPLATES {
-                let section = parent.join(name);
-                if !section.exists() {
-                    std::fs::write(&section, template)
-                        .map_err(|e| format!("write {}: {e}", section.display()))?;
-                }
+                std::fs::write(parent.join(name), template)
+                    .map_err(|e| format!("write {name}: {e}"))?;
             }
         }
         std::fs::write(path, Self::DEFAULT_TEMPLATE).map_err(|e| format!("write config: {e}"))
@@ -697,6 +744,64 @@ mod tests {
         assert!(c.lsps.iter().any(|l| l.language == "rust"));
         assert!(c.filetypes.iter().any(|f| f.name == "markdown"));
         assert!(c.autocmds.iter().any(|a| a.command.contains("trim")));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn legacy_config_without_keymap_warns_instead_of_rewriting() {
+        // A config.toml written before the split layout existed: no
+        // `[keymap]`/`[[keymap]]` and no sibling section files.
+        let dir = std::env::temp_dir().join(format!("ozone_legacy_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[editor]\nfont_size = 16\n").unwrap();
+
+        // Bindings are config-driven with no hardcoded fallback, so a config
+        // missing `[keymap]`/keymap.toml leaves every key (e.g. backspace)
+        // unbound. Loading must surface that loudly rather than silently
+        // backfilling files into the user's config directory.
+        let (c, warning) = Config::load_with_warning(&path);
+        assert!(c.keymaps.is_empty());
+        let warning = warning.expect("expected a no-keybindings warning");
+        assert!(warning.contains("no keybindings configured"));
+        assert!(warning.contains("--reset-config"));
+
+        // Nothing was written to disk.
+        for name in ["keymap.toml", "autocmd.toml", "filetype.toml", "lsp.toml"] {
+            assert!(!dir.join(name).exists(), "{name} should not be generated");
+        }
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[editor]\nfont_size = 16\n"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reset_at_overwrites_legacy_config_with_split_layout() {
+        let dir = std::env::temp_dir().join(format!("ozone_reset_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+
+        // A pre-split config with no keymap, plus a stale section file that
+        // should be overwritten (not just backfilled) by the reset.
+        std::fs::write(&path, "[editor]\nfont_size = 99\n").unwrap();
+        std::fs::write(dir.join("keymap.toml"), "[keymap]\n").unwrap();
+
+        Config::reset_at(&path).unwrap();
+
+        for name in ["keymap.toml", "autocmd.toml", "filetype.toml", "lsp.toml"] {
+            assert!(dir.join(name).exists(), "missing {name}");
+        }
+        // The empty stale keymap.toml was overwritten with the shipped defaults.
+        let (c, warning) = Config::load_with_warning(&path);
+        assert!(warning.is_none(), "unexpected: {warning:?}");
+        assert!(!c.keymaps.is_empty());
+        assert!(c.keymaps.iter().any(|k| k.command == "file.save"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

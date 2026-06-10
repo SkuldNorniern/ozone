@@ -4,12 +4,13 @@ use std::collections::HashMap;
 
 use aurea::AureaResult;
 use aurea::render::{DrawingContext, Font, Point, Rect};
-use ozone_buffer::{BufferId, BufferKind};
+use ozone_buffer::{BufferId, BufferKind, Pos};
 use ozone_config::Config;
 use ozone_editor::{PaneTree, Workspace};
 use ozone_term::Terminal;
 
 use crate::TermCells;
+use crate::keys::active_terminal;
 use crate::layout::{EDITOR_TOP_PAD, PAD, STATUS_H, split_rect};
 use crate::theme::{palette, solid, term_color};
 
@@ -106,7 +107,7 @@ impl Terminals {
 
         // Pull fresh output for any session whose version advanced.
         self.versions.retain(|id, _| self.sessions.contains_key(id));
-        let active_term = crate::keys::active_terminal(ws);
+        let active_term = active_terminal(ws);
         for (id, term) in self.sessions.iter() {
             let version = term.version();
             if self.versions.get(id) == Some(&version) {
@@ -133,7 +134,7 @@ impl Terminals {
                     .unwrap_or(0)
                     .min(ccol);
                 if let Some(view) = ws.active_view_mut() {
-                    view.cursor = ozone_buffer::Pos::new(line, col);
+                    view.cursor = Pos::new(line, col);
                     view.scroll_to_cursor(view.page_height.max(1));
                 }
             }

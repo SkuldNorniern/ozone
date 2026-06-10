@@ -6,7 +6,7 @@ use ozone_buffer::{BufferId, BufferKind};
 use ozone_config::Config;
 use ozone_editor::commands::register_defaults;
 use ozone_editor::{
-    AutocommandRegistry, CommandRegistry, IndentConfig, Keymap, ModifierMap, Workspace,
+    AutocommandRegistry, CommandRegistry, IndentConfig, Keymap, ModifierMap, NotifyLevel, Workspace,
 };
 use ozone_syntax::Filetype;
 
@@ -25,6 +25,7 @@ use crate::overlay::picker::{PickerState, draw_palette};
 use crate::overlay::search::SearchState;
 use crate::overlay::whichkey::{WhichKeyView, draw_which_key};
 use crate::render::draw_editor;
+use crate::theme::initialize as initialize_theme;
 use crate::{ImageCache, TermCells, editor_font, lock};
 
 /// How long a bare modifier must be held alone before the which-key hint shows.
@@ -169,7 +170,7 @@ impl OzoneGui {
     }
 
     pub fn with_config(mut workspace: Workspace, config: Config) -> Self {
-        crate::theme::initialize(&config.theme);
+        initialize_theme(&config.theme);
         workspace.indent = IndentConfig {
             width: config.editor.tab_width,
             soft_tabs: config.editor.soft_tabs,
@@ -213,7 +214,21 @@ impl OzoneGui {
         let palette: Arc<Mutex<Option<PickerState>>> = Arc::new(Mutex::new(None));
         let search: Arc<Mutex<Option<SearchState>>> = Arc::new(Mutex::new(None));
         let minibuffer: Arc<Mutex<Option<Minibuffer>>> = Arc::new(Mutex::new(None));
-        let notifications: Arc<Mutex<Notifications>> = Arc::new(Mutex::new(Notifications::new()));
+        let mut startup_notifications = Notifications::new();
+        if self.config.keymaps.is_empty() {
+            // No `[keymap]`/keymap.toml means every key (Ctrl/Meta chords
+            // included) is unbound — config-driven keymaps have no hardcoded
+            // fallback. Surface this loudly; `--reset-config` regenerates the
+            // default keymap.toml.
+            startup_notifications.push(
+                NotifyLevel::Warn,
+                "No keybindings configured — Ctrl/Meta shortcuts are unbound. \
+                 Run `ozone --reset-config` to regenerate the default keymap."
+                    .to_string(),
+                Some(15_000),
+            );
+        }
+        let notifications: Arc<Mutex<Notifications>> = Arc::new(Mutex::new(startup_notifications));
         let which_key: Arc<Mutex<WhichKeyView>> = Arc::new(Mutex::new(None));
         let images: Arc<Mutex<ImageCache>> = Arc::new(Mutex::new(ImageCache::new()));
 

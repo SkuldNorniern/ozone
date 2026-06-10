@@ -6,7 +6,20 @@ use ozone_gui::OzoneGui;
 use std::path::PathBuf;
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+
+    // `--reset-config` regenerates the user's config.toml + section files
+    // (keymap.toml/autocmd.toml/filetype.toml/lsp.toml) from the shipped
+    // defaults, even if they already exist. This is the escape hatch for a
+    // config written before the keymap.toml split: such a config has no
+    // `[keymap]` at all, so every key (including Ctrl/Meta chords) is unbound.
+    if let Some(pos) = args.iter().position(|a| a == "--reset-config") {
+        args.remove(pos);
+        match Config::reset_user_config() {
+            Ok(path) => eprintln!("ozone: reset config to defaults at {}", path.display()),
+            Err(e) => eprintln!("ozone: failed to reset config: {e}"),
+        }
+    }
 
     // Load user config (~/.config/ozone/config.toml or %APPDATA%\ozone\config.toml),
     // falling back to defaults when absent or malformed.
@@ -28,7 +41,7 @@ fn main() {
     let mut workspace = Workspace::new();
 
     // Open a file if one was passed on the command line
-    if let Some(path_str) = args.get(1) {
+    if let Some(path_str) = args.first() {
         let path = PathBuf::from(path_str);
         if let Err(e) = workspace.open_file(path) {
             eprintln!("ozone: cannot open file: {e}");

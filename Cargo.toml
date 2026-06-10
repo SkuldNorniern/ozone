@@ -13,12 +13,13 @@ members = [
     "ozone-term",
     "ozone-lsp",
 ]
-exclude = ["aurea"]
+exclude = ["aurea", "taste", "oxygen"]
 resolver = "2"
 
 [workspace.dependencies]
 aurea       = "0.0.2"
 toml        = "0.8"
+taste       = { git = "https://github.com/standize/taste.git", branch = "dev" }
 ozone-buffer = { path = "ozone-buffer" }
 ozone-editor = { path = "ozone-editor" }
 ozone-gui    = { path = "ozone-gui" }

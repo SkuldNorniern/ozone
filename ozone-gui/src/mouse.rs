@@ -17,7 +17,9 @@ use ozone_buffer::{BufferKind, Pos, Span};
 use ozone_config::{Config, LineNumbers};
 use ozone_editor::{EditorEvent, ViewId, Workspace};
 
-use crate::layout::{EDITOR_TOP_PAD, PAD, STATUS_H, gutter_width, pane_at, pane_rect};
+use crate::layout::{
+    EDITOR_TOP_PAD, PAD, STATUS_H, gutter_width, max_scroll_line, pane_at, pane_rect,
+};
 use ozone_editor::fold;
 
 /// Run-loop pointer state. See the module docs for the planned growth.
@@ -227,7 +229,7 @@ pub(crate) fn handle_scrollbar_drag(
     else {
         return false;
     };
-    let max_scroll = crate::layout::max_scroll_line(line_count, viewport_lines as usize);
+    let max_scroll = max_scroll_line(line_count, viewport_lines as usize);
     if max_scroll == 0 {
         return false;
     }
@@ -420,7 +422,7 @@ fn scrollbar_at(
         return None;
     }
     let thumb_h = (track_h * viewport_lines / line_count as f32).clamp(24.0, track_h);
-    let max_scroll = crate::layout::max_scroll_line(line_count, viewport_lines as usize);
+    let max_scroll = max_scroll_line(line_count, viewport_lines as usize);
     let (scroll, scroll_y) = ws
         .views
         .get(&view_id)
@@ -701,7 +703,7 @@ mod tests {
             &mut ws, &config, 10_000.0, 800.0, 600.0, view_id, 0.0,
         ));
         let view = ws.active_view().unwrap();
-        assert_eq!(view.scroll_line, crate::layout::max_scroll_line(100, 28));
+        assert_eq!(view.scroll_line, max_scroll_line(100, 28));
         assert_eq!(view.scroll_y, 0.0);
     }
 }
