@@ -1,0 +1,11 @@
+# Language servers — merged into config.toml. If this file exists, any [[lsp]]
+# in config.toml is ignored.
+#
+# Ozone starts the server lazily on the first matching file and shows live
+# diagnostics; the server must be on PATH (e.g. `rustup component add
+# rust-analyzer`). A [lsp.capabilities] table is optional — the common features
+# are on by default; list only what you want to turn off.
+
+[[lsp]]
+language = "rust"
+server   = "rust-analyzer"

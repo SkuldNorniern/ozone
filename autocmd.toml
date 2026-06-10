@@ -1,0 +1,19 @@
+# Autocommands — merged into config.toml. If this file exists, any [[autocmd]]
+# in config.toml is ignored.
+#
+# A command may be a shell sigil instead of a command id:
+#   |cmd  pipe the buffer through a stdin/stdout tool (use on buffer.pre-save)
+#   !cmd  run a tool that edits the file/project on disk, then reload the buffer
+#         (use on buffer.saved; `%` expands to the file path)
+
+[[autocmd]]
+event   = "buffer.pre-save"
+pattern = "*"
+command = "edit.trim-trailing-whitespace"
+
+# Format Rust on save. cargo fmt edits files on disk, so it's a `!` run-on-save.
+# "|rustfmt --edition 2021" on buffer.pre-save is a faster single-file option.
+[[autocmd]]
+event   = "buffer.saved"
+pattern = "*.rs"
+command = "!cargo fmt"

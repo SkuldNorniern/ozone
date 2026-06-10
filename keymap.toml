@@ -1,0 +1,216 @@
+# Keybindings — merged into config.toml. If this file exists, any [keymap] /
+# [[keymap]] in config.toml is ignored, so keep your binds here.
+#
+# This lists every shipped default in full form. Edit a `command` to rebind a
+# chord; add `filetype = "<name>"` to scope a bind. A command may also be a
+# shell sigil: "|cmd" pipes the buffer through a tool, "!cmd" runs a tool on the
+# file then reloads.
+#
+# Modifiers are Emacs-style: Control = Ctrl; Meta = Alt (Command on macOS);
+# Super (Win / macOS Option) is OS-reserved and unbound by default.
+
+# ── File / edit ──────────────────────────────────────────────────────────────
+[[keymap]]
+keys = "ctrl+s"
+command = "file.save"
+
+[[keymap]]
+keys = "ctrl+z"
+command = "edit.undo"
+
+[[keymap]]
+keys = "ctrl+y"
+command = "edit.redo"
+
+[[keymap]]
+keys = "ctrl+p"
+command = "file.picker"
+
+[[keymap]]
+keys = "ctrl+shift+e"
+command = "file.tree"
+
+[[keymap]]
+keys = "meta+x"
+command = "command.palette"
+
+[[keymap]]
+keys = "ctrl+shift+p"
+command = "command.palette"
+
+[[keymap]]
+keys = "ctrl+tab"
+command = "buffer.next"
+
+[[keymap]]
+keys = "ctrl+shift+tab"
+command = "buffer.previous"
+
+[[keymap]]
+keys = "ctrl+x b"
+command = "buffer.picker"
+
+[[keymap]]
+keys = "ctrl+shift+o"
+command = "symbol.picker"
+
+[[keymap]]
+keys = "ctrl+k ctrl+l"
+command = "fold.toggle"
+
+[[keymap]]
+keys = "ctrl+k ctrl+0"
+command = "fold.open-all"
+
+[[keymap]]
+keys = "ctrl+k ctrl+j"
+command = "fold.all"
+
+[[keymap]]
+keys = "ctrl+k ctrl+s"
+command = "file.save-all"
+
+# ── Navigation history ───────────────────────────────────────────────────────
+[[keymap]]
+keys = "meta+left"
+command = "view.jump-back"
+
+[[keymap]]
+keys = "meta+right"
+command = "view.jump-forward"
+
+[[keymap]]
+keys = "ctrl+-"
+command = "view.jump-back"
+
+[[keymap]]
+keys = "ctrl+="
+command = "view.jump-forward"
+
+# ── Panes ──────────────────────────────────────────────────────────────────--
+[[keymap]]
+keys = "ctrl+shift+right"
+command = "pane.split-right"
+
+[[keymap]]
+keys = "ctrl+shift+down"
+command = "pane.split-down"
+
+[[keymap]]
+keys = "ctrl+shift+w"
+command = "pane.close"
+
+[[keymap]]
+keys = "ctrl+meta+right"
+command = "pane.focus-right"
+
+[[keymap]]
+keys = "ctrl+meta+left"
+command = "pane.focus-left"
+
+[[keymap]]
+keys = "ctrl+meta+down"
+command = "pane.focus-down"
+
+[[keymap]]
+keys = "ctrl+meta+up"
+command = "pane.focus-up"
+
+# ── Emacs-style movement (Ctrl / Meta) ───────────────────────────────────────
+[[keymap]]
+keys = "ctrl+a"
+command = "cursor.line-start"
+
+[[keymap]]
+keys = "ctrl+e"
+command = "cursor.line-end"
+
+[[keymap]]
+keys = "ctrl+b"
+command = "cursor.move-left"
+
+[[keymap]]
+keys = "ctrl+f"
+command = "cursor.move-right"
+
+[[keymap]]
+keys = "ctrl+n"
+command = "cursor.move-down"
+
+[[keymap]]
+keys = "meta+f"
+command = "search.start"
+
+[[keymap]]
+keys = "meta+h"
+command = "search.replace"
+
+[[keymap]]
+keys = "ctrl+shift+f"
+command = "search.workspace"
+
+[[keymap]]
+keys = "meta+g"
+command = "edit.goto-line"
+
+[[keymap]]
+keys = "ctrl+home"
+command = "cursor.file-start"
+
+[[keymap]]
+keys = "ctrl+end"
+command = "cursor.file-end"
+
+[[keymap]]
+keys = "ctrl+left"
+command = "cursor.word-backward"
+
+[[keymap]]
+keys = "ctrl+right"
+command = "cursor.word-forward"
+
+# ── Plain navigation ─────────────────────────────────────────────────────────
+[[keymap]]
+keys = "up"
+command = "cursor.move-up"
+
+[[keymap]]
+keys = "down"
+command = "cursor.move-down"
+
+[[keymap]]
+keys = "left"
+command = "cursor.move-left"
+
+[[keymap]]
+keys = "right"
+command = "cursor.move-right"
+
+[[keymap]]
+keys = "home"
+command = "cursor.line-start"
+
+[[keymap]]
+keys = "end"
+command = "cursor.line-end"
+
+[[keymap]]
+keys = "pageup"
+command = "view.page-up"
+
+[[keymap]]
+keys = "pagedown"
+command = "view.page-down"
+
+# ── Editing ──────────────────────────────────────────────────────────────────
+[[keymap]]
+keys = "backspace"
+command = "edit.delete-char-backward"
+
+[[keymap]]
+keys = "delete"
+command = "edit.delete-char-forward"
+
+[[keymap]]
+keys = "enter"
+command = "edit.insert-newline"

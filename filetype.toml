@@ -1,0 +1,11 @@
+# Per-filetype editor defaults — merged into config.toml. If this file exists,
+# any [[filetype]] in config.toml is ignored. Applied when a file buffer opens.
+
+[[filetype]]
+name = "markdown"
+word_wrap = true
+tab_width = 2
+
+[[filetype]]
+name = "makefile"
+soft_tabs = false             # makefiles need real tabs
