@@ -138,7 +138,11 @@ impl OzoneGui {
         let autocmds = AutocommandRegistry::from_config(&config.autocmds);
         dispatch_autocmds(&mut workspace, &reg, &autocmds);
 
-        let mut keymap = Keymap::with_defaults();
+        // Keybindings are config-driven, not hardcoded: every binding (including
+        // the shipped defaults) comes from the config's `[keymap]` / keymap.toml,
+        // which is generated on first launch. Removing a binding there unbinds
+        // it — there is no built-in default layer underneath.
+        let mut keymap = Keymap::new();
         keymap.add_user_config(&config.keymaps);
 
         let modmap = ModifierMap::platform_default().with_overrides(

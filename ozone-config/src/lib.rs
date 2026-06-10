@@ -9,6 +9,10 @@ mod parse;
 
 use std::path::{Path, PathBuf};
 
+/// Merges one per-section file's parsed table into a [`Config`] (appends its
+/// entries). See [`Config::SECTION_FILES`].
+type SectionMerge = fn(&mut Config, &toml::Table);
+
 /// Global editor settings (mirrors config.toml `[editor]`).
 #[derive(Debug, Clone)]
 pub struct EditorConfig {
@@ -108,7 +112,7 @@ pub struct FiletypeConfig {
     pub auto_format: Option<bool>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LspCapabilities {
     pub completion: bool,
     pub diagnostics: bool,
@@ -121,6 +125,28 @@ pub struct LspCapabilities {
     pub inlay_hints: bool,
     pub semantic_tokens: bool,
     pub code_lens: bool,
+}
+
+impl Default for LspCapabilities {
+    /// Enable the common IDE features by default; the heavier/rarer ones
+    /// (inlay hints, semantic tokens, code lens) are opt-in. So a `[[lsp]]`
+    /// block needs no `[lsp.capabilities]` table unless you want to turn
+    /// something off.
+    fn default() -> Self {
+        Self {
+            completion: true,
+            diagnostics: true,
+            hover: true,
+            goto_definition: true,
+            find_references: true,
+            rename: true,
+            format: true,
+            code_actions: true,
+            inlay_hints: false,
+            semantic_tokens: false,
+            code_lens: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -280,23 +306,83 @@ impl Config {
         Self::load_with_warning(path).0
     }
 
+    /// Per-section files that, when present alongside `config.toml`, **own** that
+    /// section. Each holds the same block syntax it would in `config.toml` (e.g.
+    /// `keymap.toml` has `[keymap]` / `[[keymap]]` blocks). If a section file
+    /// exists, the matching section in `config.toml` is ignored — one concern,
+    /// one place — so a config directory can be split:
+    ///
+    /// ```text
+    /// ~/.config/ozone/
+    ///   config.toml      # [editor], [theme], [ui], …
+    ///   keymap.toml      # [keymap] / [[keymap]]
+    ///   autocmd.toml     # [[autocmd]]
+    ///   filetype.toml    # [[filetype]]
+    ///   lsp.toml         # [[lsp]]
+    /// ```
+    const SECTION_FILES: &'static [(&'static str, SectionMerge)] = &[
+        ("keymap.toml", |c, t| c.keymaps = parse::parse_keymaps(t)),
+        ("autocmd.toml", |c, t| c.autocmds = parse::parse_autocmds(t)),
+        ("filetype.toml", |c, t| {
+            c.filetypes = parse::parse_filetypes(t)
+        }),
+        ("lsp.toml", |c, t| c.lsps = parse::parse_lsps(t)),
+    ];
+
+    /// Default content for each section file, written on first run so the
+    /// generated config starts already split.
+    const SECTION_TEMPLATES: &'static [(&'static str, &'static str)] = &[
+        ("keymap.toml", include_str!("../../keymap.toml")),
+        ("autocmd.toml", include_str!("../../autocmd.toml")),
+        ("filetype.toml", include_str!("../../filetype.toml")),
+        ("lsp.toml", include_str!("../../lsp.toml")),
+    ];
+
     /// Load from a TOML file, returning a warning if the file had to be ignored.
+    /// Sibling per-section files in the same directory ([`Self::SECTION_FILES`])
+    /// are merged on top.
     pub fn load_with_warning(path: &Path) -> (Self, Option<String>) {
-        match std::fs::read_to_string(path) {
+        let mut warnings: Vec<String> = Vec::new();
+
+        let mut config = match std::fs::read_to_string(path) {
             Ok(text) => match Self::parse_str_result(&text) {
-                Ok(config) => (config, None),
-                Err(error) => (
-                    Self::default_config(),
-                    Some(format!(
+                Ok(config) => config,
+                Err(error) => {
+                    warnings.push(format!(
                         "could not parse config {}: {error}",
                         path.display()
-                    )),
-                ),
+                    ));
+                    Self::default_config()
+                }
             },
-            Err(error) => (
-                Self::default_config(),
-                Some(format!("could not read config {}: {error}", path.display())),
-            ),
+            Err(error) => {
+                warnings.push(format!("could not read config {}: {error}", path.display()));
+                Self::default_config()
+            }
+        };
+
+        config.merge_section_files(path.parent(), &mut warnings);
+
+        let warning = (!warnings.is_empty()).then(|| warnings.join("; "));
+        (config, warning)
+    }
+
+    /// Merge any per-section files found in `dir` into this config, pushing a
+    /// warning for each file that exists but can't be read/parsed.
+    fn merge_section_files(&mut self, dir: Option<&Path>, warnings: &mut Vec<String>) {
+        let Some(dir) = dir else { return };
+        for (file, merge) in Self::SECTION_FILES {
+            let p = dir.join(file);
+            if !p.exists() {
+                continue;
+            }
+            match std::fs::read_to_string(&p) {
+                Ok(text) => match text.parse::<toml::Table>() {
+                    Ok(table) => merge(self, &table),
+                    Err(e) => warnings.push(format!("could not parse {}: {e}", p.display())),
+                },
+                Err(e) => warnings.push(format!("could not read {}: {e}", p.display())),
+            }
         }
     }
 
@@ -339,19 +425,33 @@ impl Config {
             return Self::load_with_warning(&path);
         }
 
-        // No config found – generate one at the user path.
-        if let Some(path) = Self::user_config_path() {
-            let _ = Self::write_default_to(&path);
+        // No config found – generate the split layout at the user path, then
+        // load it so this first session already has the generated keymap/etc.
+        // (Bindings are config-driven, not hardcoded, so they must be loaded.)
+        if let Some(path) = Self::user_config_path()
+            && Self::write_default_to(&path).is_ok()
+        {
+            return Self::load_with_warning(&path);
         }
 
         (Self::default_config(), None)
     }
 
-    /// Write the built-in default config template to `path`, creating parent
-    /// directories as needed.  Returns an error string on failure.
+    /// Write the default config to `path`, generating the **split layout**:
+    /// the base `config.toml` plus a sibling file per section (`keymap.toml`,
+    /// `autocmd.toml`, `filetype.toml`, `lsp.toml`). Creates parent directories
+    /// as needed. Existing section files are never overwritten; the base
+    /// `config.toml` is written at `path`.
     pub fn write_default_to(path: &std::path::Path) -> Result<(), String> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("create config dir: {e}"))?;
+            for (name, template) in Self::SECTION_TEMPLATES {
+                let section = parent.join(name);
+                if !section.exists() {
+                    std::fs::write(&section, template)
+                        .map_err(|e| format!("write {}: {e}", section.display()))?;
+                }
+            }
         }
         std::fs::write(path, Self::DEFAULT_TEMPLATE).map_err(|e| format!("write config: {e}"))
     }
@@ -509,6 +609,150 @@ mod tests {
         assert!(c.lsps[0].capabilities.completion);
         assert!(c.lsps[0].capabilities.diagnostics);
         assert!(!c.lsps[0].capabilities.semantic_tokens);
+    }
+
+    #[test]
+    fn shipped_templates_parse_cleanly() {
+        // The base template: editor/theme/ui only — list sections are split out.
+        let base = Config::parse_str(Config::DEFAULT_TEMPLATE);
+        assert_eq!(base.theme, "brewery-stout");
+        assert!(base.lsps.is_empty());
+        assert!(base.filetypes.is_empty());
+        assert!(base.autocmds.is_empty());
+        // Every shipped section template is valid TOML.
+        for (name, tmpl) in Config::SECTION_TEMPLATES {
+            assert!(
+                tmpl.parse::<toml::Table>().is_ok(),
+                "section template {name} does not parse"
+            );
+        }
+    }
+
+    #[test]
+    fn section_files_merge_into_base_config() {
+        let dir = std::env::temp_dir().join(format!("ozone_cfgdir_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Base config defines editor + one keymap; section files add more.
+        std::fs::write(
+            dir.join("config.toml"),
+            "[editor]\ntab_width = 2\n[keymap]\n\"ctrl+s\" = \"file.save\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("keymap.toml"),
+            "[keymap]\n\"ctrl+z\" = \"edit.undo\"\n[keymap.rust]\n\"ctrl+b\" = \"build\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("lsp.toml"),
+            "[[lsp]]\nlanguage = \"rust\"\nserver = \"rust-analyzer\"\n",
+        )
+        .unwrap();
+
+        let (c, warning) = Config::load_with_warning(&dir.join("config.toml"));
+        assert!(warning.is_none(), "unexpected: {warning:?}");
+        // Base sections (editor) still come from config.toml.
+        assert_eq!(c.editor.tab_width, 2);
+        // keymap.toml exists, so it OWNS the keymap section — config.toml's
+        // `ctrl+s` is ignored; only the file's two binds remain.
+        assert_eq!(c.keymaps.len(), 2);
+        assert!(!c.keymaps.iter().any(|k| k.keys == "ctrl+s"));
+        assert!(c.keymaps.iter().any(|k| k.keys == "ctrl+z"));
+        assert!(
+            c.keymaps
+                .iter()
+                .any(|k| k.keys == "ctrl+b" && k.filetype.as_deref() == Some("rust"))
+        );
+        // lsp.toml owns the lsp section.
+        assert_eq!(c.lsps.len(), 1);
+        assert_eq!(c.lsps[0].server, "rust-analyzer");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn generated_layout_is_split_and_loads() {
+        let dir = std::env::temp_dir().join(format!("ozone_gen_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let config_path = dir.join("config.toml");
+
+        Config::write_default_to(&config_path).unwrap();
+        // The split layout is generated, not one big file.
+        assert!(config_path.exists());
+        for name in ["keymap.toml", "autocmd.toml", "filetype.toml", "lsp.toml"] {
+            assert!(dir.join(name).exists(), "missing {name}");
+        }
+        // The generated config.toml has no list sections inline — parsing it
+        // alone yields no lsps/filetypes (those live in their section files).
+        let base = std::fs::read_to_string(&config_path).unwrap();
+        let base_only = Config::parse_str(&base);
+        assert!(base_only.lsps.is_empty() && base_only.filetypes.is_empty());
+
+        // Loading the directory merges them back: rust LSP + markdown filetype +
+        // the trim/format autocmds come from the section files.
+        let (c, warning) = Config::load_with_warning(&config_path);
+        assert!(warning.is_none(), "unexpected: {warning:?}");
+        assert!(c.lsps.iter().any(|l| l.language == "rust"));
+        assert!(c.filetypes.iter().any(|f| f.name == "markdown"));
+        assert!(c.autocmds.iter().any(|a| a.command.contains("trim")));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn compact_keymap_table_form() {
+        let c = Config::parse_str(
+            r#"
+            [keymap]
+            "ctrl+s" = "file.save"
+            "ctrl+z" = "edit.undo"
+
+            [keymap.rust]
+            "ctrl+shift+f" = "lsp.format"
+        "#,
+        );
+        assert_eq!(c.keymaps.len(), 3);
+        // Global binds carry no filetype.
+        let save = c.keymaps.iter().find(|k| k.keys == "ctrl+s").unwrap();
+        assert_eq!(save.command, "file.save");
+        assert_eq!(save.filetype, None);
+        // Nested table scopes binds to its filetype.
+        let fmt = c.keymaps.iter().find(|k| k.keys == "ctrl+shift+f").unwrap();
+        assert_eq!(fmt.command, "lsp.format");
+        assert_eq!(fmt.filetype.as_deref(), Some("rust"));
+    }
+
+    #[test]
+    fn lsp_capabilities_default_to_common_features() {
+        // A `[[lsp]]` with no `[lsp.capabilities]` block gets sensible defaults.
+        let c = Config::parse_str(
+            r#"
+            [[lsp]]
+            language = "rust"
+            server = "rust-analyzer"
+        "#,
+        );
+        let caps = &c.lsps[0].capabilities;
+        assert!(caps.diagnostics && caps.completion && caps.hover && caps.format);
+        assert!(!caps.inlay_hints && !caps.semantic_tokens && !caps.code_lens);
+
+        // A partial block overrides only the listed keys.
+        let c = Config::parse_str(
+            r#"
+            [[lsp]]
+            language = "rust"
+            server = "rust-analyzer"
+            [lsp.capabilities]
+            inlay_hints = true
+            format = false
+        "#,
+        );
+        let caps = &c.lsps[0].capabilities;
+        assert!(caps.inlay_hints, "explicitly enabled");
+        assert!(!caps.format, "explicitly disabled");
+        assert!(caps.diagnostics, "untouched key keeps its default");
     }
 
     #[test]

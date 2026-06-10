@@ -49,7 +49,34 @@ fn string_array(table: &toml::Table, key: &str) -> Vec<String> {
         .collect()
 }
 
+/// Keymaps accept two forms:
+///
+/// 1. Array of tables (explicit, supports `filetype`):
+///    ```toml
+///    [[keymap]]
+///    keys = "ctrl+s"
+///    command = "file.save"
+///    filetype = "rust"   # optional
+///    ```
+/// 2. Compact table — one line per binding (`chord = command`); a nested table
+///    scopes its binds to a filetype:
+///    ```toml
+///    [keymap]
+///    "ctrl+s" = "file.save"
+///    [keymap.rust]
+///    "ctrl+shift+f" = "lsp.format"
+///    ```
+/// A file uses one form (TOML forbids `keymap` being both a table and an
+/// array-of-tables); both are accepted here.
 pub(super) fn parse_keymaps(table: &toml::Table) -> Vec<KeymapConfig> {
+    match table.get("keymap") {
+        Some(toml::Value::Array(_)) => parse_keymap_array(table),
+        Some(toml::Value::Table(t)) => parse_keymap_table(t),
+        _ => Vec::new(),
+    }
+}
+
+fn parse_keymap_array(table: &toml::Table) -> Vec<KeymapConfig> {
     table_array(table, "keymap")
         .filter_map(|entry| {
             Some(KeymapConfig {
@@ -59,6 +86,40 @@ pub(super) fn parse_keymaps(table: &toml::Table) -> Vec<KeymapConfig> {
             })
         })
         .collect()
+}
+
+fn parse_keymap_table(t: &toml::Table) -> Vec<KeymapConfig> {
+    let mut out = Vec::new();
+    for (key, value) in t {
+        match value {
+            // `"chord" = "command"` — a global binding.
+            toml::Value::String(command) => {
+                push_bind(&mut out, key, command, None);
+            }
+            // `[keymap.<filetype>]` — filetype-scoped binds.
+            toml::Value::Table(sub) => {
+                for (chord, cmd) in sub {
+                    if let toml::Value::String(command) = cmd {
+                        push_bind(&mut out, chord, command, Some(key.clone()));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn push_bind(out: &mut Vec<KeymapConfig>, chord: &str, command: &str, filetype: Option<String>) {
+    let chord = chord.trim();
+    let command = command.trim();
+    if !chord.is_empty() && !command.is_empty() {
+        out.push(KeymapConfig {
+            keys: chord.to_string(),
+            command: command.to_string(),
+            filetype,
+        });
+    }
 }
 
 pub(super) fn parse_autocmds(table: &toml::Table) -> Vec<AutocmdConfig> {
@@ -109,27 +170,25 @@ pub(super) fn parse_lsps(table: &toml::Table) -> Vec<LspConfig> {
 }
 
 fn parse_lsp_capabilities(entry: &toml::Table) -> LspCapabilities {
-    let Some(caps) = entry.get("capabilities").and_then(|v| v.as_table()) else {
-        return LspCapabilities::default();
+    // Start from the sensible defaults; only present keys override them, so a
+    // `[lsp.capabilities]` block can list just what it wants to change.
+    let mut caps = LspCapabilities::default();
+    let Some(t) = entry.get("capabilities").and_then(|v| v.as_table()) else {
+        return caps;
     };
-
-    LspCapabilities {
-        completion: bool_field(caps, "completion"),
-        diagnostics: bool_field(caps, "diagnostics"),
-        hover: bool_field(caps, "hover"),
-        goto_definition: bool_field(caps, "goto_definition"),
-        find_references: bool_field(caps, "find_references"),
-        rename: bool_field(caps, "rename"),
-        format: bool_field(caps, "format"),
-        code_actions: bool_field(caps, "code_actions"),
-        inlay_hints: bool_field(caps, "inlay_hints"),
-        semantic_tokens: bool_field(caps, "semantic_tokens"),
-        code_lens: bool_field(caps, "code_lens"),
-    }
-}
-
-fn bool_field(table: &toml::Table, key: &str) -> bool {
-    table.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
+    let or = |key: &str, current: bool| t.get(key).and_then(|v| v.as_bool()).unwrap_or(current);
+    caps.completion = or("completion", caps.completion);
+    caps.diagnostics = or("diagnostics", caps.diagnostics);
+    caps.hover = or("hover", caps.hover);
+    caps.goto_definition = or("goto_definition", caps.goto_definition);
+    caps.find_references = or("find_references", caps.find_references);
+    caps.rename = or("rename", caps.rename);
+    caps.format = or("format", caps.format);
+    caps.code_actions = or("code_actions", caps.code_actions);
+    caps.inlay_hints = or("inlay_hints", caps.inlay_hints);
+    caps.semantic_tokens = or("semantic_tokens", caps.semantic_tokens);
+    caps.code_lens = or("code_lens", caps.code_lens);
+    caps
 }
 
 pub(super) fn parse_modifiers(table: &toml::Table) -> ModifierOverrides {

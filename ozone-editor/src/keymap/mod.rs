@@ -51,6 +51,71 @@ pub struct Keymap {
     bindings: Vec<Binding>,
 }
 
+/// The shipped default bindings (lowest layer). Kept in sync with the generated
+/// `keymap.toml` template (the `shipped_keymap_matches_defaults` test guards it).
+///
+/// Super (Win key / macOS Option) is intentionally unbound — it is OS-reserved,
+/// matching Emacs/Neovim leaving the GUI super key to the platform. macOS
+/// Command is Meta, so the Meta bindings are reachable as Cmd-… there.
+pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
+    // File / edit
+    ("ctrl+s", "file.save"),
+    ("ctrl+z", "edit.undo"),
+    ("ctrl+y", "edit.redo"),
+    ("ctrl+p", "file.picker"),
+    ("ctrl+shift+e", "file.tree"),
+    ("meta+x", "command.palette"),
+    ("ctrl+shift+p", "command.palette"),
+    ("ctrl+tab", "buffer.next"),
+    ("ctrl+shift+tab", "buffer.previous"),
+    ("ctrl+x b", "buffer.picker"),
+    ("ctrl+shift+o", "symbol.picker"),
+    ("ctrl+k ctrl+l", "fold.toggle"),
+    ("ctrl+k ctrl+0", "fold.open-all"),
+    ("ctrl+k ctrl+j", "fold.all"),
+    ("ctrl+k ctrl+s", "file.save-all"),
+    // Navigation history
+    ("meta+left", "view.jump-back"),
+    ("meta+right", "view.jump-forward"),
+    ("ctrl+-", "view.jump-back"),
+    ("ctrl+=", "view.jump-forward"),
+    // Panes
+    ("ctrl+shift+right", "pane.split-right"),
+    ("ctrl+shift+down", "pane.split-down"),
+    ("ctrl+shift+w", "pane.close"),
+    ("ctrl+meta+right", "pane.focus-right"),
+    ("ctrl+meta+left", "pane.focus-left"),
+    ("ctrl+meta+down", "pane.focus-down"),
+    ("ctrl+meta+up", "pane.focus-up"),
+    // Emacs-style movement (Ctrl / Meta)
+    ("ctrl+a", "cursor.line-start"),
+    ("ctrl+e", "cursor.line-end"),
+    ("ctrl+b", "cursor.move-left"),
+    ("ctrl+f", "cursor.move-right"),
+    ("ctrl+n", "cursor.move-down"),
+    ("meta+f", "search.start"),
+    ("meta+h", "search.replace"),
+    ("ctrl+shift+f", "search.workspace"),
+    ("meta+g", "edit.goto-line"),
+    ("ctrl+home", "cursor.file-start"),
+    ("ctrl+end", "cursor.file-end"),
+    ("ctrl+left", "cursor.word-backward"),
+    ("ctrl+right", "cursor.word-forward"),
+    // Plain navigation
+    ("up", "cursor.move-up"),
+    ("down", "cursor.move-down"),
+    ("left", "cursor.move-left"),
+    ("right", "cursor.move-right"),
+    ("home", "cursor.line-start"),
+    ("end", "cursor.line-end"),
+    ("pageup", "view.page-up"),
+    ("pagedown", "view.page-down"),
+    // Editing
+    ("backspace", "edit.delete-char-backward"),
+    ("delete", "edit.delete-char-forward"),
+    ("enter", "edit.insert-newline"),
+];
+
 impl Keymap {
     pub fn new() -> Self {
         Self {
@@ -58,71 +123,13 @@ impl Keymap {
         }
     }
 
-    /// The shipped default layer.
+    /// A keymap seeded with [`DEFAULT_BINDINGS`]. **Not used at runtime** — the
+    /// app builds its keymap purely from config (`keymap.toml`, generated on
+    /// first launch from these same defaults), so removing a binding there
+    /// unbinds it. This is a convenience/seed for tests and embedders.
     pub fn with_defaults() -> Self {
         let mut km = Self::new();
-        let defaults: &[(&str, &str)] = &[
-            // ── File / edit (Ctrl = universal editor key) ──────────────────────
-            ("ctrl+s", "file.save"),
-            ("ctrl+z", "edit.undo"),
-            ("ctrl+y", "edit.redo"),
-            ("ctrl+p", "file.picker"),
-            ("ctrl+shift+e", "file.tree"),
-            ("meta+x", "command.palette"),
-            ("ctrl+shift+p", "command.palette"),
-            ("ctrl+tab", "buffer.next"),
-            ("ctrl+shift+tab", "buffer.previous"),
-            ("ctrl+x b", "buffer.picker"),
-            ("ctrl+shift+o", "symbol.picker"),
-            ("ctrl+k ctrl+l", "fold.toggle"),
-            ("ctrl+k ctrl+0", "fold.open-all"),
-            ("ctrl+k ctrl+j", "fold.all"),
-            ("meta+left", "view.jump-back"),
-            ("meta+right", "view.jump-forward"),
-            ("ctrl+-", "view.jump-back"),
-            ("ctrl+=", "view.jump-forward"),
-            ("ctrl+k ctrl+s", "file.save-all"),
-            // Super (Win key / macOS Option) is intentionally left unbound — it
-            // is OS-reserved (Win+S etc. are system shortcuts), matching Emacs /
-            // Neovim leaving the GUI super key to the platform. macOS Command is
-            // Meta, so the bindings above are reachable as Cmd-… there.
-            // ── Panes ─────────────────────────────────────────────────────────
-            ("ctrl+shift+right", "pane.split-right"),
-            ("ctrl+shift+down", "pane.split-down"),
-            ("ctrl+shift+w", "pane.close"),
-            ("ctrl+meta+right", "pane.focus-right"),
-            ("ctrl+meta+left", "pane.focus-left"),
-            ("ctrl+meta+down", "pane.focus-down"),
-            ("ctrl+meta+up", "pane.focus-up"),
-            // ── Emacs-style movement (Ctrl) ────────────────────────────────────
-            ("ctrl+a", "cursor.line-start"),
-            ("ctrl+e", "cursor.line-end"),
-            ("ctrl+b", "cursor.move-left"),
-            ("ctrl+f", "cursor.move-right"),
-            ("ctrl+n", "cursor.move-down"),
-            ("meta+f", "search.start"),
-            ("meta+h", "search.replace"),
-            ("ctrl+shift+f", "search.workspace"),
-            ("meta+g", "edit.goto-line"),
-            ("ctrl+home", "cursor.file-start"),
-            ("ctrl+end", "cursor.file-end"),
-            ("ctrl+left", "cursor.word-backward"),
-            ("ctrl+right", "cursor.word-forward"),
-            // ── Plain navigation ──────────────────────────────────────────────
-            ("up", "cursor.move-up"),
-            ("down", "cursor.move-down"),
-            ("left", "cursor.move-left"),
-            ("right", "cursor.move-right"),
-            ("home", "cursor.line-start"),
-            ("end", "cursor.line-end"),
-            ("pageup", "view.page-up"),
-            ("pagedown", "view.page-down"),
-            // ── Editing ───────────────────────────────────────────────────────
-            ("backspace", "edit.delete-char-backward"),
-            ("delete", "edit.delete-char-forward"),
-            ("enter", "edit.insert-newline"),
-        ];
-        for (keys, cmd) in defaults {
+        for (keys, cmd) in DEFAULT_BINDINGS {
             km.bind_default(keys, cmd);
         }
         km
@@ -432,6 +439,61 @@ mod tests {
                 ("C-P".to_string(), "buffer.picker".to_string()),
                 ("M-X".to_string(), "command.palette".to_string()),
             ]
+        );
+    }
+
+    #[test]
+    fn keymap_is_purely_config_driven() {
+        // A fresh keymap has nothing bound — there is no hidden default layer.
+        let km = Keymap::new();
+        assert_eq!(
+            km.resolve(&[], &s('s').with_control(), None),
+            KeymapOutcome::NoMatch
+        );
+        // Config (as keymap.toml would supply) binds it…
+        let mut km = Keymap::new();
+        km.add_user_config(&[KeymapConfig {
+            keys: "ctrl+s".to_string(),
+            command: "file.save".to_string(),
+            filetype: None,
+        }]);
+        assert_eq!(
+            km.resolve(&[], &s('s').with_control(), None),
+            KeymapOutcome::Execute("file.save".to_string())
+        );
+        // …and omitting it from config leaves it unbound, even though `ctrl+s`
+        // is a shipped default — defaults are not hardcoded at runtime.
+        let mut km = Keymap::new();
+        km.add_user_config(&[KeymapConfig {
+            keys: "ctrl+z".to_string(),
+            command: "edit.undo".to_string(),
+            filetype: None,
+        }]);
+        assert_eq!(
+            km.resolve(&[], &s('s').with_control(), None),
+            KeymapOutcome::NoMatch
+        );
+    }
+
+    #[test]
+    fn shipped_keymap_matches_defaults() {
+        // The generated `keymap.toml` template must list exactly the built-in
+        // defaults — guards the hand-maintained file against drift.
+        use std::collections::BTreeSet;
+        let text = include_str!("../../../keymap.toml");
+        let cfg = ozone_config::Config::parse_str(text);
+        let from_file: BTreeSet<(String, String)> = cfg
+            .keymaps
+            .iter()
+            .map(|k| (k.keys.clone(), k.command.clone()))
+            .collect();
+        let from_const: BTreeSet<(String, String)> = DEFAULT_BINDINGS
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        assert_eq!(
+            from_file, from_const,
+            "keymap.toml has drifted from DEFAULT_BINDINGS"
         );
     }
 
