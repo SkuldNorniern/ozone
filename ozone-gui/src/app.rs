@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use aurea::render::{Canvas, Image, Rect, RendererBackend};
+use aurea::render::{Canvas, Image, RendererBackend};
 use aurea::{AureaResult, Window};
 use ozone_buffer::{BufferId, BufferKind};
 use ozone_config::Config;
@@ -9,7 +9,6 @@ use ozone_editor::{
     AutocommandRegistry, CommandRegistry, IndentConfig, Keymap, ModifierMap, Workspace,
 };
 use ozone_syntax::Filetype;
-use ozone_term::Terminal;
 
 use crate::actions::dispatch_autocmds;
 use crate::canvas::{SendableCanvas, SharedCanvas};
@@ -19,14 +18,13 @@ use crate::keys::{
     active_filetype_name, apply_filetype_config, filetype_config_name, modifier_which_key_entries,
     which_key_entries,
 };
-use crate::layout::{EDITOR_TOP_PAD, STATUS_H};
+use crate::layout::STATUS_H;
 use crate::overlay::minibuffer::{Minibuffer, draw_minibuffer};
 use crate::overlay::notify::Notifications;
 use crate::overlay::picker::{PickerState, draw_palette};
 use crate::overlay::search::SearchState;
 use crate::overlay::whichkey::{WhichKeyView, draw_which_key};
 use crate::render::draw_editor;
-use crate::terminals::{collect_term_rects, rect_to_grid};
 use crate::{ImageCache, TermCells, editor_font, lock};
 
 /// How long a bare modifier must be held alone before the which-key hint shows.
@@ -43,6 +41,50 @@ fn bare_modifier_held(active: ActiveMods) -> Option<(bool, bool, bool)> {
     } else {
         None
     }
+}
+
+/// Decode any newly-opened image buffers into the cache and drop entries for
+/// closed buffers. Sets `needs_redraw` when a new image is decoded.
+fn sync_images(state: &mut AppState) {
+    let ws = lock(state.workspace.as_ref());
+    let mut imgs = lock(state.images.as_ref());
+    for (id, buf) in ws.buffers.iter() {
+        if let BufferKind::Image(path) = &buf.kind
+            && !imgs.contains_key(id)
+        {
+            imgs.insert(*id, decode_image(path));
+            state.needs_redraw = true;
+        }
+    }
+    imgs.retain(|id, _| ws.buffers.contains_key(id));
+}
+
+/// Apply `[[filetype]]` config to file buffers the first time each is seen,
+/// tracking applied buffers so it runs once per buffer.
+fn apply_pending_filetypes(state: &mut AppState) {
+    if state.config.filetypes.is_empty() {
+        return;
+    }
+    let mut ws = lock(state.workspace.as_ref());
+    let pending: Vec<(BufferId, String)> = ws
+        .buffers
+        .iter()
+        .filter(|(id, _)| !state.ft_applied.contains(id))
+        .filter_map(|(id, b)| match &b.kind {
+            BufferKind::File(p) => Some((
+                *id,
+                filetype_config_name(Filetype::from_path(&p.to_string_lossy())),
+            )),
+            _ => None,
+        })
+        .collect();
+    for (id, ftname) in pending {
+        state.ft_applied.insert(id);
+        if let Some(fc) = state.config.filetypes.iter().find(|f| f.name == ftname) {
+            apply_filetype_config(&mut ws, id, fc);
+        }
+    }
+    state.ft_applied.retain(|id| ws.buffers.contains_key(id));
 }
 
 /// Build the which-key view-model for the current frame: the pending-chord
@@ -315,150 +357,19 @@ impl OzoneGui {
             // --- terminal sync ---
             {
                 let mut ws = lock(state.workspace.as_ref());
-                let term_bufs: Vec<BufferId> = ws
-                    .buffers
-                    .iter()
-                    .filter(|(_, b)| matches!(b.kind, BufferKind::Terminal))
-                    .map(|(id, _)| *id)
-                    .collect();
-                for id in &term_bufs {
-                    if state.terms.sessions.contains_key(id) || state.terms.failed.contains(id) {
-                        continue;
-                    }
-                    match Terminal::spawn() {
-                        Ok(term) => {
-                            let cw = (state.config.editor.font_size * 0.6).max(1.0);
-                            let lh = (state.config.editor.font_size
-                                * state.config.editor.line_height)
-                                .max(1.0);
-                            let cols =
-                                ((state.window_width as f32 - 60.0) / cw).clamp(20.0, 500.0) as u16;
-                            let rows = ((state.window_height as f32 - STATUS_H - EDITOR_TOP_PAD)
-                                / lh)
-                                .clamp(5.0, 300.0) as u16;
-                            term.resize(cols, rows);
-                            state.terms.sessions.insert(*id, term);
-                        }
-                        Err(e) => {
-                            state.terms.failed.insert(*id);
-                            if let Some(buf) = ws.buffers.get_mut(id) {
-                                buf.set_text(&format!("could not start terminal: {e}\n"));
-                            }
-                            state.needs_redraw = true;
-                        }
-                    }
-                }
-                state
-                    .terms
-                    .sessions
-                    .retain(|id, _| ws.buffers.contains_key(id));
-                let live_ids = &state.terms.sessions;
-                state.terms.cells.retain(|id, _| live_ids.contains_key(id));
-                state.terms.sizes.retain(|id, _| live_ids.contains_key(id));
-
-                let editor_rect = Rect::new(
-                    0.0,
-                    0.0,
-                    state.window_width as f32,
-                    (state.window_height as f32 - STATUS_H).max(0.0),
-                );
-                let mut want: Vec<(BufferId, Rect)> = Vec::new();
-                if let Some(panes) = &ws.panes {
-                    collect_term_rects(&ws, panes, editor_rect, &mut want);
-                } else if let Some(bid) = ws.active_view().map(|v| v.buffer_id)
-                    && state.terms.sessions.contains_key(&bid)
-                {
-                    want.push((bid, editor_rect));
-                }
-                for (bid, rect) in want {
-                    let size = rect_to_grid(rect, &state.config, state.measured_char_w);
-                    if state.terms.sessions.contains_key(&bid)
-                        && state.terms.sizes.get(&bid) != Some(&size)
-                    {
-                        state.terms.sessions[&bid].resize(size.0, size.1);
-                        state.terms.sizes.insert(bid, size);
-                    }
-                }
-                state
-                    .terms
-                    .versions
-                    .retain(|id, _| state.terms.sessions.contains_key(id));
-                let active_term = crate::keys::active_terminal(&ws);
-                for (id, term) in state.terms.sessions.iter() {
-                    let is_active = active_term == Some(*id);
-                    let version = term.version();
-                    if state.terms.versions.get(id) == Some(&version) {
-                        continue;
-                    }
-                    state.terms.versions.insert(*id, version);
-                    let text = term.output_snapshot();
-                    {
-                        state.terms.cells.insert(*id, term.cell_snapshot());
-                        if let Some(buf) = ws.buffers.get_mut(id) {
-                            buf.set_text(&text);
-                        }
-                        if is_active {
-                            let (cline, ccol) = term.cursor();
-                            let last = ws
-                                .buffers
-                                .get(id)
-                                .map(|b| b.line_count().saturating_sub(1))
-                                .unwrap_or(0);
-                            let line = cline.min(last);
-                            let col = ws
-                                .buffers
-                                .get(id)
-                                .map(|b| b.line_len(line))
-                                .unwrap_or(0)
-                                .min(ccol);
-                            if let Some(view) = ws.active_view_mut() {
-                                view.cursor = ozone_buffer::Pos::new(line, col);
-                                view.scroll_to_cursor(view.page_height.max(1));
-                            }
-                        }
-                        state.needs_redraw = true;
-                    }
+                if state.terms.sync(
+                    &mut ws,
+                    &state.config,
+                    state.window_width,
+                    state.window_height,
+                    state.measured_char_w,
+                ) {
+                    state.needs_redraw = true;
                 }
             }
 
-            // --- image sync ---
-            {
-                let ws = lock(state.workspace.as_ref());
-                let mut imgs = lock(state.images.as_ref());
-                for (id, buf) in ws.buffers.iter() {
-                    if let BufferKind::Image(path) = &buf.kind
-                        && !imgs.contains_key(id)
-                    {
-                        imgs.insert(*id, decode_image(path));
-                        state.needs_redraw = true;
-                    }
-                }
-                imgs.retain(|id, _| ws.buffers.contains_key(id));
-            }
-
-            // --- filetype-local settings ---
-            if !state.config.filetypes.is_empty() {
-                let mut ws = lock(state.workspace.as_ref());
-                let pending: Vec<(BufferId, String)> = ws
-                    .buffers
-                    .iter()
-                    .filter(|(id, _)| !state.ft_applied.contains(id))
-                    .filter_map(|(id, b)| match &b.kind {
-                        BufferKind::File(p) => Some((
-                            *id,
-                            filetype_config_name(Filetype::from_path(&p.to_string_lossy())),
-                        )),
-                        _ => None,
-                    })
-                    .collect();
-                for (id, ftname) in pending {
-                    state.ft_applied.insert(id);
-                    if let Some(fc) = state.config.filetypes.iter().find(|f| f.name == ftname) {
-                        apply_filetype_config(&mut ws, id, fc);
-                    }
-                }
-                state.ft_applied.retain(|id| ws.buffers.contains_key(id));
-            }
+            sync_images(&mut state);
+            apply_pending_filetypes(&mut state);
 
             if lock(state.notifications.as_ref()).tick() {
                 state.needs_redraw = true;
