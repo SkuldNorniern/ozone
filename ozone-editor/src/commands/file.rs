@@ -239,6 +239,14 @@ pub(super) fn register_file_commands(reg: &mut CommandRegistry) {
     );
 
     reg.register(
+        "lsp.completion",
+        "Show completions for the symbol under the cursor",
+        |ctx| {
+            ctx.workspace.request_ui(UiIntent::LspCompletion);
+        },
+    );
+
+    reg.register(
         "terminal.open",
         "Open a terminal buffer placeholder",
         |ctx| {

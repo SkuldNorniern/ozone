@@ -63,6 +63,9 @@ pub enum UiIntent {
     /// Show hover documentation for the symbol under the cursor via the active
     /// LSP server. The frontend owns the connection and displays the result.
     LspHover,
+    /// Request completions at the cursor via the active LSP server. The
+    /// frontend owns the connection and shows the results in a popup.
+    LspCompletion,
 }
 
 /// One row of a [`UiIntent::Select`] list. Choosing it runs `command` with

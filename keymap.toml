@@ -162,6 +162,10 @@ keys = "meta+k"
 command = "lsp.hover"
 
 [[keymap]]
+keys = "ctrl+space"
+command = "lsp.completion"
+
+[[keymap]]
 keys = "ctrl+home"
 command = "cursor.file-start"
 
