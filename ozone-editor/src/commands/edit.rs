@@ -172,6 +172,12 @@ pub(super) fn register_edit_commands(reg: &mut CommandRegistry) {
     );
 
     reg.register(
+        "edit.duplicate-line",
+        "Duplicate the current line, or every line touched by the selection",
+        duplicate_line,
+    );
+
+    reg.register(
         "edit.trim-trailing-whitespace",
         "Trim trailing spaces and tabs",
         |ctx| {
@@ -270,6 +276,46 @@ fn toggle_comment(ctx: &mut CommandContext) {
         if let Some(span) = view.selection.as_mut() {
             shift(&mut span.start, &col_shift);
             shift(&mut span.end, &col_shift);
+        }
+        if view.cursor != old_cursor {
+            cursor_moved_from = Some(old_cursor);
+        }
+    }
+    if let Some(old) = cursor_moved_from {
+        emit_cursor_moved(ctx, old);
+    }
+}
+
+/// Duplicate the current line, or every line touched by the selection,
+/// inserting the copy directly below. The cursor and selection move down
+/// onto the new copy, keeping their column.
+fn duplicate_line(ctx: &mut CommandContext) {
+    let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
+    let view = ctx.workspace.views.get(&ctx.view_id).unwrap();
+    let (start_line, end_line) = selection_line_range(view);
+
+    let block: Vec<String> = (start_line..=end_line)
+        .filter_map(|l| buf.line(l))
+        .collect();
+    let insert_pos = Pos::new(end_line, buf.line_len(end_line));
+    let insert_text = format!("\n{}", block.join("\n"));
+
+    let buf = ctx.workspace.buffers.get_mut(&ctx.buffer_id).unwrap();
+    let delta = buf.insert(insert_pos, &insert_text);
+    ctx.workspace.emit(EditorEvent::BufferChanged {
+        id: ctx.buffer_id,
+        delta,
+    });
+
+    let block_len = end_line - start_line + 1;
+    let mut cursor_moved_from = None;
+    if let Some(view) = ctx.workspace.views.get_mut(&ctx.view_id) {
+        let old_cursor = view.cursor;
+        view.cursor.line += block_len;
+        view.col_memory = view.cursor.col;
+        if let Some(span) = view.selection.as_mut() {
+            span.start.line += block_len;
+            span.end.line += block_len;
         }
         if view.cursor != old_cursor {
             cursor_moved_from = Some(old_cursor);
@@ -382,5 +428,53 @@ mod tests {
             ws.active_buffer().unwrap().line(0).as_deref(),
             Some("plain text")
         );
+    }
+
+    fn plain_ws(text: &str) -> Workspace {
+        let mut ws = Workspace::new();
+        ws.active_buffer_mut().unwrap().set_text(text);
+        ws
+    }
+
+    fn run_cmd(ws: &mut Workspace, command: &str) {
+        let mut reg = CommandRegistry::new();
+        register_defaults(&mut reg);
+        let mut ctx = CommandContext::new(ws).unwrap();
+        assert!(reg.execute(command, &mut ctx));
+    }
+
+    #[test]
+    fn duplicate_line_inserts_copy_below_and_moves_cursor() {
+        let mut ws = plain_ws("abc\ndef");
+        ws.active_view_mut().unwrap().cursor = Pos::new(0, 1);
+
+        run_cmd(&mut ws, "edit.duplicate-line");
+
+        let buf = ws.active_buffer().unwrap();
+        assert_eq!(buf.line(0).as_deref(), Some("abc"));
+        assert_eq!(buf.line(1).as_deref(), Some("abc"));
+        assert_eq!(buf.line(2).as_deref(), Some("def"));
+        assert_eq!(ws.active_view().unwrap().cursor, Pos::new(1, 1));
+    }
+
+    #[test]
+    fn duplicate_line_over_selection_duplicates_whole_block() {
+        let mut ws = plain_ws("a\nb\nc");
+        ws.active_view_mut().unwrap().selection = Some(Span {
+            start: Pos::new(0, 0),
+            end: Pos::new(1, 1),
+        });
+
+        run_cmd(&mut ws, "edit.duplicate-line");
+
+        let buf = ws.active_buffer().unwrap();
+        assert_eq!(buf.line(0).as_deref(), Some("a"));
+        assert_eq!(buf.line(1).as_deref(), Some("b"));
+        assert_eq!(buf.line(2).as_deref(), Some("a"));
+        assert_eq!(buf.line(3).as_deref(), Some("b"));
+        assert_eq!(buf.line(4).as_deref(), Some("c"));
+        let sel = ws.active_view().unwrap().selection.unwrap();
+        assert_eq!(sel.start, Pos::new(2, 0));
+        assert_eq!(sel.end, Pos::new(3, 1));
     }
 }

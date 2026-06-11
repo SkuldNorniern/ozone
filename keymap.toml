@@ -231,6 +231,10 @@ command = "edit.insert-newline"
 keys = "ctrl+/"
 command = "edit.toggle-comment"
 
+[[keymap]]
+keys = "ctrl+d"
+command = "edit.duplicate-line"
+
 # ── Selection ────────────────────────────────────────────────────────────────
 [[keymap]]
 keys = "alt+up"

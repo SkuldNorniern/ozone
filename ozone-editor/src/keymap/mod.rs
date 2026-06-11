@@ -118,6 +118,7 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("delete", "edit.delete-char-forward"),
     ("enter", "edit.insert-newline"),
     ("ctrl+/", "edit.toggle-comment"),
+    ("ctrl+d", "edit.duplicate-line"),
     // Selection
     ("alt+up", "select.expand"),
 ];
