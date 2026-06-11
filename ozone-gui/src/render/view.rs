@@ -4,7 +4,7 @@ use aurea::render::{DrawingContext, Font, Path, PathCommand, Point, Rect};
 use ozone_buffer::{BufferKind, Pos};
 use ozone_config::{Config, CursorStyle, LineNumbers};
 use ozone_editor::{Decoration, DecorationKind, ViewId, VirtualPos, Workspace, fold};
-use ozone_syntax::{Filetype, TokenKind, scan_buffer};
+use ozone_syntax::{Filetype, TokenKind, fold_line_ranges, scan_buffer};
 
 use super::TextMetrics;
 use super::decorations::{
@@ -19,7 +19,7 @@ use crate::components::pill::draw_pill;
 use crate::layout::*;
 use crate::terminals::draw_term_row;
 use crate::theme::{palette, solid, stroke, token_color};
-use crate::{HighlightCache, ImageCache, TermCells};
+use crate::{FoldCache, HighlightCache, ImageCache, TermCells};
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw_view(
@@ -34,6 +34,7 @@ pub(super) fn draw_view(
     term_cells: &TermCells,
     images: &ImageCache,
     highlight_cache: &mut HighlightCache,
+    fold_cache: &mut FoldCache,
     cursor_visible: bool,
 ) -> AureaResult<()> {
     let Some(buffer_id) = ws.views.get(&view_id).map(|view| view.buffer_id) else {
@@ -164,6 +165,19 @@ pub(super) fn draw_view(
             &[]
         };
 
+    // Structural fold ranges (sylven): populated once per revision for supported langs.
+    let cached_folds: &[(usize, usize)] = if term_grid.is_none() {
+        let entry = fold_cache
+            .entry(buffer_id)
+            .or_insert((u64::MAX, Vec::new()));
+        if entry.0 != buf_revision {
+            *entry = (buf_revision, fold_line_ranges(ft, &buf.text()));
+        }
+        &entry.1
+    } else {
+        &[]
+    };
+
     let visible_line_end = (scroll + visible + 1).min(line_count);
     let visible_texts = buf.lines_slice(scroll, visible_line_end);
 
@@ -183,10 +197,14 @@ pub(super) fn draw_view(
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
 
-        // Folding: lines inside a collapsed region are not drawn (the syntax
-        // scan state above has already advanced past them). The header line
-        // itself stays visible and gets a fold marker below.
-        if fold::is_hidden(buf, &view.folds, line_idx) {
+        // Folding: lines inside a collapsed region are not drawn.
+        // Use structural folds (sylven) when available, else indentation.
+        let hidden = if cached_folds.is_empty() {
+            fold::is_hidden(buf, &view.folds, line_idx)
+        } else {
+            fold::structural_is_hidden(&view.folds, cached_folds, line_idx)
+        };
+        if hidden {
             line_idx += 1;
             continue;
         }
@@ -308,7 +326,12 @@ pub(super) fn draw_view(
                 // Fold gutter indicator: filled triangle, no font required.
                 if gutter_w > 0.0 {
                     let is_folded = view.folds.contains(&line_idx);
-                    if is_folded || fold::is_visual_fold_header(buf, line_idx) {
+                    let is_foldable = if cached_folds.is_empty() {
+                        fold::is_visual_fold_header(buf, line_idx)
+                    } else {
+                        fold::structural_is_foldable_at(cached_folds, line_idx)
+                    };
+                    if is_folded || is_foldable {
                         let color = if is_folded {
                             palette().picker_prompt
                         } else {

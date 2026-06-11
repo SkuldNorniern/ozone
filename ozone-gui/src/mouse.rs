@@ -21,6 +21,7 @@ use crate::layout::{
     EDITOR_TOP_PAD, PAD, STATUS_H, gutter_width, max_scroll_line, pane_at, pane_rect,
 };
 use ozone_editor::fold;
+use ozone_syntax::fold_line_ranges;
 
 /// Run-loop pointer state. See the module docs for the planned growth.
 #[derive(Default)]
@@ -313,10 +314,23 @@ pub(crate) fn handle_fold_click(
     let line_idx =
         (scroll + ((relative_y + scroll_y) / line_h).floor() as usize).min(line_count - 1);
 
-    let header = if fold::is_visual_fold_header(buf, line_idx) {
+    let ft = match &buf.kind {
+        ozone_buffer::BufferKind::File(p) => {
+            ozone_syntax::Filetype::from_path(p.to_str().unwrap_or(""))
+        }
+        _ => ozone_syntax::Filetype::Plain,
+    };
+    let struct_ranges = fold_line_ranges(ft, &buf.text());
+    let header = if struct_ranges.is_empty() {
+        if fold::is_visual_fold_header(buf, line_idx) {
+            Some(line_idx)
+        } else {
+            fold::header_for(buf, line_idx)
+        }
+    } else if fold::structural_is_foldable_at(&struct_ranges, line_idx) {
         Some(line_idx)
     } else {
-        fold::header_for(buf, line_idx)
+        fold::structural_header_for(&struct_ranges, line_idx)
     };
     let Some(header) = header else {
         return false;

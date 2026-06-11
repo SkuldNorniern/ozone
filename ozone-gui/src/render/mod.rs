@@ -9,7 +9,7 @@ use crate::layout::{STATUS_H, split_rect};
 use crate::overlay::search::SearchState;
 use crate::statusbar::draw_status_bar;
 use crate::theme::{palette, solid};
-use crate::{HighlightCache, ImageCache, TermCells, editor_font};
+use crate::{FoldCache, HighlightCache, ImageCache, TermCells, editor_font};
 
 mod decorations;
 mod image;
@@ -35,6 +35,7 @@ pub(crate) fn draw_editor(
     term_cells: &TermCells,
     images: &ImageCache,
     highlight_cache: &mut HighlightCache,
+    fold_cache: &mut FoldCache,
     mods: ActiveMods,
     cursor_visible: bool,
     char_w_out: &mut f32,
@@ -81,6 +82,7 @@ pub(crate) fn draw_editor(
             term_cells,
             images,
             highlight_cache,
+            fold_cache,
             cursor_visible,
         )?;
     } else if let Some(view_id) = ws.active_view().map(|view| view.id) {
@@ -96,6 +98,7 @@ pub(crate) fn draw_editor(
             term_cells,
             images,
             highlight_cache,
+            fold_cache,
             cursor_visible,
         )?;
     }
@@ -122,6 +125,7 @@ fn draw_pane_tree(
     term_cells: &TermCells,
     images: &ImageCache,
     highlight_cache: &mut HighlightCache,
+    fold_cache: &mut FoldCache,
     cursor_visible: bool,
 ) -> AureaResult<()> {
     match tree {
@@ -137,6 +141,7 @@ fn draw_pane_tree(
             term_cells,
             images,
             highlight_cache,
+            fold_cache,
             cursor_visible,
         ),
         PaneTree::Split {
@@ -158,6 +163,7 @@ fn draw_pane_tree(
                 term_cells,
                 images,
                 highlight_cache,
+                fold_cache,
                 cursor_visible,
             )?;
             draw_pane_tree(
@@ -172,6 +178,7 @@ fn draw_pane_tree(
                 term_cells,
                 images,
                 highlight_cache,
+                fold_cache,
                 cursor_visible,
             )?;
             ctx.draw_rect(divider, &solid(palette().border))?;

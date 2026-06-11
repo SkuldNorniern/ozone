@@ -16,6 +16,10 @@ pub(crate) type ImageCache = HashMap<BufferId, Option<aurea::render::Image>>;
 /// Invalidated when the buffer's revision changes.
 pub(crate) type HighlightCache = HashMap<BufferId, (u64, Vec<Vec<TokenSpan>>)>;
 
+/// Per-buffer structural fold range cache. Key: BufferId. Value: (revision, fold ranges).
+/// Ranges are `(start_line, end_line)` inclusive pairs derived from sylven.
+pub(crate) type FoldCache = HashMap<BufferId, (u64, Vec<(usize, usize)>)>;
+
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
