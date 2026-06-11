@@ -69,11 +69,18 @@ impl LspClient {
     /// initialize/initialized handshake rooted at `root_uri`, and start the
     /// reader thread. Blocks until the server answers `initialize`.
     pub fn start(command: &str, args: &[String], root_uri: &str) -> Result<Self, String> {
-        let mut child = Command::new(command)
-            .args(args)
+        let mut cmd = Command::new(command);
+        cmd.args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        let mut child = cmd
             .spawn()
             .map_err(|e| format!("could not start {command}: {e}"))?;
 
