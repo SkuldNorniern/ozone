@@ -26,6 +26,12 @@ pub fn spawn() -> io::Result<Box<dyn Pty>> {
     if let Ok(cwd) = std::env::current_dir() {
         cmd.cwd(cwd);
     }
+    // GUI processes don't inherit a terminal, so TERM is unset (or "dumb")
+    // which suppresses color output from the shell and CLI tools. Advertise
+    // ourselves as a 256-color xterm; COLORTERM lets truecolor-aware tools
+    // know 24-bit RGB is also available.
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
     let child = pair.slave.spawn_command(cmd).map_err(oerr)?;
     drop(pair.slave); // close the slave handle in this process
 
