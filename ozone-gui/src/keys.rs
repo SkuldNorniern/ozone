@@ -28,6 +28,7 @@ use crate::overlay::picker::{
 };
 use crate::overlay::search::{SearchState, search_recompute, search_select_from_cursor};
 use crate::overlay::whichkey::WhichKeyEntry;
+use crate::shell::ShellJobs;
 
 /// The mutable overlay state the run loop threads into key routing + intent
 /// handling, bundled so it travels as one argument instead of four. Built
@@ -53,6 +54,7 @@ pub(crate) fn handle_key(
     ov: &mut Overlays,
     mru: &[BufferId],
     lsp: &mut Lsp,
+    shell_jobs: &mut ShellJobs,
 ) -> bool {
     use aurea::KeyCode::*;
 
@@ -77,11 +79,11 @@ pub(crate) fn handle_key(
                 } else {
                     "references.open-selection"
                 };
-                run_cmd(command, ws, reg, autocmds);
+                run_cmd(command, ws, reg, autocmds, shell_jobs);
                 return true;
             }
             Escape => {
-                run_cmd("pane.close", ws, reg, autocmds);
+                run_cmd("pane.close", ws, reg, autocmds, shell_jobs);
                 return true;
             }
             Backspace | Delete | Tab => return true,
@@ -97,7 +99,7 @@ pub(crate) fn handle_key(
                 pending.clear();
                 // Everything is a command: run it, then perform any frontend
                 // action it requested (open palette / picker / search overlay).
-                run_cmd(&cmd, ws, reg, autocmds);
+                run_cmd(&cmd, ws, reg, autocmds, shell_jobs);
                 apply_ui_intents(ws, reg, ov, mru, lsp);
                 return true;
             }

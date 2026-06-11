@@ -6,42 +6,50 @@
 //! functions over `&mut Workspace` (+ the registries) so any input source —
 //! keymap, palette, minibuffer, picker — drives commands the same way.
 
-use std::io::Write;
-use std::process::{Command, Stdio};
-
 use ozone_buffer::{BufferId, BufferKind};
-use ozone_editor::{
-    AutocommandRegistry, CommandContext, CommandRegistry, EditorEvent, NotifyLevel, Workspace,
-};
+use ozone_editor::{AutocommandRegistry, CommandContext, CommandRegistry, EditorEvent, Workspace};
 
 use crate::overlay::minibuffer::Minibuffer;
+use crate::shell::ShellJobs;
 
 pub(crate) fn run_cmd(
     name: &str,
     ws: &mut Workspace,
     reg: &CommandRegistry,
     autocmds: &AutocommandRegistry,
+    shell_jobs: &mut ShellJobs,
 ) {
     if name == "file.save" {
         if let Some(buffer_id) = ws.active_view().map(|view| view.buffer_id) {
-            run_pre_save_autocmds(buffer_id, ws, reg, autocmds);
+            run_pre_save_autocmds(buffer_id, ws, reg, autocmds, shell_jobs);
         }
     } else if name == "file.save-all" {
         let ids: Vec<_> = ws.buffers.keys().copied().collect();
         for id in ids {
-            run_pre_save_autocmds(id, ws, reg, autocmds);
+            run_pre_save_autocmds(id, ws, reg, autocmds, shell_jobs);
         }
     }
 
-    execute_command(name, ws, reg);
-    dispatch_autocmds(ws, reg, autocmds);
+    execute_command(name, ws, reg, shell_jobs);
+    dispatch_autocmds(ws, reg, autocmds, shell_jobs);
 }
 
-fn execute_command(name: &str, ws: &mut Workspace, reg: &CommandRegistry) {
-    execute_command_arg(name, None, ws, reg);
+fn execute_command(
+    name: &str,
+    ws: &mut Workspace,
+    reg: &CommandRegistry,
+    shell_jobs: &mut ShellJobs,
+) {
+    execute_command_arg(name, None, ws, reg, shell_jobs);
 }
 
-fn execute_command_arg(name: &str, arg: Option<String>, ws: &mut Workspace, reg: &CommandRegistry) {
+fn execute_command_arg(
+    name: &str,
+    arg: Option<String>,
+    ws: &mut Workspace,
+    reg: &CommandRegistry,
+    shell_jobs: &mut ShellJobs,
+) {
     // Two shell sigils (not registry commands):
     //   `|cmd` — *filter*: pipe the buffer through cmd (stdin → stdout → buffer).
     //            For stdin/stdout tools (rustfmt, prettier, black -); works on
@@ -49,13 +57,16 @@ fn execute_command_arg(name: &str, arg: Option<String>, ws: &mut Workspace, reg:
     //   `!cmd` — *run*: run cmd on the file/workspace (it edits files on disk),
     //            then reload the buffer. For tools that take a path or operate on
     //            the project (cargo fmt, gofmt -w). `%` expands to the file path;
-    //            cwd is the file's directory. Use on `buffer.saved` (post-write).
+    //            cwd is the workspace root. Use on `buffer.saved` (post-write).
+    //
+    // Both sigils spawn on a background thread via `shell_jobs` and apply
+    // their result on a later frame — they never block the editor.
     if let Some(cmd_line) = name.strip_prefix('|') {
-        run_shell_filter(cmd_line.trim(), ws);
+        spawn_shell_filter(cmd_line.trim(), ws, shell_jobs);
         return;
     }
     if let Some(cmd_line) = name.strip_prefix('!') {
-        run_shell_on_file(cmd_line.trim(), ws);
+        spawn_shell_run(cmd_line.trim(), ws, shell_jobs);
         return;
     }
     if let Some(ctx) = CommandContext::new(ws) {
@@ -67,10 +78,10 @@ fn execute_command_arg(name: &str, arg: Option<String>, ws: &mut Workspace, reg:
     }
 }
 
-/// Pipe the active file buffer through a shell command (`sh -c` / `cmd /C`),
-/// replacing its contents with the command's stdout on success. Non-file
-/// buffers and empty command lines are ignored. Errors surface as a warning.
-fn run_shell_filter(cmd_line: &str, ws: &mut Workspace) {
+/// `|cmd` — spawn `cmd_line` with the active file buffer's text on its stdin;
+/// on success its stdout replaces the buffer text. Non-file buffers and empty
+/// command lines are ignored.
+fn spawn_shell_filter(cmd_line: &str, ws: &Workspace, shell_jobs: &mut ShellJobs) {
     if cmd_line.is_empty() {
         return;
     }
@@ -87,21 +98,17 @@ fn run_shell_filter(cmd_line: &str, ws: &mut Workspace) {
     let Some(input) = ws.buffers.get(&id).map(|b| b.text()) else {
         return;
     };
-
-    match pipe_through_shell(cmd_line, &input) {
-        Ok(output) => {
-            // A filter may emit CRLF (e.g. a Windows tool); keep the buffer LF.
-            ws.replace_buffer_text(id, &ozone_buffer::LineEnding::normalize(&output));
-        }
-        Err(e) => ws.notify(NotifyLevel::Warn, format!("{cmd_line}: {e}")),
-    }
+    shell_jobs.spawn_filter(cmd_line, id, input);
 }
 
-/// Run `cmd_line` against the active file on disk (it edits the file/project in
-/// place), then reload the buffer from disk. `%` in the command expands to the
-/// file path; the command runs with the file's directory as cwd so project tools
-/// (e.g. `cargo fmt`) find their manifest. Non-file buffers are ignored.
-fn run_shell_on_file(cmd_line: &str, ws: &mut Workspace) {
+/// `!cmd` — spawn `cmd_line` against the active file on disk (it edits the
+/// file/project in place); the buffer is reloaded from disk once it
+/// finishes. `%` expands to the file's absolute path; the command runs with
+/// the workspace root (the directory ozone was opened in) as cwd, so project
+/// tools (e.g. `cargo fmt`, `make`, scripts under `./scripts`) see the same
+/// root a shell in that directory would. Non-file buffers and empty command
+/// lines are ignored.
+fn spawn_shell_run(cmd_line: &str, ws: &Workspace, shell_jobs: &mut ShellJobs) {
     if cmd_line.is_empty() {
         return;
     }
@@ -114,89 +121,7 @@ fn run_shell_on_file(cmd_line: &str, ws: &mut Workspace) {
     };
 
     let expanded = cmd_line.replace('%', &path.to_string_lossy());
-    let cwd = path.parent().map(|p| p.to_path_buf());
-    match run_shell(&expanded, cwd.as_deref()) {
-        Ok(()) => {
-            ws.reload_buffer(id);
-        }
-        Err(e) => ws.notify(NotifyLevel::Warn, format!("{cmd_line}: {e}")),
-    }
-}
-
-/// Run `cmd_line` in the platform shell (optionally in `cwd`), inheriting no
-/// stdin and discarding output. Returns an error on spawn failure or non-zero
-/// exit (first stderr line).
-fn run_shell(cmd_line: &str, cwd: Option<&std::path::Path>) -> Result<(), String> {
-    let mut command = if cfg!(windows) {
-        let mut c = Command::new("cmd");
-        c.args(["/C", cmd_line]);
-        c
-    } else {
-        let mut c = Command::new("sh");
-        c.args(["-c", cmd_line]);
-        c
-    };
-    if let Some(dir) = cwd {
-        command.current_dir(dir);
-    }
-    let out = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|e| format!("could not run ({e})"))?;
-    if out.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    Err(stderr
-        .lines()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("command failed")
-        .to_string())
-}
-
-/// Run `cmd_line` in the platform shell, feeding `input` on stdin and returning
-/// captured stdout. stdin is written from a thread to avoid a pipe deadlock.
-fn pipe_through_shell(cmd_line: &str, input: &str) -> Result<String, String> {
-    let mut command = if cfg!(windows) {
-        let mut c = Command::new("cmd");
-        c.args(["/C", cmd_line]);
-        c
-    } else {
-        let mut c = Command::new("sh");
-        c.args(["-c", cmd_line]);
-        c
-    };
-
-    let mut child = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("could not run ({e})"))?;
-
-    let mut stdin = child.stdin.take().ok_or("no stdin handle")?;
-    let owned = input.to_string();
-    let writer = std::thread::spawn(move || {
-        let _ = stdin.write_all(owned.as_bytes());
-        // `stdin` drops here, closing the pipe so the child sees EOF.
-    });
-
-    let out = child
-        .wait_with_output()
-        .map_err(|e| format!("failed ({e})"))?;
-    let _ = writer.join();
-
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        return Err(stderr
-            .lines()
-            .next()
-            .unwrap_or("command failed")
-            .to_string());
-    }
-    String::from_utf8(out.stdout).map_err(|_| "non-UTF-8 output".to_string())
+    shell_jobs.spawn_run(&expanded, id);
 }
 
 /// Handle a key while the minibuffer prompt is open. Letters arrive via
@@ -207,6 +132,7 @@ pub(crate) fn handle_minibuffer_key(
     ws: &mut Workspace,
     reg: &CommandRegistry,
     autocmds: &AutocommandRegistry,
+    shell_jobs: &mut ShellJobs,
 ) -> bool {
     use aurea::KeyCode::*;
     let Some(mb) = minibuffer.as_mut() else {
@@ -220,7 +146,7 @@ pub(crate) fn handle_minibuffer_key(
         Enter => {
             let (cmd, input) = (mb.command.clone(), mb.input.clone());
             *minibuffer = None;
-            run_cmd_with_arg(&cmd, input, ws, reg, autocmds);
+            run_cmd_with_arg(&cmd, input, ws, reg, autocmds, shell_jobs);
             true
         }
         Backspace => {
@@ -239,9 +165,10 @@ pub(crate) fn run_cmd_with_arg(
     ws: &mut Workspace,
     reg: &CommandRegistry,
     autocmds: &AutocommandRegistry,
+    shell_jobs: &mut ShellJobs,
 ) {
-    execute_command_arg(name, Some(arg), ws, reg);
-    dispatch_autocmds(ws, reg, autocmds);
+    execute_command_arg(name, Some(arg), ws, reg, shell_jobs);
+    dispatch_autocmds(ws, reg, autocmds, shell_jobs);
 }
 
 fn run_pre_save_autocmds(
@@ -249,6 +176,7 @@ fn run_pre_save_autocmds(
     ws: &mut Workspace,
     reg: &CommandRegistry,
     autocmds: &AutocommandRegistry,
+    shell_jobs: &mut ShellJobs,
 ) {
     let path = ws.buffers.get(&buffer_id).and_then(|buf| match &buf.kind {
         BufferKind::File(path) => Some(path.clone()),
@@ -271,7 +199,7 @@ fn run_pre_save_autocmds(
         if command == "file.save" || command == "file.save-all" {
             continue;
         }
-        execute_command(&command, ws, reg);
+        execute_command(&command, ws, reg, shell_jobs);
     }
 }
 
@@ -279,6 +207,7 @@ pub(crate) fn dispatch_autocmds(
     ws: &mut Workspace,
     reg: &CommandRegistry,
     autocmds: &AutocommandRegistry,
+    shell_jobs: &mut ShellJobs,
 ) {
     const MAX_AUTOCMD_ROUNDS: usize = 16;
 
@@ -302,7 +231,7 @@ pub(crate) fn dispatch_autocmds(
             if command == "file.save" || command == "file.save-all" {
                 continue;
             }
-            execute_command(&command, ws, reg);
+            execute_command(&command, ws, reg, shell_jobs);
         }
     }
 }

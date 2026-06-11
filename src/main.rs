@@ -40,10 +40,17 @@ fn main() {
 
     let mut workspace = Workspace::new();
 
-    // Open a file if one was passed on the command line
+    // Open a file, or switch to a directory, if one was passed on the
+    // command line. A directory argument (e.g. `ozone .`) becomes the
+    // workspace root: shell-running autocommands (`!cmd`) and the file
+    // picker resolve relative to it via `std::env::current_dir()`.
     if let Some(path_str) = args.first() {
         let path = PathBuf::from(path_str);
-        if let Err(e) = workspace.open_file(path) {
+        if path.is_dir() {
+            if let Err(e) = std::env::set_current_dir(&path) {
+                eprintln!("ozone: cannot open directory: {e}");
+            }
+        } else if let Err(e) = workspace.open_file(path) {
             eprintln!("ozone: cannot open file: {e}");
         }
     }

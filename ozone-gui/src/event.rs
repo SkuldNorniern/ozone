@@ -22,6 +22,7 @@ use crate::overlay::notify::Notifications;
 use crate::overlay::picker::{PickerState, handle_palette_key};
 use crate::overlay::search::{SearchState, handle_search_key, search_input_text, search_jump};
 use crate::overlay::whichkey::WhichKeyView;
+use crate::shell::ShellJobs;
 use crate::statusbar::buffer_dot_at;
 use crate::terminals::Terminals;
 use crate::{FoldCache, HighlightCache, ImageCache, OzoneGui, lock};
@@ -63,6 +64,8 @@ pub(crate) struct AppState {
     pub(crate) mouse: MouseState,
     /// GUI-side LSP orchestration (lazy server, doc sync, diagnostics routing).
     pub(crate) lsp: Lsp,
+    /// In-flight `!cmd` / `|cmd` autocommand jobs (non-blocking).
+    pub(crate) shell_jobs: ShellJobs,
     pub(crate) highlight_cache: HighlightCache,
     pub(crate) fold_cache: FoldCache,
     pub(crate) cursor_visible: bool,
@@ -115,6 +118,7 @@ impl AppState {
             mod_hint_visible: false,
             mouse: MouseState::default(),
             lsp: Lsp::new(),
+            shell_jobs: ShellJobs::new(),
             highlight_cache: HighlightCache::new(),
             fold_cache: FoldCache::new(),
             cursor_visible: true,
@@ -189,6 +193,7 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                     &mut workspace,
                     &state.commands,
                     &state.autocmds,
+                    &mut state.shell_jobs,
                 ) {
                     state.needs_redraw = true;
                 }
@@ -214,6 +219,7 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                     &mut workspace,
                     &state.commands,
                     &state.autocmds,
+                    &mut state.shell_jobs,
                 ) {
                     state.needs_redraw = true;
                 }
@@ -234,7 +240,12 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
             } else if search.is_some() {
                 let mut workspace = lock(state.workspace.as_ref());
                 if handle_search_key(*key, *modifiers, &mut search, &mut workspace) {
-                    dispatch_autocmds(&mut workspace, &state.commands, &state.autocmds);
+                    dispatch_autocmds(
+                        &mut workspace,
+                        &state.commands,
+                        &state.autocmds,
+                        &mut state.shell_jobs,
+                    );
                     state.needs_redraw = true;
                 }
             } else if let Some((term_id, bytes)) = active_terminal(&lock(state.workspace.as_ref()))
@@ -262,6 +273,7 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                     },
                     &state.buffer_mru,
                     &mut state.lsp,
+                    &mut state.shell_jobs,
                 ) {
                     state.needs_redraw = true;
                 }
@@ -316,7 +328,12 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                             state.needs_redraw = true;
                         }
                     } else if insert_text_raw(text, &mut workspace) {
-                        dispatch_autocmds(&mut workspace, &state.commands, &state.autocmds);
+                        dispatch_autocmds(
+                            &mut workspace,
+                            &state.commands,
+                            &state.autocmds,
+                            &mut state.shell_jobs,
+                        );
                         state.needs_redraw = true;
                     }
                 }

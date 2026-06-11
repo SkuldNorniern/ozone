@@ -14,6 +14,7 @@ use crate::components::{
 };
 use crate::editor_font;
 use crate::layout::baseline_in_rect;
+use crate::shell::ShellJobs;
 use crate::theme::{activate, available_themes, persist_theme_name, solid};
 
 /// What committing a picker item does.
@@ -245,6 +246,7 @@ pub(crate) fn handle_palette_key(
     ws: &mut Workspace,
     reg: &CommandRegistry,
     autocmds: &AutocommandRegistry,
+    shell_jobs: &mut ShellJobs,
 ) -> bool {
     use aurea::KeyCode::*;
     let Some(p) = palette.as_mut() else {
@@ -260,10 +262,10 @@ pub(crate) fn handle_palette_key(
             let action = p.selected_item().map(|item| item.action.clone());
             *palette = None;
             match action {
-                Some(PickerAction::RunCommand(cmd)) => run_cmd(&cmd, ws, reg, autocmds),
+                Some(PickerAction::RunCommand(cmd)) => run_cmd(&cmd, ws, reg, autocmds, shell_jobs),
                 Some(PickerAction::RunCommandArg(cmd, arg)) => match arg {
-                    Some(arg) => run_cmd_with_arg(&cmd, arg, ws, reg, autocmds),
-                    None => run_cmd(&cmd, ws, reg, autocmds),
+                    Some(arg) => run_cmd_with_arg(&cmd, arg, ws, reg, autocmds, shell_jobs),
+                    None => run_cmd(&cmd, ws, reg, autocmds, shell_jobs),
                 },
                 Some(PickerAction::ApplyTheme(name)) => {
                     if activate(&name) {
@@ -273,11 +275,11 @@ pub(crate) fn handle_palette_key(
                 }
                 Some(PickerAction::OpenFile(path)) => {
                     let _ = ws.open_file(path);
-                    dispatch_autocmds(ws, reg, autocmds);
+                    dispatch_autocmds(ws, reg, autocmds, shell_jobs);
                 }
                 Some(PickerAction::SwitchBuffer(id)) => {
                     ws.switch_active_buffer(id);
-                    dispatch_autocmds(ws, reg, autocmds);
+                    dispatch_autocmds(ws, reg, autocmds, shell_jobs);
                 }
                 None => {}
             }

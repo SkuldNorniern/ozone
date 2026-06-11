@@ -42,6 +42,7 @@ mod lsp;
 mod mouse;
 mod overlay;
 mod render;
+mod shell;
 mod statusbar;
 mod terminals;
 mod theme;

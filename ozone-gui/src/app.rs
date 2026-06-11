@@ -25,6 +25,7 @@ use crate::overlay::picker::{PickerState, draw_palette};
 use crate::overlay::search::SearchState;
 use crate::overlay::whichkey::{WhichKeyView, draw_which_key};
 use crate::render::draw_editor;
+use crate::shell::ShellJobs;
 use crate::theme::initialize as initialize_theme;
 use crate::{FoldCache, HighlightCache, ImageCache, TermCells, editor_font, lock};
 
@@ -179,7 +180,7 @@ impl OzoneGui {
         let mut reg = CommandRegistry::new();
         register_defaults(&mut reg);
         let autocmds = AutocommandRegistry::from_config(&config.autocmds);
-        dispatch_autocmds(&mut workspace, &reg, &autocmds);
+        dispatch_autocmds(&mut workspace, &reg, &autocmds, &mut ShellJobs::new());
 
         // Keybindings are config-driven, not hardcoded: every binding (including
         // the shipped defaults) comes from the config's `[keymap]` / keymap.toml,
@@ -403,6 +404,15 @@ impl OzoneGui {
             {
                 let mut ws = lock(state.workspace.as_ref());
                 if state.lsp.sync(&mut ws, &state.config) {
+                    state.needs_redraw = true;
+                }
+            }
+
+            // --- Shell job poll: apply any finished `!cmd`/`|cmd` autocommand
+            // results (buffer reload/replace + notification) without blocking. ---
+            {
+                let mut ws = lock(state.workspace.as_ref());
+                if state.shell_jobs.poll(&mut ws) {
                     state.needs_redraw = true;
                 }
             }
