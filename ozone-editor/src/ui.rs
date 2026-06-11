@@ -57,6 +57,12 @@ pub enum UiIntent {
         text: String,
         timeout_ms: Option<u64>,
     },
+    /// Jump to the definition of the symbol under the cursor via the active LSP
+    /// server. The frontend owns the connection and resolves the position.
+    LspGotoDefinition,
+    /// Show hover documentation for the symbol under the cursor via the active
+    /// LSP server. The frontend owns the connection and displays the result.
+    LspHover,
 }
 
 /// One row of a [`UiIntent::Select`] list. Choosing it runs `command` with

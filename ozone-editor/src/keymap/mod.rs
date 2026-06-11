@@ -97,6 +97,8 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("meta+h", "search.replace"),
     ("ctrl+shift+f", "search.workspace"),
     ("meta+g", "edit.goto-line"),
+    ("meta+.", "lsp.goto-definition"),
+    ("meta+k", "lsp.hover"),
     ("ctrl+home", "cursor.file-start"),
     ("ctrl+end", "cursor.file-end"),
     ("ctrl+left", "cursor.word-backward"),

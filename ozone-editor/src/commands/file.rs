@@ -223,6 +223,22 @@ pub(super) fn register_file_commands(reg: &mut CommandRegistry) {
     );
 
     reg.register(
+        "lsp.goto-definition",
+        "Jump to the definition of the symbol under the cursor",
+        |ctx| {
+            ctx.workspace.request_ui(UiIntent::LspGotoDefinition);
+        },
+    );
+
+    reg.register(
+        "lsp.hover",
+        "Show hover documentation for the symbol under the cursor",
+        |ctx| {
+            ctx.workspace.request_ui(UiIntent::LspHover);
+        },
+    );
+
+    reg.register(
         "terminal.open",
         "Open a terminal buffer placeholder",
         |ctx| {
