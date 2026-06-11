@@ -16,10 +16,11 @@ mod toml;
 mod toml_buffer;
 mod yaml_buffer;
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
+use sylven::lang::rust::RustLanguage;
 use sylven::{DocumentId, LanguageId, RevisionId, SyntaxEngine, SyntaxFeatures, TextSnapshot};
-use taste::{Language, detect_path};
+use taste::Language;
 
 pub use symbols::{Symbol, SymbolKind, symbols};
 
@@ -56,37 +57,6 @@ pub enum TokenKind {
 }
 
 // ---------------------------------------------------------------------------
-// Filetype
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Filetype {
-    Rust,
-    Toml,
-    Json,
-    Yaml,
-    Markdown,
-    Plain,
-}
-
-impl Filetype {
-    /// Detect a filetype from a path with the `taste` detector, mapped down to
-    /// the languages Ozone has Layer-0 scanners for. taste handles extensions,
-    /// special filenames/paths, and case-insensitivity; anything it doesn't
-    /// recognize (or a language with no scanner) falls back to `Plain`.
-    pub fn from_path(path: &str) -> Self {
-        match detect_path(path).map(|d| d.language) {
-            Some(Language::RUST) => Filetype::Rust,
-            Some(Language::TOML) => Filetype::Toml,
-            Some(Language::JSON) => Filetype::Json,
-            Some(Language::YAML) => Filetype::Yaml,
-            Some(Language::MARKDOWN) => Filetype::Markdown,
-            _ => Filetype::Plain,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Multi-line scan state
 // ---------------------------------------------------------------------------
 
@@ -120,37 +90,40 @@ impl ScanState {
 ///
 /// For Rust, prefer [`scan_buffer`] — it uses the full-document sylven lexer
 /// which handles nested block comments and raw strings across lines correctly.
-pub fn scan_line(ft: Filetype, line: &str, state: ScanState) -> (Vec<TokenSpan>, ScanState) {
-    match ft {
-        Filetype::Rust => rust::scan_rust(line, state),
-        Filetype::Toml => (toml::scan_toml(line), ScanState::clean()),
-        Filetype::Json => json::scan_json(line, state),
-        Filetype::Markdown => markdown::scan_markdown(line, state),
-        Filetype::Yaml | Filetype::Plain => (vec![], ScanState::clean()),
+pub fn scan_line(
+    lang: Option<Language>,
+    line: &str,
+    state: ScanState,
+) -> (Vec<TokenSpan>, ScanState) {
+    match lang {
+        Some(Language::RUST) => rust::scan_rust(line, state),
+        Some(Language::TOML) => (toml::scan_toml(line), ScanState::clean()),
+        Some(Language::JSON) => json::scan_json(line, state),
+        Some(Language::MARKDOWN) => markdown::scan_markdown(line, state),
+        _ => (vec![], ScanState::clean()),
     }
 }
 
 /// Scan an entire document at once and return per-line token spans.
 ///
 /// For Rust this uses the sylven full-document lexer, which handles nested
-/// block comments and raw strings across line boundaries. Other filetypes fall
+/// block comments and raw strings across line boundaries. Other languages fall
 /// back to the line-by-line scanners.
 ///
 /// The returned `Vec` has one entry per line (split on `\n`). Spans are
 /// relative to the start of each line (byte offsets within the line string).
-pub fn scan_buffer(ft: Filetype, text: &str) -> Vec<Vec<TokenSpan>> {
-    match ft {
-        Filetype::Rust => rust_buffer::scan_rust_buffer(text),
-        Filetype::Toml => toml_buffer::scan_toml_buffer(text),
-        Filetype::Markdown => markdown_buffer::scan_markdown_buffer(text),
-        Filetype::Json => json_buffer::scan_json_buffer(text),
-        Filetype::Yaml => yaml_buffer::scan_yaml_buffer(text),
+pub fn scan_buffer(lang: Option<Language>, text: &str) -> Vec<Vec<TokenSpan>> {
+    match lang {
+        Some(Language::RUST) => rust_buffer::scan_rust_buffer(text),
+        Some(Language::TOML) => toml_buffer::scan_toml_buffer(text),
+        Some(Language::MARKDOWN) => markdown_buffer::scan_markdown_buffer(text),
+        Some(Language::JSON) => json_buffer::scan_json_buffer(text),
+        Some(Language::YAML) => yaml_buffer::scan_yaml_buffer(text),
         _ => {
-            // Fallback: run the existing line-by-line scanners.
             let mut result = Vec::new();
             let mut state = ScanState::clean();
             for line in text.split('\n') {
-                let (spans, new_state) = scan_line(ft, line, state);
+                let (spans, new_state) = scan_line(lang, line, state);
                 state = new_state;
                 result.push(spans);
             }
@@ -166,51 +139,44 @@ pub fn scan_buffer(ft: Filetype, text: &str) -> Vec<Vec<TokenSpan>> {
 static ENGINE: OnceLock<SyntaxEngine> = OnceLock::new();
 
 fn engine() -> &'static SyntaxEngine {
-    ENGINE.get_or_init(SyntaxEngine::new)
-}
-
-fn filetype_to_lang_id(ft: Filetype) -> Option<LanguageId> {
-    match ft {
-        Filetype::Rust => Some(LanguageId("rust")),
-        Filetype::Toml => Some(LanguageId("toml")),
-        Filetype::Markdown => Some(LanguageId("markdown")),
-        Filetype::Json => Some(LanguageId("json")),
-        Filetype::Yaml => Some(LanguageId("yaml")),
-        _ => None,
-    }
+    ENGINE.get_or_init(|| {
+        let mut e = SyntaxEngine::new();
+        // Add DSL-based plugins (C, Python, Oxygen); DSL Rust also registers here
+        sylven_runtime::register_bundled(e.registry_mut());
+        // Re-register hand-written Rust: it has symbol extraction the DSL version lacks
+        e.registry_mut().register(Arc::new(RustLanguage));
+        e
+    })
 }
 
 /// Expand `(sel_start, sel_end)` byte offsets to the smallest structural range
 /// strictly containing them, using sylven bracket and fold data. Returns
 /// `(new_start, new_end)` byte offsets, or `None` when already at the outermost
-/// range or the filetype has no sylven plugin.
+/// range or the language has no sylven plugin.
 pub fn expand_selection(
-    ft: Filetype,
+    lang: Option<Language>,
     text: &str,
     sel_start: usize,
     sel_end: usize,
 ) -> Option<(usize, usize)> {
-    let features = parse_features(ft, text)?;
+    let features = parse_features(lang, text)?;
     sylven::expand_selection(&features, text.len(), sel_start, sel_end)
 }
 
 /// Parse structural features (highlights, folds, symbols, brackets) for
-/// a buffer via sylven. Returns `None` for filetypes without a registered
-/// plugin (e.g. Plain).
-pub fn parse_features(ft: Filetype, text: &str) -> Option<SyntaxFeatures> {
-    let lang_id = filetype_to_lang_id(ft)?;
+/// a buffer via sylven. Returns `None` for languages without a registered
+/// plugin (e.g. unknown / plain text).
+pub fn parse_features(lang: Option<Language>, text: &str) -> Option<SyntaxFeatures> {
+    let lang_id = LanguageId(lang?.name());
     let snapshot = TextSnapshot::new(DocumentId(0), RevisionId(0), text);
     Some(engine().parse(lang_id, &snapshot)?.features)
 }
 
 /// Return structural fold ranges as `(start_line, end_line)` pairs (inclusive,
-/// 0-based). For Rust, these are `{…}` block pairs; for TOML, multi-line
-/// arrays/inline tables and table-header sections; for Markdown, fenced code
-/// blocks and heading sections; for JSON, multi-line objects and arrays.
-/// Always spans at least two lines. Returns an empty `Vec` for filetypes
-/// without a sylven plugin.
-pub fn fold_line_ranges(ft: Filetype, text: &str) -> Vec<(usize, usize)> {
-    let Some(features) = parse_features(ft, text) else {
+/// 0-based). Always spans at least two lines. Returns an empty `Vec` for
+/// languages without a sylven plugin.
+pub fn fold_line_ranges(lang: Option<Language>, text: &str) -> Vec<(usize, usize)> {
+    let Some(features) = parse_features(lang, text) else {
         return Vec::new();
     };
     features
@@ -239,27 +205,27 @@ mod tests {
     use super::json::scan_json;
     use super::markdown::scan_markdown;
     use super::*;
+    use taste::detect_language;
 
     fn kinds(spans: &[TokenSpan]) -> Vec<TokenKind> {
         spans.iter().map(|s| s.kind).collect()
     }
 
     #[test]
-    fn filetype_detection() {
-        assert_eq!(Filetype::from_path("a.json"), Filetype::Json);
-        assert_eq!(Filetype::from_path("README.md"), Filetype::Markdown);
-        assert_eq!(Filetype::from_path("X.MD"), Filetype::Markdown);
-        assert_eq!(Filetype::from_path("c.rs"), Filetype::Rust);
-        assert_eq!(Filetype::from_path("a.yaml"), Filetype::Yaml);
-        assert_eq!(Filetype::from_path("a.yml"), Filetype::Yaml);
-        assert_eq!(Filetype::from_path("noext"), Filetype::Plain);
+    fn language_detection() {
+        assert_eq!(detect_language("a.json"), Some(Language::JSON));
+        assert_eq!(detect_language("README.md"), Some(Language::MARKDOWN));
+        assert_eq!(detect_language("X.MD"), Some(Language::MARKDOWN));
+        assert_eq!(detect_language("c.rs"), Some(Language::RUST));
+        assert_eq!(detect_language("a.yaml"), Some(Language::YAML));
+        assert_eq!(detect_language("a.yml"), Some(Language::YAML));
+        assert_eq!(detect_language("noext"), None);
     }
 
     #[test]
     fn json_key_vs_string_value() {
         let (spans, st) = scan_json(r#"  "name": "ozone","#, ScanState::clean());
         assert!(st.is_clean());
-        // first string is a key, second is a value
         assert_eq!(spans[0].kind, TokenKind::Keyword);
         assert!(spans.iter().any(|s| s.kind == TokenKind::String));
         assert!(spans.iter().any(|s| s.kind == TokenKind::Punctuation));
@@ -269,7 +235,7 @@ mod tests {
     fn json_numbers_and_literals() {
         let (spans, _) = scan_json(r#"{ "n": 42, "ok": true, "x": null }"#, ScanState::clean());
         assert!(spans.iter().any(|s| s.kind == TokenKind::Number));
-        assert!(spans.iter().any(|s| s.kind == TokenKind::Keyword)); // key + null
+        assert!(spans.iter().any(|s| s.kind == TokenKind::Keyword));
     }
 
     #[test]
@@ -288,7 +254,6 @@ mod tests {
         assert_eq!(kinds(&h), vec![TokenKind::Keyword]);
         let (q, _) = scan_markdown("> quoted", ScanState::clean());
         assert_eq!(kinds(&q), vec![TokenKind::Comment]);
-        // '#' without trailing space is not a heading
         let (nh, _) = scan_markdown("#tag", ScanState::clean());
         assert!(nh.is_empty());
     }
@@ -299,7 +264,7 @@ mod tests {
         assert_eq!(f1[0].kind, TokenKind::Comment);
         assert!(st1.in_code_fence);
         let (code, st2) = scan_markdown("let x = 1;", st1);
-        assert!(code.is_empty()); // code content left Default
+        assert!(code.is_empty());
         assert!(st2.in_code_fence);
         let (f2, st3) = scan_markdown("```", st2);
         assert_eq!(f2[0].kind, TokenKind::Comment);
@@ -309,8 +274,8 @@ mod tests {
     #[test]
     fn markdown_list_inline_code_and_link() {
         let (spans, _) = scan_markdown("- see `code` and [text](http://x)", ScanState::clean());
-        assert_eq!(spans[0].kind, TokenKind::Operator); // list marker
-        assert!(spans.iter().any(|s| s.kind == TokenKind::String)); // inline code + url
-        assert!(spans.iter().any(|s| s.kind == TokenKind::Function)); // [text]
+        assert_eq!(spans[0].kind, TokenKind::Operator);
+        assert!(spans.iter().any(|s| s.kind == TokenKind::String));
+        assert!(spans.iter().any(|s| s.kind == TokenKind::Function));
     }
 }

@@ -3,6 +3,7 @@
 //! Each sets the active view's selection and moves the cursor to its end.
 
 use ozone_buffer::{Buffer, BufferKind, Pos, Span};
+use taste::detect_language;
 
 use crate::text_object;
 
@@ -58,7 +59,7 @@ fn compute_expand(ctx: &CommandContext) -> Option<Span> {
         BufferKind::File(p) => p.to_string_lossy().into_owned(),
         _ => return None,
     };
-    let ft = ozone_syntax::Filetype::from_path(&path);
+    let lang = detect_language(&path);
     let text = buf.text();
     let (sel_start, sel_end) = match view.selection {
         Some(span) => (buf.pos_to_offset(span.start), buf.pos_to_offset(span.end)),
@@ -67,7 +68,7 @@ fn compute_expand(ctx: &CommandContext) -> Option<Span> {
             (off, off)
         }
     };
-    let (new_start, new_end) = ozone_syntax::expand_selection(ft, &text, sel_start, sel_end)?;
+    let (new_start, new_end) = ozone_syntax::expand_selection(lang, &text, sel_start, sel_end)?;
     Some(Span {
         start: buf.offset_to_pos(new_start),
         end: buf.offset_to_pos(new_end),

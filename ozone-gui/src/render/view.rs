@@ -4,7 +4,8 @@ use aurea::render::{DrawingContext, Font, Path, PathCommand, Point, Rect};
 use ozone_buffer::{BufferKind, Pos};
 use ozone_config::{Config, CursorStyle, LineNumbers};
 use ozone_editor::{Decoration, DecorationKind, ViewId, VirtualPos, Workspace, fold};
-use ozone_syntax::{Filetype, TokenKind, fold_line_ranges, scan_buffer};
+use ozone_syntax::{TokenKind, fold_line_ranges, scan_buffer};
+use taste::detect_language;
 
 use super::TextMetrics;
 use super::decorations::{
@@ -86,8 +87,8 @@ pub(super) fn draw_view(
     ctx.draw_rect(rect, &solid(palette().background))?;
 
     let ft = match &buf.kind {
-        BufferKind::File(p) => Filetype::from_path(&p.to_string_lossy()),
-        _ => Filetype::Plain,
+        BufferKind::File(p) => detect_language(p.as_os_str().to_str().unwrap_or("")),
+        _ => None,
     };
 
     let line_numbers = match buf.kind {
@@ -152,18 +153,17 @@ pub(super) fn draw_view(
     // Populate or refresh the per-buffer highlight cache.
     // For terminal buffers there's nothing to highlight — skip.
     let buf_revision = buf.revision();
-    let cached_spans: &[Vec<ozone_syntax::TokenSpan>] =
-        if term_grid.is_none() && !matches!(ft, Filetype::Plain) {
-            let entry = highlight_cache
-                .entry(buffer_id)
-                .or_insert((u64::MAX, Vec::new()));
-            if entry.0 != buf_revision {
-                *entry = (buf_revision, scan_buffer(ft, &buf.text()));
-            }
-            &entry.1
-        } else {
-            &[]
-        };
+    let cached_spans: &[Vec<ozone_syntax::TokenSpan>] = if term_grid.is_none() && ft.is_some() {
+        let entry = highlight_cache
+            .entry(buffer_id)
+            .or_insert((u64::MAX, Vec::new()));
+        if entry.0 != buf_revision {
+            *entry = (buf_revision, scan_buffer(ft, &buf.text()));
+        }
+        &entry.1
+    } else {
+        &[]
+    };
 
     // Structural fold ranges (sylven): populated once per revision for supported langs.
     let cached_folds: &[(usize, usize)] = if term_grid.is_none() {
@@ -430,7 +430,7 @@ pub(super) fn draw_view(
                         metrics.char_w,
                         font,
                     )?;
-                } else if spans.is_empty() || ft == Filetype::Plain {
+                } else if spans.is_empty() || ft.is_none() {
                     ctx.draw_text_with_font(
                         line_text,
                         Point::new(text_x, baseline),

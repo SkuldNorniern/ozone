@@ -6,5 +6,6 @@ edition = "2024"
 [dependencies]
 ozone-buffer = { workspace = true }
 taste = { workspace = true }
-sylven     = { workspace = true }
-sylven-lex = { workspace = true }
+sylven         = { workspace = true }
+sylven-lex     = { workspace = true }
+sylven-runtime = { workspace = true }

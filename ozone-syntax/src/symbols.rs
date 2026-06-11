@@ -4,8 +4,9 @@
 //! JSON and Plain have no symbols.
 
 use sylven::SymbolKind as SylvenKind;
+use taste::Language;
 
-use crate::{Filetype, byte_to_line, parse_features};
+use crate::{byte_to_line, parse_features};
 
 /// A kind of document symbol, used for the picker's detail label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,19 +51,19 @@ pub struct Symbol {
     pub line: usize,
 }
 
-/// Extract document symbols from `text` for `filetype`. Returns them in document
-/// order. Unknown filetypes yield an empty list.
-pub fn symbols(filetype: Filetype, text: &str) -> Vec<Symbol> {
-    match filetype {
-        Filetype::Rust | Filetype::Toml | Filetype::Markdown | Filetype::Yaml => {
-            sylven_symbols(filetype, text)
+/// Extract document symbols from `text` for `lang`. Returns them in document
+/// order. Unknown languages yield an empty list.
+pub fn symbols(lang: Option<Language>, text: &str) -> Vec<Symbol> {
+    match lang {
+        Some(Language::RUST | Language::TOML | Language::MARKDOWN | Language::YAML) => {
+            sylven_symbols(lang, text)
         }
-        Filetype::Json | Filetype::Plain => Vec::new(),
+        _ => Vec::new(),
     }
 }
 
-fn sylven_symbols(filetype: Filetype, text: &str) -> Vec<Symbol> {
-    let features = match parse_features(filetype, text) {
+fn sylven_symbols(lang: Option<Language>, text: &str) -> Vec<Symbol> {
+    let features = match parse_features(lang, text) {
         Some(f) => f,
         None => return Vec::new(),
     };
@@ -100,7 +101,7 @@ mod tests {
     #[test]
     fn rust_items() {
         let src = "pub fn alpha() {}\nstruct Bravo;\n  enum Charlie {}\nimpl Bravo {}\nimpl Trait for Bravo {}\nmacro_rules! mac {}\nconst K: u8 = 1;";
-        let s = symbols(Filetype::Rust, src);
+        let s = symbols(Some(Language::RUST), src);
         let got: Vec<(&str, SymbolKind, usize)> = s
             .iter()
             .map(|x| (x.name.as_str(), x.kind, x.line))
@@ -119,7 +120,7 @@ mod tests {
     #[test]
     fn markdown_headings_skip_fences() {
         let src = "# Title\n```\n# not a heading\n```\n## Sub";
-        let s = symbols(Filetype::Markdown, src);
+        let s = symbols(Some(Language::MARKDOWN), src);
         assert_eq!(s.len(), 2);
         assert_eq!(s[0].name, "Title");
         assert_eq!((s[1].name.as_str(), s[1].line), ("Sub", 4));
@@ -128,14 +129,14 @@ mod tests {
     #[test]
     fn toml_sections() {
         let src = "[editor]\nfont = \"x\"\n[[keymap]]\n";
-        let s = symbols(Filetype::Toml, src);
+        let s = symbols(Some(Language::TOML), src);
         assert_eq!(s[0].name, "editor");
         assert_eq!(s[1].name, "keymap");
     }
 
     #[test]
     fn plain_and_json_have_none() {
-        assert!(symbols(Filetype::Plain, "anything").is_empty());
-        assert!(symbols(Filetype::Json, "{\"a\":1}").is_empty());
+        assert!(symbols(None, "anything").is_empty());
+        assert!(symbols(Some(Language::JSON), "{\"a\":1}").is_empty());
     }
 }

@@ -20,8 +20,9 @@ resolver = "2"
 aurea       = "0.0.2"
 toml        = "0.8"
 taste       = { git = "https://github.com/standize/taste.git", branch = "dev" }
-sylven     = { git = "https://github.com/SkuldNorniern/sylven.git", branch = "main" }
-sylven-lex = { git = "https://github.com/SkuldNorniern/sylven.git", branch = "main" }
+sylven         = { git = "https://github.com/SkuldNorniern/sylven.git", branch = "main" }
+sylven-lex     = { git = "https://github.com/SkuldNorniern/sylven.git", branch = "main" }
+sylven-runtime = { git = "https://github.com/SkuldNorniern/sylven.git", branch = "main" }
 ozone-buffer = { path = "ozone-buffer" }
 ozone-editor = { path = "ozone-editor" }
 ozone-gui    = { path = "ozone-gui" }
@@ -34,6 +35,15 @@ ozone-lsp    = { path = "ozone-lsp" }
 ozone-editor = { workspace = true }
 ozone-gui    = { workspace = true }
 ozone-config = { workspace = true }
+
+[patch."https://github.com/SkuldNorniern/sylven.git"]
+sylven         = { path = "sylven" }
+sylven-lex     = { path = "sylven/sylven-lex" }
+sylven-parse   = { path = "sylven/sylven-parse" }
+sylven-text    = { path = "sylven/sylven-text" }
+sylven-tree    = { path = "sylven/sylven-tree" }
+sylven-dsl     = { path = "sylven/sylven-dsl" }
+sylven-runtime = { path = "sylven/sylven-runtime" }
 
 [patch.crates-io]
 aurea            = { git = "https://github.com/SkuldNorniern/aurea" }

@@ -14,7 +14,8 @@ use ozone_editor::{
     AutocommandRegistry, CommandRegistry, KeyStroke, Keymap, KeymapOutcome, ModifierMap,
     SelectItem, UiIntent, Workspace,
 };
-use ozone_syntax::{Filetype, symbols};
+use ozone_syntax::symbols;
+use taste::{Language, detect_language};
 
 use crate::actions::{insert_text_raw, run_cmd};
 use crate::input::{keycode_to_char, keystroke_from};
@@ -193,12 +194,12 @@ fn symbol_select_items(ws: &Workspace) -> Vec<SelectItem> {
     let Some(buf) = ws.active_buffer() else {
         return Vec::new();
     };
-    let ft = match &buf.kind {
-        BufferKind::File(p) => Filetype::from_path(&p.to_string_lossy()),
-        _ => Filetype::Plain,
+    let lang = match &buf.kind {
+        BufferKind::File(p) => detect_language(p.as_os_str().to_str().unwrap_or("")),
+        _ => None,
     };
     let text = buf.text();
-    symbols(ft, &text)
+    symbols(lang, &text)
         .into_iter()
         .map(|s| SelectItem {
             label: s.name,
@@ -220,12 +221,11 @@ pub(crate) fn active_terminal(ws: &Workspace) -> Option<BufferId> {
 
 /// Filetype token for the active buffer (for filetype-scoped keymaps).
 pub(crate) fn active_filetype_name(ws: &Workspace) -> Option<String> {
-    match &ws.active_buffer()?.kind {
-        BufferKind::File(p) => Some(filetype_config_name(Filetype::from_path(
-            &p.to_string_lossy(),
-        ))),
-        _ => None,
-    }
+    let lang = match &ws.active_buffer()?.kind {
+        BufferKind::File(p) => detect_language(p.as_os_str().to_str().unwrap_or("")),
+        _ => return None,
+    };
+    Some(filetype_config_name(lang))
 }
 
 /// Copy a `[[filetype]]` block's set options into a buffer's local overrides.
@@ -245,16 +245,8 @@ pub(crate) fn apply_filetype_config(ws: &mut Workspace, id: BufferId, fc: &Filet
     }
 }
 
-pub(crate) fn filetype_config_name(ft: Filetype) -> String {
-    match ft {
-        Filetype::Rust => "rust",
-        Filetype::Toml => "toml",
-        Filetype::Json => "json",
-        Filetype::Yaml => "yaml",
-        Filetype::Markdown => "markdown",
-        Filetype::Plain => "plain",
-    }
-    .to_string()
+pub(crate) fn filetype_config_name(lang: Option<Language>) -> String {
+    lang.map(|l| l.name()).unwrap_or("plain").to_string()
 }
 
 /// Perform any [`UiIntent`]s a command queued (open the palette, a picker, or

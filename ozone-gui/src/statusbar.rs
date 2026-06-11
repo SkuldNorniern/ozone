@@ -4,7 +4,7 @@ use aurea::AureaResult;
 use aurea::render::{DrawingContext, Font, Point, Rect};
 use ozone_buffer::{BufferId, BufferKind};
 use ozone_editor::{ViewId, Workspace};
-use ozone_syntax::Filetype;
+use taste::{Language, detect_language};
 
 use crate::components::draw_pill;
 use crate::input::ActiveMods;
@@ -43,7 +43,9 @@ pub(crate) fn draw_status_bar(
             let cursor_info = format!("{}:{}", view.cursor.line + 1, view.cursor.col + 1);
             let dirty = if buf.is_dirty() { "*" } else { "" };
             let mode = match &buf.kind {
-                BufferKind::File(p) => major_mode_label(Filetype::from_path(&p.to_string_lossy())),
+                BufferKind::File(p) => {
+                    major_mode_label(detect_language(p.as_os_str().to_str().unwrap_or("")))
+                }
                 BufferKind::Search => "Files",
                 BufferKind::References => "Refs",
                 BufferKind::FileTree => "Tree",
@@ -261,15 +263,8 @@ fn draw_buffer_dots(
     Ok(())
 }
 
-fn major_mode_label(filetype: Filetype) -> &'static str {
-    match filetype {
-        Filetype::Rust => "Rust",
-        Filetype::Toml => "TOML",
-        Filetype::Json => "JSON",
-        Filetype::Yaml => "YAML",
-        Filetype::Markdown => "Markdown",
-        Filetype::Plain => "Text",
-    }
+fn major_mode_label(lang: Option<Language>) -> &'static str {
+    lang.map(|l| l.display_name()).unwrap_or("Text")
 }
 
 fn pane_status(ws: &Workspace, active: ViewId) -> String {

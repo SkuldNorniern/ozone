@@ -7,3 +7,4 @@ edition = "2024"
 ozone-buffer  = { workspace = true }
 ozone-config  = { workspace = true }
 ozone-syntax  = { workspace = true }
+taste         = { workspace = true }
