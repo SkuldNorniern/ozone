@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use ozone_buffer::{Buffer, BufferId, BufferKind, Pos};
 use ozone_config::Config;
 use ozone_editor::{Diagnostic, NamespaceId, NotifyLevel, Workspace};
-use ozone_lsp::{Location, LspClient, ServerMessage};
+use ozone_lsp::{CompletionItem, Location, LspClient, ServerMessage};
 use taste::{Language, detect_language};
 
 /// Coalesce rapid edits: send at most one `didChange` per document per window.
@@ -43,6 +43,22 @@ pub(crate) struct Lsp {
     pending_goto: Option<i64>,
     /// In-flight `textDocument/hover` request id, if any.
     pending_hover: Option<i64>,
+    /// In-flight `textDocument/completion` request, if any: id, the buffer it
+    /// was sent for, and where the completed prefix starts (the range the
+    /// chosen item replaces on commit).
+    pending_completion: Option<(i64, BufferId, Pos)>,
+    /// A completion result ready for the frontend to show as a popup, taken
+    /// via [`Lsp::take_completion_result`].
+    completion_result: Option<CompletionResult>,
+}
+
+/// A `textDocument/completion` result, ready to show as a popup.
+pub(crate) struct CompletionResult {
+    pub(crate) items: Vec<CompletionItem>,
+    pub(crate) buffer_id: BufferId,
+    /// Start of the identifier prefix being completed; the popup replaces
+    /// `[anchor, cursor)` with the chosen item's `insert_text`.
+    pub(crate) anchor: Pos,
 }
 
 impl Lsp {
@@ -143,6 +159,39 @@ impl Lsp {
         let uri = doc.uri.clone();
         let id = client.hover(&uri, cursor.line as u32, utf16_col as u32);
         self.pending_hover = Some(id);
+    }
+
+    /// Send `textDocument/completion` for the active buffer's cursor position.
+    /// The result is picked up via [`Lsp::take_completion_result`] once the
+    /// server responds. No-op conditions same as `request_goto_definition`.
+    pub(crate) fn request_completion(&mut self, ws: &Workspace) {
+        let Some(client) = self.client.as_mut() else {
+            return;
+        };
+        if !client.capabilities.completion {
+            return;
+        }
+        let Some(view) = ws.active_view() else {
+            return;
+        };
+        let buf_id = view.buffer_id;
+        let cursor = view.cursor;
+        let Some(doc) = self.docs.get(&buf_id) else {
+            return;
+        };
+        let Some(line) = ws.buffers.get(&buf_id).and_then(|b| b.line(cursor.line)) else {
+            return;
+        };
+        let anchor = Pos::new(cursor.line, word_start(&line, cursor.col));
+        let utf16_col = byte_to_utf16_col(&line, cursor.col);
+        let uri = doc.uri.clone();
+        let id = client.completion(&uri, cursor.line as u32, utf16_col as u32);
+        self.pending_completion = Some((id, buf_id, anchor));
+    }
+
+    /// Take a completion result if one has arrived since the last call.
+    pub(crate) fn take_completion_result(&mut self) -> Option<CompletionResult> {
+        self.completion_result.take()
     }
 
     /// `didOpen` new Rust buffers and `didChange` ones whose revision advanced
@@ -260,6 +309,21 @@ impl Lsp {
                         }
                     }
                 }
+                ServerMessage::CompletionResult { id, items } => {
+                    if let Some((pending_id, buffer_id, anchor)) = self.pending_completion
+                        && pending_id == id
+                    {
+                        self.pending_completion = None;
+                        if !items.is_empty() {
+                            self.completion_result = Some(CompletionResult {
+                                items,
+                                buffer_id,
+                                anchor,
+                            });
+                            changed = true;
+                        }
+                    }
+                }
             }
         }
         changed
@@ -315,6 +379,19 @@ fn byte_to_utf16_col(line: &str, byte_col: usize) -> usize {
         .chars()
         .map(|c| c.len_utf16())
         .sum()
+}
+
+/// Byte offset where the identifier ending at `col` on `line` starts: scan
+/// backward over `[A-Za-z0-9_]` bytes. Returns `col` unchanged if the cursor
+/// isn't preceded by an identifier character (the completion then inserts at
+/// the cursor with nothing to replace).
+fn word_start(line: &str, col: usize) -> usize {
+    let bytes = line.as_bytes();
+    let mut start = col.min(bytes.len());
+    while start > 0 && matches!(bytes[start - 1], b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_') {
+        start -= 1;
+    }
+    start
 }
 
 /// Jump the workspace to an LSP [`Location`]: switch to the target file (or
@@ -466,6 +543,14 @@ mod tests {
     #[test]
     fn uri_to_path_rejects_non_file() {
         assert!(uri_to_path("http://example.com").is_none());
+    }
+
+    #[test]
+    fn word_start_finds_identifier_prefix() {
+        assert_eq!(word_start("    let hash_ma", 16), 8);
+        assert_eq!(word_start("foo.", 4), 4); // not preceded by an identifier char
+        assert_eq!(word_start("", 0), 0);
+        assert_eq!(word_start("abc", 0), 0);
     }
 
     #[test]

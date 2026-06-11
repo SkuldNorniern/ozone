@@ -19,6 +19,7 @@ use crate::keys::{
     which_key_entries,
 };
 use crate::layout::STATUS_H;
+use crate::overlay::completion::{CompletionState, draw_completion};
 use crate::overlay::minibuffer::{Minibuffer, draw_minibuffer};
 use crate::overlay::notify::Notifications;
 use crate::overlay::picker::{PickerState, draw_palette};
@@ -215,6 +216,7 @@ impl OzoneGui {
         let palette: Arc<Mutex<Option<PickerState>>> = Arc::new(Mutex::new(None));
         let search: Arc<Mutex<Option<SearchState>>> = Arc::new(Mutex::new(None));
         let minibuffer: Arc<Mutex<Option<Minibuffer>>> = Arc::new(Mutex::new(None));
+        let completion: Arc<Mutex<Option<CompletionState>>> = Arc::new(Mutex::new(None));
         let mut startup_notifications = Notifications::new();
         if self.config.keymaps.is_empty() {
             // No `[keymap]`/keymap.toml means every key (Ctrl/Meta chords
@@ -241,6 +243,7 @@ impl OzoneGui {
         let palette_for_draw = palette.clone();
         let search_for_draw = search.clone();
         let minibuffer_for_draw = minibuffer.clone();
+        let completion_for_draw = completion.clone();
         let notifications_for_draw = notifications.clone();
         let which_key_for_draw = which_key.clone();
         let images_for_draw = images.clone();
@@ -251,6 +254,7 @@ impl OzoneGui {
             let pal = lock(palette_for_draw.as_ref());
             let srch = lock(search_for_draw.as_ref());
             let mb = lock(minibuffer_for_draw.as_ref());
+            let comp = lock(completion_for_draw.as_ref());
             let notes = lock(notifications_for_draw.as_ref());
             let mut ws = lock(workspace_for_draw.as_ref());
             let imgs = lock(images_for_draw.as_ref());
@@ -278,6 +282,9 @@ impl OzoneGui {
                 let f = editor_font(&config_for_draw);
                 let (cw, ch) = (ctx.width() as f32, ctx.height() as f32);
                 draw_minibuffer(ctx, m, &f, cw, ch, STATUS_H)?;
+            }
+            if let Some(c) = comp.as_ref() {
+                draw_completion(ctx, c, &config_for_draw)?;
             }
             // Which-key panel: the frame scheduler presents this callback, so the
             // panel must be drawn here (not only in the loop's `canvas.draw`).
@@ -332,6 +339,7 @@ impl OzoneGui {
             search,
             minibuffer,
             notifications,
+            completion,
             which_key,
             canvas_arc,
             images,
@@ -407,6 +415,10 @@ impl OzoneGui {
                     state.needs_redraw = true;
                 }
             }
+            if let Some(result) = state.lsp.take_completion_result() {
+                *lock(state.completion.as_ref()) = Some(CompletionState::new(result));
+                state.needs_redraw = true;
+            }
 
             // --- Shell job poll: apply any finished `!cmd`/`|cmd` autocommand
             // results (buffer reload/replace + notification) without blocking. ---
@@ -465,6 +477,7 @@ impl OzoneGui {
                 let pal = lock(state.palette.as_ref());
                 let srch = lock(state.search.as_ref());
                 let mb = lock(state.minibuffer.as_ref());
+                let comp = lock(state.completion.as_ref());
                 let notes = lock(state.notifications.as_ref());
                 let mut ws = lock(state.workspace.as_ref());
                 let mut canvas = lock(state.canvas.as_ref());
@@ -495,6 +508,9 @@ impl OzoneGui {
                         let f = editor_font(&config);
                         let (cw, ch) = (ctx.width() as f32, ctx.height() as f32);
                         draw_minibuffer(ctx, m, &f, cw, ch, STATUS_H)?;
+                    }
+                    if let Some(c) = comp.as_ref() {
+                        draw_completion(ctx, c, &config)?;
                     }
                     if let Some((prefix, entries)) = frame_wk.as_ref()
                         && !entries.is_empty()

@@ -1,3 +1,4 @@
+pub mod completion;
 pub mod minibuffer;
 pub mod notify;
 pub mod picker;

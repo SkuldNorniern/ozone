@@ -304,6 +304,9 @@ pub(crate) fn apply_ui_intents(
             UiIntent::LspHover => {
                 lsp.request_hover(ws);
             }
+            UiIntent::LspCompletion => {
+                lsp.request_completion(ws);
+            }
         }
     }
     applied

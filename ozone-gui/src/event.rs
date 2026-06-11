@@ -17,6 +17,7 @@ use crate::mouse::{
     MouseState, handle_editor_click, handle_editor_drag, handle_fold_click, handle_scrollbar_drag,
     handle_scrollbar_press,
 };
+use crate::overlay::completion::{CompletionKeyResult, CompletionState, handle_completion_key};
 use crate::overlay::minibuffer::Minibuffer;
 use crate::overlay::notify::Notifications;
 use crate::overlay::picker::{PickerState, handle_palette_key};
@@ -43,6 +44,8 @@ pub(crate) struct AppState {
     pub(crate) search: Arc<Mutex<Option<SearchState>>>,
     pub(crate) minibuffer: Arc<Mutex<Option<Minibuffer>>>,
     pub(crate) notifications: Arc<Mutex<Notifications>>,
+    /// LSP completion popup, opened from [`crate::lsp::Lsp::take_completion_result`].
+    pub(crate) completion: Arc<Mutex<Option<CompletionState>>>,
     /// Which-key view-model shared with the canvas draw callback (the frame the
     /// scheduler actually presents).
     pub(crate) which_key: Arc<Mutex<WhichKeyView>>,
@@ -86,6 +89,7 @@ impl AppState {
         search: Arc<Mutex<Option<SearchState>>>,
         minibuffer: Arc<Mutex<Option<Minibuffer>>>,
         notifications: Arc<Mutex<Notifications>>,
+        completion: Arc<Mutex<Option<CompletionState>>>,
         which_key: Arc<Mutex<WhichKeyView>>,
         canvas: Arc<Mutex<SendableCanvas>>,
         images: Arc<Mutex<ImageCache>>,
@@ -104,6 +108,7 @@ impl AppState {
             search,
             minibuffer,
             notifications,
+            completion,
             which_key,
             canvas,
             last_title: String::new(),
@@ -181,6 +186,32 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                 state.needs_redraw = true;
             }
             state.cursor_activity = true;
+
+            let mut completion = lock(state.completion.as_ref());
+            if completion.is_some() {
+                let result = {
+                    let mut workspace = lock(state.workspace.as_ref());
+                    handle_completion_key(*key, &mut completion, &mut workspace)
+                };
+                state.needs_redraw = true;
+                match result {
+                    CompletionKeyResult::Handled => {
+                        if matches!(*key, aurea::KeyCode::Enter | aurea::KeyCode::Tab) {
+                            let mut workspace = lock(state.workspace.as_ref());
+                            dispatch_autocmds(
+                                &mut workspace,
+                                &state.commands,
+                                &state.autocmds,
+                                &mut state.shell_jobs,
+                            );
+                        }
+                        return EventResult::Continue;
+                    }
+                    CompletionKeyResult::Closed => {}
+                }
+            }
+            drop(completion);
+
             let mut palette = lock(state.palette.as_ref());
             let mut search = lock(state.search.as_ref());
             let mut minibuffer = lock(state.minibuffer.as_ref());
@@ -289,6 +320,9 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                 return EventResult::Continue;
             }
             state.cursor_activity = true;
+            if lock(state.completion.as_ref()).take().is_some() {
+                state.needs_redraw = true;
+            }
             let mut minibuffer = lock(state.minibuffer.as_ref());
             if let Some(minibuffer) = minibuffer.as_mut() {
                 for c in text.chars().filter(|c| !c.is_control()) {
@@ -392,6 +426,9 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
             click_count,
         } if state.config.ui.mouse => {
             let (x, y) = (*x as f32, *y as f32);
+            if lock(state.completion.as_ref()).take().is_some() {
+                state.needs_redraw = true;
+            }
             {
                 let canvas = lock(state.canvas.as_ref());
                 let _ = canvas.handle_click(x, y);
