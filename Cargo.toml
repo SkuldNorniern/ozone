@@ -36,18 +36,6 @@ ozone-editor = { workspace = true }
 ozone-gui    = { workspace = true }
 ozone-config = { workspace = true }
 
-[patch."https://github.com/standize/taste.git"]
-taste = { path = "taste" }
-
-[patch."https://github.com/SkuldNorniern/sylven.git"]
-sylven         = { path = "sylven" }
-sylven-lex     = { path = "sylven/sylven-lex" }
-sylven-parse   = { path = "sylven/sylven-parse" }
-sylven-text    = { path = "sylven/sylven-text" }
-sylven-tree    = { path = "sylven/sylven-tree" }
-sylven-dsl     = { path = "sylven/sylven-dsl" }
-sylven-runtime = { path = "sylven/sylven-runtime" }
-
 [patch.crates-io]
 aurea            = { git = "https://github.com/SkuldNorniern/aurea" }
 aurea-ffi        = { git = "https://github.com/SkuldNorniern/aurea" }
