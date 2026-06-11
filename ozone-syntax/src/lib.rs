@@ -5,6 +5,7 @@
 //!
 //! Phase 1 covers Rust, TOML, JSON, and Markdown. More languages come later.
 
+mod dsl_buffer;
 mod json;
 mod json_buffer;
 mod markdown;
@@ -119,17 +120,24 @@ pub fn scan_buffer(lang: Option<Language>, text: &str) -> Vec<Vec<TokenSpan>> {
         Some(Language::MARKDOWN) => markdown_buffer::scan_markdown_buffer(text),
         Some(Language::JSON) => json_buffer::scan_json_buffer(text),
         Some(Language::YAML) => yaml_buffer::scan_yaml_buffer(text),
-        _ => {
-            let mut result = Vec::new();
-            let mut state = ScanState::clean();
-            for line in text.split('\n') {
-                let (spans, new_state) = scan_line(lang, line, state);
-                state = new_state;
-                result.push(spans);
-            }
-            result
+        Some(other) => {
+            dsl_buffer::scan_dsl_buffer(other, text).unwrap_or_else(|| line_by_line(lang, text))
         }
+        None => line_by_line(lang, text),
     }
+}
+
+/// Fallback for languages with neither a dedicated buffer scanner nor a
+/// registered sylven plugin: scan line by line via [`scan_line`].
+fn line_by_line(lang: Option<Language>, text: &str) -> Vec<Vec<TokenSpan>> {
+    let mut result = Vec::new();
+    let mut state = ScanState::clean();
+    for line in text.split('\n') {
+        let (spans, new_state) = scan_line(lang, line, state);
+        state = new_state;
+        result.push(spans);
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------
