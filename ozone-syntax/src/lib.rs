@@ -6,6 +6,7 @@
 //! Phase 1 covers Rust, TOML, JSON, and Markdown. More languages come later.
 
 mod json;
+mod json_buffer;
 mod markdown;
 mod markdown_buffer;
 mod rust;
@@ -139,6 +140,7 @@ pub fn scan_buffer(ft: Filetype, text: &str) -> Vec<Vec<TokenSpan>> {
         Filetype::Rust => rust_buffer::scan_rust_buffer(text),
         Filetype::Toml => toml_buffer::scan_toml_buffer(text),
         Filetype::Markdown => markdown_buffer::scan_markdown_buffer(text),
+        Filetype::Json => json_buffer::scan_json_buffer(text),
         _ => {
             // Fallback: run the existing line-by-line scanners.
             let mut result = Vec::new();
@@ -168,13 +170,14 @@ fn filetype_to_lang_id(ft: Filetype) -> Option<LanguageId> {
         Filetype::Rust => Some(LanguageId("rust")),
         Filetype::Toml => Some(LanguageId("toml")),
         Filetype::Markdown => Some(LanguageId("markdown")),
+        Filetype::Json => Some(LanguageId("json")),
         _ => None,
     }
 }
 
 /// Parse structural features (highlights, folds, symbols, brackets) for
 /// a buffer via sylven. Returns `None` for filetypes without a registered
-/// plugin (e.g. Plain, JSON).
+/// plugin (e.g. Plain).
 pub fn parse_features(ft: Filetype, text: &str) -> Option<SyntaxFeatures> {
     let lang_id = filetype_to_lang_id(ft)?;
     let snapshot = TextSnapshot::new(DocumentId(0), RevisionId(0), text);
@@ -184,8 +187,9 @@ pub fn parse_features(ft: Filetype, text: &str) -> Option<SyntaxFeatures> {
 /// Return structural fold ranges as `(start_line, end_line)` pairs (inclusive,
 /// 0-based). For Rust, these are `{…}` block pairs; for TOML, multi-line
 /// arrays/inline tables and table-header sections; for Markdown, fenced code
-/// blocks and heading sections. Always spans at least two lines. Returns an
-/// empty `Vec` for filetypes without a sylven plugin.
+/// blocks and heading sections; for JSON, multi-line objects and arrays.
+/// Always spans at least two lines. Returns an empty `Vec` for filetypes
+/// without a sylven plugin.
 pub fn fold_line_ranges(ft: Filetype, text: &str) -> Vec<(usize, usize)> {
     let Some(features) = parse_features(ft, text) else {
         return Vec::new();
