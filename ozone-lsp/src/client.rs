@@ -22,7 +22,7 @@ use std::thread::JoinHandle;
 use ozone_editor::Diagnostic;
 
 use crate::json::Json;
-use crate::protocol::{Location, ServerCapabilities};
+use crate::protocol::{CompletionItem, Location, ServerCapabilities};
 use crate::{protocol, rpc};
 
 /// A decoded message from the server, delivered to the GUI via the channel.
@@ -41,6 +41,9 @@ pub enum ServerMessage {
     /// returns `null` (no info at point). `id` matches the value returned by
     /// [`LspClient::hover`].
     HoverResult { id: i64, contents: Option<String> },
+    /// `textDocument/completion` response. `id` matches the value returned by
+    /// [`LspClient::completion`].
+    CompletionResult { id: i64, items: Vec<CompletionItem> },
 }
 
 /// Method names of in-flight requests, looked up by the reader thread when a
@@ -220,6 +223,33 @@ impl LspClient {
         id
     }
 
+    /// Send a `textDocument/completion` request. Returns the request id so the
+    /// caller can match the [`ServerMessage::CompletionResult`] response.
+    /// `line` and `character` are 0-based; `character` must be a UTF-16
+    /// code-unit offset (remap byte columns before calling).
+    pub fn completion(&mut self, uri: &str, line: u32, character: u32) -> i64 {
+        let id = self.alloc_id();
+        let params = Json::Object(vec![
+            (
+                "textDocument".into(),
+                Json::Object(vec![("uri".into(), Json::Str(uri.into()))]),
+            ),
+            (
+                "position".into(),
+                Json::Object(vec![
+                    ("line".into(), Json::Num(f64::from(line))),
+                    ("character".into(), Json::Num(f64::from(character))),
+                ]),
+            ),
+        ]);
+        self.pending
+            .lock()
+            .unwrap()
+            .insert(id, "textDocument/completion");
+        self.send(&rpc::request(id, "textDocument/completion", params));
+        id
+    }
+
     /// Politely ask the server to shut down, then exit.
     pub fn shutdown(&mut self) {
         let id = self.alloc_id();
@@ -275,6 +305,9 @@ fn initialize_params(root_uri: &str) -> Json {
                             ]),
                         )]),
                     ),
+                    // No `snippetSupport` — servers send plain `insertText`
+                    // (no `$1`/`${1:name}` placeholders to strip).
+                    ("completion".into(), Json::Object(vec![])),
                 ]),
             )]),
         ),
@@ -372,6 +405,11 @@ fn classify(msg: &Json, pending: &PendingRequests) -> Option<ServerMessage> {
             let result = msg.get("result").unwrap_or(&Json::Null);
             let contents = protocol::parse_hover_result(result);
             Some(ServerMessage::HoverResult { id, contents })
+        }
+        "textDocument/completion" => {
+            let result = msg.get("result").unwrap_or(&Json::Null);
+            let items = protocol::parse_completion_result(result);
+            Some(ServerMessage::CompletionResult { id, items })
         }
         _ => None,
     }

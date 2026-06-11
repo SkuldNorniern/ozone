@@ -20,6 +20,6 @@ pub mod rpc;
 pub use client::{LspClient, ServerMessage};
 pub use json::{Json, parse as parse_json};
 pub use protocol::{
-    Location, ServerCapabilities, parse_goto_definition_result, parse_hover_result,
-    parse_publish_diagnostics,
+    CompletionItem, Location, ServerCapabilities, parse_completion_result,
+    parse_goto_definition_result, parse_hover_result, parse_publish_diagnostics,
 };

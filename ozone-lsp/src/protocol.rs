@@ -112,6 +112,57 @@ pub fn parse_goto_definition_result(result: &Json) -> Vec<Location> {
     }
 }
 
+/// One `CompletionItem` from a `textDocument/completion` response, reduced to
+/// what the popup needs: a label + detail to display, and the text to splice
+/// in on commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletionItem {
+    /// Primary text shown in the popup (e.g. `HashMap`).
+    pub label: String,
+    /// Secondary text shown dim/right-aligned (e.g. a type signature).
+    pub detail: Option<String>,
+    /// Text to insert in place of the prefix the user typed. Falls back to
+    /// `label` when the server omits `insertText`.
+    pub insert_text: String,
+}
+
+fn completion_item(value: &Json) -> Option<CompletionItem> {
+    let label = value.get("label").and_then(Json::as_str)?.to_string();
+    let detail = value
+        .get("detail")
+        .and_then(Json::as_str)
+        .map(str::to_string);
+    let insert_text = value
+        .get("insertText")
+        .and_then(Json::as_str)
+        .unwrap_or(&label)
+        .to_string();
+    Some(CompletionItem {
+        label,
+        detail,
+        insert_text,
+    })
+}
+
+/// Decode a `textDocument/completion` result.
+///
+/// The LSP spec allows `CompletionItem[] | CompletionList | null`, where
+/// `CompletionList` is `{ isIncomplete, items }`.
+pub fn parse_completion_result(result: &Json) -> Vec<CompletionItem> {
+    match result {
+        Json::Null => vec![],
+        Json::Array(items) => items.iter().filter_map(completion_item).collect(),
+        Json::Object(_) => result
+            .get("items")
+            .and_then(Json::as_array)
+            .unwrap_or(&[])
+            .iter()
+            .filter_map(completion_item)
+            .collect(),
+        _ => vec![],
+    }
+}
+
 /// Decode a `textDocument/hover` result into plain text.
 ///
 /// The spec allows:
@@ -318,6 +369,33 @@ mod tests {
         assert!(!parsed.code_action);
         assert!(!parsed.document_formatting);
         assert!(!parsed.inlay_hint);
+    }
+
+    #[test]
+    fn parse_completion_list_and_array() {
+        // CompletionList { isIncomplete, items }
+        let list = json::parse(
+            r#"{"isIncomplete":false,"items":[
+                {"label":"HashMap","detail":"struct HashMap<K, V>"},
+                {"label":"HashSet","insertText":"HashSet"}
+            ]}"#,
+        )
+        .unwrap();
+        let items = parse_completion_result(&list);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].label, "HashMap");
+        assert_eq!(items[0].detail.as_deref(), Some("struct HashMap<K, V>"));
+        assert_eq!(items[0].insert_text, "HashMap"); // falls back to label
+        assert_eq!(items[1].insert_text, "HashSet");
+
+        // Bare CompletionItem[]
+        let arr = json::parse(r#"[{"label":"foo"}]"#).unwrap();
+        let items = parse_completion_result(&arr);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].label, "foo");
+        assert!(items[0].detail.is_none());
+
+        assert!(parse_completion_result(&Json::Null).is_empty());
     }
 
     #[test]
