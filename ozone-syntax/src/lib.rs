@@ -175,6 +175,30 @@ pub fn parse_features(ft: Filetype, text: &str) -> Option<SyntaxFeatures> {
     Some(engine().parse(lang_id, &snapshot)?.features)
 }
 
+/// Return structural fold ranges as `(start_line, end_line)` pairs (inclusive,
+/// 0-based). For Rust, these are `{…}` block pairs that span at least two
+/// lines. Returns an empty `Vec` for filetypes without a sylven plugin.
+pub fn fold_line_ranges(ft: Filetype, text: &str) -> Vec<(usize, usize)> {
+    let Some(features) = parse_features(ft, text) else {
+        return Vec::new();
+    };
+    features
+        .folds
+        .iter()
+        .map(|r| {
+            let start = byte_to_line(text, r.start().to_usize());
+            let end = byte_to_line(text, r.end().to_usize().saturating_sub(1));
+            (start, end)
+        })
+        .filter(|&(s, e)| e > s)
+        .collect()
+}
+
+pub(crate) fn byte_to_line(text: &str, offset: usize) -> usize {
+    let safe = offset.min(text.len());
+    text[..safe].bytes().filter(|&b| b == b'\n').count()
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

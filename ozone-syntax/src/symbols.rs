@@ -5,7 +5,7 @@
 
 use sylven::SymbolKind as SylvenKind;
 
-use crate::{Filetype, parse_features};
+use crate::{Filetype, byte_to_line, parse_features};
 
 /// A kind of document symbol, used for the picker's detail label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,7 +72,7 @@ fn rust_symbols(text: &str) -> Vec<Symbol> {
         .map(|sym| Symbol {
             name: sym.name,
             kind: sylven_kind_to_local(sym.kind),
-            line: byte_offset_to_line(text, sym.name_range.start().to_usize()),
+            line: byte_to_line(text, sym.name_range.start().to_usize()),
         })
         .collect()
 }
@@ -89,11 +89,6 @@ fn sylven_kind_to_local(k: SylvenKind) -> SymbolKind {
         SylvenKind::TypeAlias => SymbolKind::TypeAlias,
         SylvenKind::Macro => SymbolKind::Macro,
     }
-}
-
-fn byte_offset_to_line(text: &str, offset: usize) -> usize {
-    let safe = offset.min(text.len());
-    text[..safe].bytes().filter(|&b| b == b'\n').count()
 }
 
 fn markdown_symbols(text: &str) -> Vec<Symbol> {
