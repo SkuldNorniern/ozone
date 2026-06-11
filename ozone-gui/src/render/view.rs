@@ -151,17 +151,18 @@ pub(super) fn draw_view(
     // Populate or refresh the per-buffer highlight cache.
     // For terminal buffers there's nothing to highlight — skip.
     let buf_revision = buf.revision();
-    let cached_spans: &[Vec<ozone_syntax::TokenSpan>] = if term_grid.is_none()
-        && !matches!(ft, Filetype::Plain)
-    {
-        let entry = highlight_cache.entry(buffer_id).or_insert((u64::MAX, Vec::new()));
-        if entry.0 != buf_revision {
-            *entry = (buf_revision, scan_buffer(ft, &buf.text()));
-        }
-        &entry.1
-    } else {
-        &[]
-    };
+    let cached_spans: &[Vec<ozone_syntax::TokenSpan>] =
+        if term_grid.is_none() && !matches!(ft, Filetype::Plain) {
+            let entry = highlight_cache
+                .entry(buffer_id)
+                .or_insert((u64::MAX, Vec::new()));
+            if entry.0 != buf_revision {
+                *entry = (buf_revision, scan_buffer(ft, &buf.text()));
+            }
+            &entry.1
+        } else {
+            &[]
+        };
 
     let visible_line_end = (scroll + visible + 1).min(line_count);
     let visible_texts = buf.lines_slice(scroll, visible_line_end);
@@ -398,7 +399,7 @@ pub(super) fn draw_view(
                     draw_line_with_inline_virtual_text(
                         ctx,
                         line_text,
-                        &shift_token_spans(&spans, segment_start, segment_end),
+                        &shift_token_spans(spans, segment_start, segment_end),
                         &inline_virtual,
                         segment_abs_start,
                         text_x,
@@ -417,7 +418,7 @@ pub(super) fn draw_view(
                     draw_highlighted(
                         ctx,
                         line_text,
-                        &shift_token_spans(&spans, segment_start, segment_end),
+                        &shift_token_spans(spans, segment_start, segment_end),
                         text_x,
                         baseline,
                         metrics.char_w,

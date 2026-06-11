@@ -33,7 +33,9 @@ pub(super) fn scan_rust_buffer(text: &str) -> Vec<Vec<TokenSpan>> {
         let end = tok.range.end().to_usize();
 
         // Find which line `start` falls on.
-        let line_idx = line_starts.partition_point(|&ls| ls <= start).saturating_sub(1);
+        let line_idx = line_starts
+            .partition_point(|&ls| ls <= start)
+            .saturating_sub(1);
         let line_start_byte = line_starts[line_idx];
 
         let tok_start_col = start - line_start_byte;
@@ -169,7 +171,10 @@ mod tests {
     use super::*;
 
     fn kinds_on_line(text: &str, line: usize) -> Vec<TokenKind> {
-        scan_rust_buffer(text)[line].iter().map(|s| s.kind).collect()
+        scan_rust_buffer(text)[line]
+            .iter()
+            .map(|s| s.kind)
+            .collect()
     }
 
     #[test]

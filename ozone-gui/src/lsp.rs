@@ -248,12 +248,9 @@ impl Lsp {
                 ServerMessage::HoverResult { id, contents } => {
                     if self.pending_hover == Some(id) {
                         self.pending_hover = None;
-                        match contents {
-                            Some(text) => {
-                                ws.notify(NotifyLevel::Info, text);
-                                changed = true;
-                            }
-                            None => {}
+                        if let Some(text) = contents {
+                            ws.notify(NotifyLevel::Info, text);
+                            changed = true;
                         }
                     }
                 }

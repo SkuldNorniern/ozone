@@ -263,7 +263,7 @@ impl OzoneGui {
                 srch.as_ref(),
                 &TermCells::new(),
                 &imgs,
-                &mut *lock(&callback_highlight_cache),
+                &mut lock(&callback_highlight_cache),
                 ActiveMods::default(),
                 true,
                 &mut scratch_char_w,

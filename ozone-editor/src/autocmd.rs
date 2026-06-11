@@ -99,9 +99,9 @@ fn pattern_matches(pattern: &str, text: Option<&str>) -> bool {
 mod tests {
     use std::path::PathBuf;
 
+    use crate::ViewId;
     use ozone_buffer::BufferId;
     use ozone_config::AutocmdConfig;
-    use crate::ViewId;
 
     use super::*;
 
