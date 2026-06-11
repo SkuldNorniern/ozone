@@ -141,6 +141,13 @@ fn run(cmd_line: &str, cwd: Option<&std::path::Path>, input: Option<String>) -> 
     if let Some(dir) = cwd {
         command.current_dir(dir);
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // Without this, spawning cmd.exe flashes a console window.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
     command
         .stdin(if input.is_some() {
             Stdio::piped()
