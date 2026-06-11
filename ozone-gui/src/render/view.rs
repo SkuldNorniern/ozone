@@ -4,7 +4,7 @@ use aurea::render::{DrawingContext, Font, Path, PathCommand, Point, Rect};
 use ozone_buffer::{BufferKind, Pos};
 use ozone_config::{Config, CursorStyle, LineNumbers};
 use ozone_editor::{Decoration, DecorationKind, ViewId, VirtualPos, Workspace, fold};
-use ozone_syntax::{Filetype, ScanState, TokenKind, scan_line};
+use ozone_syntax::{Filetype, TokenKind, scan_buffer};
 
 use super::TextMetrics;
 use super::decorations::{
@@ -19,7 +19,7 @@ use crate::components::pill::draw_pill;
 use crate::layout::*;
 use crate::terminals::draw_term_row;
 use crate::theme::{palette, solid, stroke, token_color};
-use crate::{ImageCache, TermCells};
+use crate::{HighlightCache, ImageCache, TermCells};
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw_view(
@@ -33,6 +33,7 @@ pub(super) fn draw_view(
     welcome_bindings: &[(String, String)],
     term_cells: &TermCells,
     images: &ImageCache,
+    highlight_cache: &mut HighlightCache,
     cursor_visible: bool,
 ) -> AureaResult<()> {
     let Some(buffer_id) = ws.views.get(&view_id).map(|view| view.buffer_id) else {
@@ -147,13 +148,20 @@ pub(super) fn draw_view(
         )?;
     }
 
-    let mut scan_state = ScanState::clean();
-    if !matches!(ft, Filetype::Plain | Filetype::Toml) {
-        for text in buf.lines_slice(0, scroll) {
-            let (_, ns) = scan_line(ft, &text, scan_state);
-            scan_state = ns;
+    // Populate or refresh the per-buffer highlight cache.
+    // For terminal buffers there's nothing to highlight — skip.
+    let buf_revision = buf.revision();
+    let cached_spans: &[Vec<ozone_syntax::TokenSpan>] = if term_grid.is_none()
+        && !matches!(ft, Filetype::Plain)
+    {
+        let entry = highlight_cache.entry(buffer_id).or_insert((u64::MAX, Vec::new()));
+        if entry.0 != buf_revision {
+            *entry = (buf_revision, scan_buffer(ft, &buf.text()));
         }
-    }
+        &entry.1
+    } else {
+        &[]
+    };
 
     let visible_line_end = (scroll + visible + 1).min(line_count);
     let visible_texts = buf.lines_slice(scroll, visible_line_end);
@@ -169,12 +177,10 @@ pub(super) fn draw_view(
             vec![(0, line_prefix_end(&full_line_text, text_cols))]
         };
         let line_start = buf.pos_to_offset(Pos::new(line_idx, 0));
-        let (spans, new_state) = if term_grid.is_none() {
-            scan_line(ft, &full_line_text, scan_state)
-        } else {
-            (Vec::new(), scan_state)
-        };
-        scan_state = new_state;
+        let spans: &[ozone_syntax::TokenSpan] = cached_spans
+            .get(line_idx)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
 
         // Folding: lines inside a collapsed region are not drawn (the syntax
         // scan state above has already advanced past them). The header line

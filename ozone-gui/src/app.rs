@@ -26,7 +26,7 @@ use crate::overlay::search::SearchState;
 use crate::overlay::whichkey::{WhichKeyView, draw_which_key};
 use crate::render::draw_editor;
 use crate::theme::initialize as initialize_theme;
-use crate::{ImageCache, TermCells, editor_font, lock};
+use crate::{HighlightCache, ImageCache, TermCells, editor_font, lock};
 
 /// How long a bare modifier must be held alone before the which-key hint shows.
 const MOD_HINT_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
@@ -243,6 +243,7 @@ impl OzoneGui {
         let notifications_for_draw = notifications.clone();
         let which_key_for_draw = which_key.clone();
         let images_for_draw = images.clone();
+        let callback_highlight_cache = Mutex::new(HighlightCache::new());
 
         raw_canvas.set_draw_callback(move |ctx| {
             let pal = lock(palette_for_draw.as_ref());
@@ -262,6 +263,7 @@ impl OzoneGui {
                 srch.as_ref(),
                 &TermCells::new(),
                 &imgs,
+                &mut *lock(&callback_highlight_cache),
                 ActiveMods::default(),
                 true,
                 &mut scratch_char_w,
@@ -300,6 +302,7 @@ impl OzoneGui {
             let config = self.config.clone();
             let welcome_bindings = welcome_keymap_rows(&self.keymap, &self.commands);
             let mut scratch_char_w = 0.0;
+            let mut init_cache = HighlightCache::new();
             canvas.draw(|ctx| {
                 draw_editor(
                     ctx,
@@ -309,6 +312,7 @@ impl OzoneGui {
                     None,
                     &TermCells::new(),
                     &ImageCache::new(),
+                    &mut init_cache,
                     ActiveMods::default(),
                     true,
                     &mut scratch_char_w,
@@ -464,6 +468,7 @@ impl OzoneGui {
                         srch.as_ref(),
                         &state.terms.cells,
                         &imgs,
+                        &mut state.highlight_cache,
                         active_mods,
                         state.cursor_visible,
                         &mut state.measured_char_w,

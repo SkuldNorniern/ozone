@@ -24,7 +24,7 @@ use crate::overlay::search::{SearchState, handle_search_key, search_input_text, 
 use crate::overlay::whichkey::WhichKeyView;
 use crate::statusbar::buffer_dot_at;
 use crate::terminals::Terminals;
-use crate::{ImageCache, OzoneGui, lock};
+use crate::{HighlightCache, ImageCache, OzoneGui, lock};
 
 pub(crate) enum EventResult {
     Continue,
@@ -63,6 +63,7 @@ pub(crate) struct AppState {
     pub(crate) mouse: MouseState,
     /// GUI-side LSP orchestration (lazy server, doc sync, diagnostics routing).
     pub(crate) lsp: Lsp,
+    pub(crate) highlight_cache: HighlightCache,
     pub(crate) cursor_visible: bool,
     pub(crate) last_cursor_blink: Instant,
     pub(crate) needs_redraw: bool,
@@ -113,6 +114,7 @@ impl AppState {
             mod_hint_visible: false,
             mouse: MouseState::default(),
             lsp: Lsp::new(),
+            highlight_cache: HighlightCache::new(),
             cursor_visible: true,
             last_cursor_blink: Instant::now(),
             needs_redraw: false,
