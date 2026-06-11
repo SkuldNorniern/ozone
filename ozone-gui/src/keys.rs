@@ -18,6 +18,7 @@ use ozone_syntax::{Filetype, symbols};
 
 use crate::actions::{insert_text_raw, run_cmd};
 use crate::input::{keycode_to_char, keystroke_from};
+use crate::lsp::Lsp;
 use crate::overlay::minibuffer::Minibuffer;
 use crate::overlay::notify::Notifications;
 use crate::overlay::picker::{
@@ -50,6 +51,7 @@ pub(crate) fn handle_key(
     pending: &mut Vec<KeyStroke>,
     ov: &mut Overlays,
     mru: &[BufferId],
+    lsp: &mut Lsp,
 ) -> bool {
     use aurea::KeyCode::*;
 
@@ -95,7 +97,7 @@ pub(crate) fn handle_key(
                 // Everything is a command: run it, then perform any frontend
                 // action it requested (open palette / picker / search overlay).
                 run_cmd(&cmd, ws, reg, autocmds);
-                apply_ui_intents(ws, reg, ov, mru);
+                apply_ui_intents(ws, reg, ov, mru, lsp);
                 return true;
             }
             KeymapOutcome::Pending => {
@@ -263,6 +265,7 @@ pub(crate) fn apply_ui_intents(
     reg: &CommandRegistry,
     ov: &mut Overlays,
     mru: &[BufferId],
+    lsp: &mut Lsp,
 ) -> bool {
     let intents = ws.drain_ui_intents();
     let applied = !intents.is_empty();
@@ -299,6 +302,12 @@ pub(crate) fn apply_ui_intents(
                 timeout_ms,
             } => {
                 ov.notifications.push(level, text, timeout_ms);
+            }
+            UiIntent::LspGotoDefinition => {
+                lsp.request_goto_definition(ws);
+            }
+            UiIntent::LspHover => {
+                lsp.request_hover(ws);
             }
         }
     }

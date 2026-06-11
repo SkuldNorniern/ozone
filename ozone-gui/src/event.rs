@@ -198,6 +198,7 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                         notifications: &mut notifications,
                     },
                     &state.buffer_mru,
+                    &mut state.lsp,
                 ) {
                     state.needs_redraw = true;
                 }
@@ -222,6 +223,7 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                         notifications: &mut notifications,
                     },
                     &state.buffer_mru,
+                    &mut state.lsp,
                 ) {
                     state.needs_redraw = true;
                 }
@@ -255,6 +257,7 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                         notifications: &mut notifications,
                     },
                     &state.buffer_mru,
+                    &mut state.lsp,
                 ) {
                     state.needs_redraw = true;
                 }

@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use ozone_buffer::{Buffer, BufferId, BufferKind, Pos};
 use ozone_config::Config;
 use ozone_editor::{Diagnostic, NamespaceId, NotifyLevel, Workspace};
-use ozone_lsp::{LspClient, ServerMessage};
+use ozone_lsp::{Location, LspClient, ServerMessage};
 use ozone_syntax::Filetype;
 
 /// Coalesce rapid edits: send at most one `didChange` per document per window.
@@ -39,6 +39,10 @@ pub(crate) struct Lsp {
     /// Diagnostics decoration namespace, allocated on first start.
     namespace: Option<NamespaceId>,
     docs: HashMap<BufferId, Doc>,
+    /// In-flight `textDocument/definition` request id, if any.
+    pending_goto: Option<i64>,
+    /// In-flight `textDocument/hover` request id, if any.
+    pending_hover: Option<i64>,
 }
 
 impl Lsp {
@@ -80,8 +84,59 @@ impl Lsp {
         let mut changed = false;
         changed |= self.open_and_update(ws, &open);
         changed |= self.close_gone(ws, &open);
-        changed |= self.drain_diagnostics(ws);
+        changed |= self.drain_messages(ws);
         changed
+    }
+
+    /// Send `textDocument/definition` for the active buffer's cursor position.
+    /// Requires that the buffer is already mirrored (didOpen sent). No-op if
+    /// the server isn't running or the buffer isn't a mirrored Rust file.
+    pub(crate) fn request_goto_definition(&mut self, ws: &Workspace) {
+        let Some(client) = self.client.as_mut() else {
+            return;
+        };
+        let Some(view) = ws.active_view() else {
+            return;
+        };
+        let buf_id = view.buffer_id;
+        let cursor = view.cursor;
+        let Some(doc) = self.docs.get(&buf_id) else {
+            return; // buffer not yet mirrored — server doesn't know about it
+        };
+        let utf16_col = ws
+            .buffers
+            .get(&buf_id)
+            .and_then(|b| b.line(cursor.line))
+            .map(|line| byte_to_utf16_col(&line, cursor.col))
+            .unwrap_or(cursor.col);
+        let uri = doc.uri.clone();
+        let id = client.goto_definition(&uri, cursor.line as u32, utf16_col as u32);
+        self.pending_goto = Some(id);
+    }
+
+    /// Send `textDocument/hover` for the active buffer's cursor position.
+    /// Shows the result as a notification. No-op conditions same as `request_goto_definition`.
+    pub(crate) fn request_hover(&mut self, ws: &mut Workspace) {
+        let Some(client) = self.client.as_mut() else {
+            return;
+        };
+        let Some(view) = ws.active_view() else {
+            return;
+        };
+        let buf_id = view.buffer_id;
+        let cursor = view.cursor;
+        let Some(doc) = self.docs.get(&buf_id) else {
+            return;
+        };
+        let utf16_col = ws
+            .buffers
+            .get(&buf_id)
+            .and_then(|b| b.line(cursor.line))
+            .map(|line| byte_to_utf16_col(&line, cursor.col))
+            .unwrap_or(cursor.col);
+        let uri = doc.uri.clone();
+        let id = client.hover(&uri, cursor.line as u32, utf16_col as u32);
+        self.pending_hover = Some(id);
     }
 
     /// `didOpen` new Rust buffers and `didChange` ones whose revision advanced
@@ -151,9 +206,9 @@ impl Lsp {
         true
     }
 
-    /// Drain server messages and publish diagnostics, matching each `uri` back to
-    /// an open buffer by canonical path.
-    fn drain_diagnostics(&mut self, ws: &mut Workspace) -> bool {
+    /// Drain all server messages: route diagnostics to the decoration store and
+    /// goto-definition results to a cursor jump.
+    fn drain_messages(&mut self, ws: &mut Workspace) -> bool {
         let Some(client) = self.client.as_ref() else {
             return false;
         };
@@ -164,22 +219,45 @@ impl Lsp {
         let ns = self.namespace.unwrap_or(0);
         let mut changed = false;
         for msg in messages {
-            let ServerMessage::Diagnostics { uri, diagnostics } = msg;
-            let Some(target) = uri_to_path(&uri).map(|p| canonicalize(&p)) else {
-                continue;
-            };
-            let Some(id) = self
-                .docs
-                .iter()
-                .find(|(_, d)| d.canonical == target)
-                .map(|(id, _)| *id)
-            else {
-                continue;
-            };
-            // LSP columns are UTF-16 code units; remap to byte columns first.
-            let remapped = remap_to_byte_cols(ws, id, diagnostics);
-            ws.publish_diagnostics(id, ns, &remapped);
-            changed = true;
+            match msg {
+                ServerMessage::Diagnostics { uri, diagnostics } => {
+                    let Some(target) = uri_to_path(&uri).map(|p| canonicalize(&p)) else {
+                        continue;
+                    };
+                    let Some(id) = self
+                        .docs
+                        .iter()
+                        .find(|(_, d)| d.canonical == target)
+                        .map(|(id, _)| *id)
+                    else {
+                        continue;
+                    };
+                    let remapped = remap_to_byte_cols(ws, id, diagnostics);
+                    ws.publish_diagnostics(id, ns, &remapped);
+                    changed = true;
+                }
+                ServerMessage::GotoDefinitionResult { id, locations } => {
+                    if self.pending_goto == Some(id) {
+                        self.pending_goto = None;
+                        if let Some(loc) = locations.into_iter().next() {
+                            jump_to_location(ws, loc);
+                            changed = true;
+                        }
+                    }
+                }
+                ServerMessage::HoverResult { id, contents } => {
+                    if self.pending_hover == Some(id) {
+                        self.pending_hover = None;
+                        match contents {
+                            Some(text) => {
+                                ws.notify(NotifyLevel::Info, text);
+                                changed = true;
+                            }
+                            None => {}
+                        }
+                    }
+                }
+            }
         }
         changed
     }
@@ -224,6 +302,70 @@ fn utf16_to_byte_col(line: &str, utf16: usize) -> usize {
         units += ch.len_utf16();
     }
     line.len()
+}
+
+/// Byte column of the `byte_col`-th byte within `line`, expressed as a UTF-16
+/// code-unit offset. Inverse of [`utf16_to_byte_col`]; used before sending a
+/// cursor position to the server.
+fn byte_to_utf16_col(line: &str, byte_col: usize) -> usize {
+    line[..byte_col.min(line.len())]
+        .chars()
+        .map(|c| c.len_utf16())
+        .sum()
+}
+
+/// Jump the workspace to an LSP [`Location`]: switch to the target file (or
+/// open it if not already loaded), move the cursor, push a jump-list entry.
+fn jump_to_location(ws: &mut Workspace, loc: Location) {
+    let Some(path) = uri_to_path(&loc.uri) else {
+        return;
+    };
+    let canonical = canonicalize(&path);
+
+    // Reuse an already-open buffer for this file when possible.
+    let existing_id = ws.buffers.iter().find_map(|(id, buf)| {
+        let buf_path = match &buf.kind {
+            BufferKind::File(p) => p.clone(),
+            _ => return None,
+        };
+        if canonicalize(&buf_path) == canonical {
+            Some(*id)
+        } else {
+            None
+        }
+    });
+
+    // (Both switch_active_buffer and open_file push a jump internally.)
+    let view_id = if let Some(buf_id) = existing_id {
+        ws.switch_active_buffer(buf_id);
+        ws.active_view_id
+    } else {
+        match ws.open_file(path) {
+            Ok((_, vid)) => Some(vid),
+            Err(_) => return,
+        }
+    };
+
+    let Some(view_id) = view_id else { return };
+    let Some(buf_id) = ws.views.get(&view_id).map(|v| v.buffer_id) else {
+        return;
+    };
+    let (line, col) = {
+        let Some(buf) = ws.buffers.get(&buf_id) else {
+            return;
+        };
+        let line = loc.line.min(buf.line_count().saturating_sub(1));
+        let byte_col = buf
+            .line(line)
+            .map(|l| utf16_to_byte_col(&l, loc.character))
+            .unwrap_or(0);
+        (line, byte_col)
+    };
+    if let Some(view) = ws.views.get_mut(&view_id) {
+        view.cursor = Pos::new(line, col);
+        view.col_memory = col;
+        view.scroll_to_cursor(view.page_height.max(1));
+    }
 }
 
 /// Open file buffers whose filetype is Rust.
