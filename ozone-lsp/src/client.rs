@@ -12,14 +12,17 @@
 //! bytes already buffered — to a reader thread that owns it for the rest of the
 //! session. Sends go straight to the child's stdin from the caller's thread.
 
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use ozone_editor::Diagnostic;
 
 use crate::json::Json;
+use crate::protocol::Location;
 use crate::{protocol, rpc};
 
 /// A decoded message from the server, delivered to the GUI via the channel.
@@ -30,7 +33,19 @@ pub enum ServerMessage {
         uri: String,
         diagnostics: Vec<Diagnostic>,
     },
+    /// Response to a `textDocument/definition` request. `id` matches the value
+    /// returned by [`LspClient::goto_definition`] so the caller can correlate
+    /// late-arriving responses with the right request.
+    GotoDefinitionResult { id: i64, locations: Vec<Location> },
+    /// `textDocument/hover` response. `contents` is `None` when the server
+    /// returns `null` (no info at point). `id` matches the value returned by
+    /// [`LspClient::hover`].
+    HoverResult { id: i64, contents: Option<String> },
 }
+
+/// Method names of in-flight requests, looked up by the reader thread when a
+/// response arrives. Shared between the sender (main thread) and the reader.
+type PendingRequests = Arc<Mutex<HashMap<i64, &'static str>>>;
 
 /// A running language-server connection.
 pub struct LspClient {
@@ -38,6 +53,7 @@ pub struct LspClient {
     child: Child,
     next_id: i64,
     rx: Receiver<ServerMessage>,
+    pending: PendingRequests,
     _reader: JoinHandle<()>,
 }
 
@@ -72,14 +88,19 @@ impl LspClient {
             .map_err(|e| e.to_string())?;
         stdin.flush().ok();
 
+        let pending: PendingRequests = Arc::new(Mutex::new(HashMap::new()));
         let (tx, rx) = channel();
-        let reader = std::thread::spawn(move || reader_loop(stdout, buf, tx));
+        let reader = {
+            let pending = Arc::clone(&pending);
+            std::thread::spawn(move || reader_loop(stdout, buf, tx, pending))
+        };
 
         Ok(Self {
             stdin,
             child,
             next_id: 2,
             rx,
+            pending,
             _reader: reader,
         })
     }
@@ -135,6 +156,60 @@ impl LspClient {
         self.send(&rpc::notification("textDocument/didClose", params));
     }
 
+    /// Send a `textDocument/definition` request. Returns the request id so the
+    /// caller can match the [`ServerMessage::GotoDefinitionResult`] response.
+    /// `line` and `character` are 0-based; `character` must be a UTF-16
+    /// code-unit offset (remap byte columns before calling).
+    pub fn goto_definition(&mut self, uri: &str, line: u32, character: u32) -> i64 {
+        let id = self.alloc_id();
+        let params = Json::Object(vec![
+            (
+                "textDocument".into(),
+                Json::Object(vec![("uri".into(), Json::Str(uri.into()))]),
+            ),
+            (
+                "position".into(),
+                Json::Object(vec![
+                    ("line".into(), Json::Num(f64::from(line))),
+                    ("character".into(), Json::Num(f64::from(character))),
+                ]),
+            ),
+        ]);
+        self.pending
+            .lock()
+            .unwrap()
+            .insert(id, "textDocument/definition");
+        self.send(&rpc::request(id, "textDocument/definition", params));
+        id
+    }
+
+    /// Send a `textDocument/hover` request. Returns the request id so the
+    /// caller can match the [`ServerMessage::HoverResult`] response.
+    /// `line` and `character` are 0-based; `character` must be a UTF-16
+    /// code-unit offset (remap byte columns before calling).
+    pub fn hover(&mut self, uri: &str, line: u32, character: u32) -> i64 {
+        let id = self.alloc_id();
+        let params = Json::Object(vec![
+            (
+                "textDocument".into(),
+                Json::Object(vec![("uri".into(), Json::Str(uri.into()))]),
+            ),
+            (
+                "position".into(),
+                Json::Object(vec![
+                    ("line".into(), Json::Num(f64::from(line))),
+                    ("character".into(), Json::Num(f64::from(character))),
+                ]),
+            ),
+        ]);
+        self.pending
+            .lock()
+            .unwrap()
+            .insert(id, "textDocument/hover");
+        self.send(&rpc::request(id, "textDocument/hover", params));
+        id
+    }
+
     /// Politely ask the server to shut down, then exit.
     pub fn shutdown(&mut self) {
         let id = self.alloc_id();
@@ -177,7 +252,20 @@ fn initialize_params(root_uri: &str) -> Json {
             "capabilities".into(),
             Json::Object(vec![(
                 "textDocument".into(),
-                Json::Object(vec![("publishDiagnostics".into(), Json::Object(vec![]))]),
+                Json::Object(vec![
+                    ("publishDiagnostics".into(), Json::Object(vec![])),
+                    ("definition".into(), Json::Object(vec![])),
+                    (
+                        "hover".into(),
+                        Json::Object(vec![(
+                            "contentFormat".into(),
+                            Json::Array(vec![
+                                Json::Str("plaintext".into()),
+                                Json::Str("markdown".into()),
+                            ]),
+                        )]),
+                    ),
+                ]),
             )]),
         ),
     ])
@@ -213,13 +301,18 @@ fn read_until_response(
 
 /// Own `stdout` for the session: parse frames and forward decoded messages until
 /// the pipe closes or the receiver is dropped.
-fn reader_loop(mut stdout: ChildStdout, mut buf: Vec<u8>, tx: Sender<ServerMessage>) {
+fn reader_loop(
+    mut stdout: ChildStdout,
+    mut buf: Vec<u8>,
+    tx: Sender<ServerMessage>,
+    pending: PendingRequests,
+) {
     let mut tmp = [0u8; 8192];
     loop {
         loop {
             match rpc::take_message(&mut buf) {
                 Ok(Some(msg)) => {
-                    if let Some(out) = classify(&msg)
+                    if let Some(out) = classify(&msg, &pending)
                         && tx.send(out).is_err()
                     {
                         return; // GUI dropped the client
@@ -241,14 +334,34 @@ fn reader_loop(mut stdout: ChildStdout, mut buf: Vec<u8>, tx: Sender<ServerMessa
     }
 }
 
-/// Turn one server message into a [`ServerMessage`], or `None` for messages we
-/// don't consume yet (log/progress/responses).
-fn classify(msg: &Json) -> Option<ServerMessage> {
-    match msg.get("method").and_then(Json::as_str)? {
-        "textDocument/publishDiagnostics" => {
-            let params = msg.get("params")?;
-            let (uri, diagnostics) = protocol::parse_publish_diagnostics(params)?;
-            Some(ServerMessage::Diagnostics { uri, diagnostics })
+/// Turn one server frame into a [`ServerMessage`], or `None` for frames we
+/// don't consume (log/progress/unknown notifications and unknown responses).
+fn classify(msg: &Json, pending: &PendingRequests) -> Option<ServerMessage> {
+    // Notifications have a `method` but no `id`.
+    if let Some(method) = msg.get("method").and_then(Json::as_str) {
+        return match method {
+            "textDocument/publishDiagnostics" => {
+                let params = msg.get("params")?;
+                let (uri, diagnostics) = protocol::parse_publish_diagnostics(params)?;
+                Some(ServerMessage::Diagnostics { uri, diagnostics })
+            }
+            _ => None,
+        };
+    }
+
+    // Responses have an `id` (and either `result` or `error`).
+    let id = msg.get("id").and_then(Json::as_i64)?;
+    let method = pending.lock().unwrap().remove(&id)?;
+    match method {
+        "textDocument/definition" => {
+            let result = msg.get("result").unwrap_or(&Json::Null);
+            let locations = protocol::parse_goto_definition_result(result);
+            Some(ServerMessage::GotoDefinitionResult { id, locations })
+        }
+        "textDocument/hover" => {
+            let result = msg.get("result").unwrap_or(&Json::Null);
+            let contents = protocol::parse_hover_result(result);
+            Some(ServerMessage::HoverResult { id, contents })
         }
         _ => None,
     }
@@ -285,7 +398,8 @@ mod tests {
                      "severity":1,"message":"boom"}]}}"#,
         )
         .unwrap();
-        match classify(&msg) {
+        let empty = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        match classify(&msg, &empty) {
             Some(ServerMessage::Diagnostics { uri, diagnostics }) => {
                 assert_eq!(uri, "file:///a.rs");
                 assert_eq!(diagnostics.len(), 1);
@@ -297,10 +411,13 @@ mod tests {
 
     #[test]
     fn classify_ignores_log_and_responses() {
+        let empty: PendingRequests =
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
         let log = json::parse(r#"{"method":"window/logMessage","params":{}}"#).unwrap();
-        assert!(classify(&log).is_none());
+        assert!(classify(&log, &empty).is_none());
         let resp = json::parse(r#"{"id":1,"result":{}}"#).unwrap();
-        assert!(classify(&resp).is_none());
+        // id 1 not in pending → None
+        assert!(classify(&resp, &empty).is_none());
     }
 
     #[test]
