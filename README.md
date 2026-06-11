@@ -13,7 +13,7 @@ global editor state, and no large plugin runtime while the architecture is still
 settling.
 
 ![Ozone editor screenshot](assets/screenshots/ozone-editor.png)
-
+ 
 ## Downloads
 
 Pre-built binaries are published automatically:
@@ -32,18 +32,25 @@ navigation, and small project work:
 
 - scratch-buffer launch screen with a sample of the active keymap
 - editable text buffers with undo, redo, dirty tracking, and save/save-all
+- LF/CRLF aware: files load as LF internally and keep their original ending on save
 - command-line file opening
 - workspace file picker, open-buffer picker, and file tree
 - in-buffer search/replace and literal workspace search
+- code folding, text objects, and a document-symbol picker
 - line numbers, cursor-line highlight, selections, scrollbars, and mouse-wheel scrolling
-- pane splits, pane focus movement, and buffer cycling
+- pane splits, pane focus movement, buffer cycling, and status-bar buffer dots (click to switch)
+- which-key hints — for a pending chord *and* for a bare held modifier
 - syntax scanning for Rust, Markdown, TOML, JSON, and plain text
-- PNG/JPEG image preview buffers
+- PTY-backed terminal buffers with a colour VT grid
+- image preview buffers (PNG/JPEG/GIF/WebP/BMP/ICO/TGA/PNM/QOI/farbfeld)
+- format-on-save and text filters via shell commands (`|cmd` pipe, `!cmd` run-on-file)
+- live LSP diagnostics (underline + gutter sign + message) for Rust via rust-analyzer
 - configurable themes, keymaps, filetype defaults, modifier maps, and autocommands
 
-Some pieces are intentionally still thin. Terminal buffers currently render a
-placeholder surface, and LSP configuration is parsed but the LSP runtime remains
-deferred. Plugin capability is planned for later, once the command, event, and
+Some pieces are intentionally still thin. The LSP client speaks the protocol and
+streams diagnostics, but the request features (completion, hover, go-to-definition,
+references, rename) are not wired yet — the editor stays fully useful without a
+server. Plugin capability is planned for later, once the command, event, and
 configuration surfaces are stable enough to expose cleanly.
 
 ## Build
@@ -115,18 +122,20 @@ window title also carries the dirty marker for file buffers.
 | `Ctrl+Home` / `Ctrl+End` | Move to start/end of file |
 | `Ctrl+A` / `Ctrl+E` | Move to start/end of line |
 | `Ctrl+B` / `Ctrl+F` / `Ctrl+P` / `Ctrl+N` | Emacs-style left/right/up/down |
-| `Ctrl+S` / `Cmd+S` | Save current buffer |
+| `Ctrl+S` | Save current buffer |
 | `Ctrl+K Ctrl+S` | Save all buffers |
-| `Ctrl+Z` / `Cmd+Z` | Undo |
-| `Ctrl+Y` / `Cmd+Shift+Z` | Redo |
-| `Ctrl+P` / `Cmd+P` | Open workspace file picker |
+| `Ctrl+Z` / `Ctrl+Y` | Undo / Redo |
+| `Ctrl+P` | Open workspace file picker |
 | `Ctrl+X B` | Open buffer picker |
-| `Meta+X` or `Ctrl+Shift+P` / `Cmd+Shift+P` | Open command palette |
-| `Ctrl+Shift+E` / `Cmd+Shift+E` | Open file tree |
+| `Ctrl+Shift+O` | Go to symbol (current buffer) |
+| `Meta+X` or `Ctrl+Shift+P` | Open command palette |
+| `Ctrl+Shift+E` | Open file tree |
 | `Meta+F` | Search current buffer |
 | `Meta+H` | Search and replace current buffer |
-| `Ctrl+Shift+F` / `Cmd+Shift+F` | Search workspace |
+| `Ctrl+Shift+F` | Search workspace |
 | `Meta+G` | Go to line |
+| `Ctrl+K Ctrl+L` | Toggle fold at cursor |
+| `Ctrl+K Ctrl+J` / `Ctrl+K Ctrl+0` | Fold all / open all |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous buffer |
 | `Ctrl+Shift+Right` / `Ctrl+Shift+Down` | Split pane right / down |
 | `Ctrl+Shift+W` | Close active pane |
@@ -134,8 +143,15 @@ window title also carries the dirty marker for file buffers.
 | `Ctrl+-` / `Ctrl+=` | Jump back / forward |
 | Mouse wheel | Scroll |
 
-On macOS, `Cmd` maps to Ozone's `super` modifier. The `control`, `meta`, and
-`super` mappings can be changed in config.
+These bindings aren't hardcoded — they're written into `keymap.toml` on first
+launch and the running keymap is built entirely from config. Edit a command to
+rebind a key, or delete a line to unbind it (yes, even a default). See
+[Configuration](#configuration).
+
+Modifiers follow Emacs naming: **Control** is the Ctrl key; **Meta** is Alt on
+Windows/Linux and **Command on macOS** (so `M-x` is `Cmd-X` there); **Super** (the
+Win key, or Option on macOS) is OS-reserved and unbound by default. All three
+mappings can be reassigned in `[modifiers]` config.
 
 ## Configuration
 
@@ -170,9 +186,14 @@ name = "brewery-stout"
 [ui]
 mouse = false
 
-[[keymap]]
-keys = "ctrl+shift+p"
-command = "command.palette"
+# Keybindings layer over the defaults. Compact form: one line per binding.
+# A [keymap.<filetype>] table scopes binds to that filetype. (The verbose
+# [[keymap]] array form, with an optional `filetype` field, also works.)
+[keymap]
+"ctrl+shift+p" = "command.palette"
+
+[keymap.rust]
+"ctrl+shift+f" = "lsp.format"
 
 [[filetype]]
 name = "markdown"
@@ -183,10 +204,69 @@ tab_width = 2
 event = "buffer.pre-save"
 pattern = "*"
 command = "edit.trim-trailing-whitespace"
+
+# Format on save. A command beginning with `|` pipes the buffer through a
+# stdin/stdout tool (use on buffer.pre-save); one beginning with `!` runs a tool
+# that edits the file on disk, then reloads (use on buffer.saved; `%` = path).
+[[autocmd]]
+event = "buffer.saved"
+pattern = "*.rs"
+command = "!cargo fmt"        # or "|rustfmt --edition 2021" on buffer.pre-save
 ```
 
 Bundled themes: `brewery-stout`, `brewery-wine`, `catppuccin-mocha`. A theme can
 also be a path to a custom `.toml` file.
+
+### Splitting the config
+
+A large config can be split by concern. Files placed next to `config.toml` are
+merged into it, using the same block syntax they would have inline:
+
+```text
+~/.config/ozone/
+  config.toml      # [editor], [theme], [ui], …
+  keymap.toml      # [keymap] / [[keymap]]
+  autocmd.toml     # [[autocmd]]
+  filetype.toml    # [[filetype]]
+  lsp.toml         # [[lsp]]
+```
+
+If a section file exists, it **owns** that section — any matching
+`[keymap]`/`[[keymap]]`, `[[autocmd]]`, `[[filetype]]`, or `[[lsp]]` block left
+in `config.toml` is ignored, not merged with it. This keeps each concern in one
+place: edit `keymap.toml` for keybindings, `config.toml` for everything else.
+(Themes already live as separate files under `themes/`.)
+
+The full split layout (`config.toml` plus all four section files) is generated
+on first launch. If you have a `config.toml` from before this split — no
+`[keymap]` at all — Ozone won't silently rewrite it, but every key (including
+Ctrl/Meta chords) will be unbound, and it warns on startup. Run:
+
+```sh
+ozone --reset-config
+```
+
+to regenerate `config.toml` and all section files from the shipped defaults.
+This **overwrites** your existing config, so back it up first if you've
+customized it.
+
+## Language Server (optional)
+
+Ozone ships a dependency-free LSP client. With a `[[lsp]]` block for a language
+and that server on your `PATH`, Ozone starts it the first time you open a
+matching file and shows live diagnostics (underline + gutter sign + end-of-line
+message). The editor stays fully usable without a server; if the server can't
+start, Ozone warns once and carries on.
+
+```toml
+[[lsp]]
+language = "rust"
+server   = "rust-analyzer"   # must be on PATH (e.g. `rustup component add rust-analyzer`)
+lazy     = true
+```
+
+Request features (completion, hover, go-to-definition, references, rename) are
+not wired yet — only diagnostics flow today.
 
 ## Workspace Layout
 
@@ -196,9 +276,10 @@ also be a path to a custom `.toml` file.
 | `ozone-buffer/` | Text storage, positions, edits, undo/redo, dirty state, persistence |
 | `ozone-editor/` | Workspace, views, commands, keymaps, events, UI intents |
 | `ozone-gui/` | Aurea-based drawing, overlays, input routing, window integration |
-| `ozone-syntax/` | Lightweight line-scanner syntax highlighting |
+| `ozone-syntax/` | Line-scanner syntax highlighting, symbol extraction, filetype detection (via `taste`) |
 | `ozone-config/` | Configuration loading and validation |
-| `ozone-term/` | Terminal grid and PTY support (in progress) |
+| `ozone-term/` | PTY-backed terminal with a colour VT grid emulator |
+| `ozone-lsp/` | Dependency-free JSON-RPC LSP client: handshake, reader thread, live diagnostics |
 | `themes/` | Bundled color themes |
 | `packaging/` | Platform packaging metadata and icons |
 
