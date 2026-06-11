@@ -12,6 +12,9 @@ mod rust_buffer;
 pub mod symbols;
 mod toml;
 
+use std::sync::OnceLock;
+
+use sylven::{DocumentId, LanguageId, RevisionId, SyntaxEngine, SyntaxFeatures, TextSnapshot};
 use taste::{Language, detect_path};
 
 pub use symbols::{Symbol, SymbolKind, symbols};
@@ -144,6 +147,32 @@ pub fn scan_buffer(ft: Filetype, text: &str) -> Vec<Vec<TokenSpan>> {
             result
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Structural parsing via sylven
+// ---------------------------------------------------------------------------
+
+static ENGINE: OnceLock<SyntaxEngine> = OnceLock::new();
+
+fn engine() -> &'static SyntaxEngine {
+    ENGINE.get_or_init(SyntaxEngine::new)
+}
+
+fn filetype_to_lang_id(ft: Filetype) -> Option<LanguageId> {
+    match ft {
+        Filetype::Rust => Some(LanguageId("rust")),
+        _ => None,
+    }
+}
+
+/// Parse structural features (highlights, folds, symbols, brackets) for
+/// a buffer via sylven. Returns `None` for filetypes without a registered
+/// plugin (e.g. Plain, TOML, JSON until their plugins land).
+pub fn parse_features(ft: Filetype, text: &str) -> Option<SyntaxFeatures> {
+    let lang_id = filetype_to_lang_id(ft)?;
+    let snapshot = TextSnapshot::new(DocumentId(0), RevisionId(0), text);
+    Some(engine().parse(lang_id, &snapshot)?.features)
 }
 
 // ---------------------------------------------------------------------------
