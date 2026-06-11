@@ -747,6 +747,7 @@ dependencies = [
 [[package]]
 name = "sylven"
 version = "0.1.0"
+source = "git+https://github.com/SkuldNorniern/sylven.git?branch=main#20c51998cf0a2ca3c43e4712ecb48bdd0e58657a"
 dependencies = [
  "sylven-lex",
  "sylven-parse",
@@ -757,6 +758,7 @@ dependencies = [
 [[package]]
 name = "sylven-lex"
 version = "0.1.0"
+source = "git+https://github.com/SkuldNorniern/sylven.git?branch=main#20c51998cf0a2ca3c43e4712ecb48bdd0e58657a"
 dependencies = [
  "sylven-text",
 ]
@@ -764,6 +766,7 @@ dependencies = [
 [[package]]
 name = "sylven-parse"
 version = "0.1.0"
+source = "git+https://github.com/SkuldNorniern/sylven.git?branch=main#20c51998cf0a2ca3c43e4712ecb48bdd0e58657a"
 dependencies = [
  "sylven-lex",
  "sylven-text",
@@ -773,10 +776,12 @@ dependencies = [
 [[package]]
 name = "sylven-text"
 version = "0.1.0"
+source = "git+https://github.com/SkuldNorniern/sylven.git?branch=main#20c51998cf0a2ca3c43e4712ecb48bdd0e58657a"
 
 [[package]]
 name = "sylven-tree"
 version = "0.1.0"
+source = "git+https://github.com/SkuldNorniern/sylven.git?branch=main#20c51998cf0a2ca3c43e4712ecb48bdd0e58657a"
 dependencies = [
  "sylven-lex",
  "sylven-text",
@@ -796,6 +801,7 @@ dependencies = [
 [[package]]
 name = "taste"
 version = "0.1.0"
+source = "git+https://github.com/standize/taste.git?branch=dev#1e2f3e18147f2b44d8f485598d3fcd35b53f4d0b"
 
 [[package]]
 name = "termios"
