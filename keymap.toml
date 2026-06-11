@@ -222,3 +222,8 @@ command = "edit.delete-char-forward"
 [[keymap]]
 keys = "enter"
 command = "edit.insert-newline"
+
+# ── Selection ────────────────────────────────────────────────────────────────
+[[keymap]]
+keys = "alt+up"
+command = "select.expand"

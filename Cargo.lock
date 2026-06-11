@@ -747,7 +747,7 @@ dependencies = [
 [[package]]
 name = "sylven"
 version = "0.1.0"
-source = "git+https://github.com/SkuldNorniern/sylven.git?branch=main#83f57b7d1eca16200dd75619526f3a4230e0d6a2"
+source = "git+https://github.com/SkuldNorniern/sylven.git?branch=main#c5ecc60740461827700501282a84860a4070c87c"
 dependencies = [
  "sylven-lex",
  "sylven-parse",
@@ -758,7 +758,7 @@ dependencies = [
 [[package]]
 name = "sylven-lex"
 version = "0.1.0"
-source = "git+https://github.com/SkuldNorniern/sylven.git?branch=main#83f57b7d1eca16200dd75619526f3a4230e0d6a2"
+source = "git+https://github.com/SkuldNorniern/sylven.git?branch=main#c5ecc60740461827700501282a84860a4070c87c"
 dependencies = [
  "sylven-text",
 ]
@@ -766,7 +766,7 @@ dependencies = [
 [[package]]
 name = "sylven-parse"
 version = "0.1.0"
-source = "git+https://github.com/SkuldNorniern/sylven.git?branch=main#83f57b7d1eca16200dd75619526f3a4230e0d6a2"
+source = "git+https://github.com/SkuldNorniern/sylven.git?branch=main#c5ecc60740461827700501282a84860a4070c87c"
 dependencies = [
  "sylven-lex",
  "sylven-text",
@@ -776,12 +776,12 @@ dependencies = [
 [[package]]
 name = "sylven-text"
 version = "0.1.0"
-source = "git+https://github.com/SkuldNorniern/sylven.git?branch=main#83f57b7d1eca16200dd75619526f3a4230e0d6a2"
+source = "git+https://github.com/SkuldNorniern/sylven.git?branch=main#c5ecc60740461827700501282a84860a4070c87c"
 
 [[package]]
 name = "sylven-tree"
 version = "0.1.0"
-source = "git+https://github.com/SkuldNorniern/sylven.git?branch=main#83f57b7d1eca16200dd75619526f3a4230e0d6a2"
+source = "git+https://github.com/SkuldNorniern/sylven.git?branch=main#c5ecc60740461827700501282a84860a4070c87c"
 dependencies = [
  "sylven-lex",
  "sylven-text",

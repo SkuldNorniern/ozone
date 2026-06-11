@@ -2,7 +2,7 @@
 //! enclosing bracket pair (inside/around), or surrounding quotes at the cursor.
 //! Each sets the active view's selection and moves the cursor to its end.
 
-use ozone_buffer::{Buffer, Pos, Span};
+use ozone_buffer::{Buffer, BufferKind, Pos, Span};
 
 use crate::text_object;
 
@@ -41,6 +41,37 @@ pub(super) fn register_select_commands(reg: &mut CommandRegistry) {
             apply(ctx, span);
         },
     );
+    reg.register(
+        "select.expand",
+        "Expand selection to the next structural boundary",
+        |ctx| {
+            let span = compute_expand(ctx);
+            apply(ctx, span);
+        },
+    );
+}
+
+fn compute_expand(ctx: &CommandContext) -> Option<Span> {
+    let buf = ctx.workspace.buffers.get(&ctx.buffer_id)?;
+    let view = ctx.workspace.views.get(&ctx.view_id)?;
+    let path = match &buf.kind {
+        BufferKind::File(p) => p.to_string_lossy().into_owned(),
+        _ => return None,
+    };
+    let ft = ozone_syntax::Filetype::from_path(&path);
+    let text = buf.text();
+    let (sel_start, sel_end) = match view.selection {
+        Some(span) => (buf.pos_to_offset(span.start), buf.pos_to_offset(span.end)),
+        None => {
+            let off = buf.pos_to_offset(view.cursor);
+            (off, off)
+        }
+    };
+    let (new_start, new_end) = ozone_syntax::expand_selection(ft, &text, sel_start, sel_end)?;
+    Some(Span {
+        start: buf.offset_to_pos(new_start),
+        end: buf.offset_to_pos(new_end),
+    })
 }
 
 /// Run a text-object function against the active buffer at the cursor.

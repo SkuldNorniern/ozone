@@ -116,6 +116,8 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("backspace", "edit.delete-char-backward"),
     ("delete", "edit.delete-char-forward"),
     ("enter", "edit.insert-newline"),
+    // Selection
+    ("alt+up", "select.expand"),
 ];
 
 impl Keymap {

@@ -180,6 +180,20 @@ fn filetype_to_lang_id(ft: Filetype) -> Option<LanguageId> {
     }
 }
 
+/// Expand `(sel_start, sel_end)` byte offsets to the smallest structural range
+/// strictly containing them, using sylven bracket and fold data. Returns
+/// `(new_start, new_end)` byte offsets, or `None` when already at the outermost
+/// range or the filetype has no sylven plugin.
+pub fn expand_selection(
+    ft: Filetype,
+    text: &str,
+    sel_start: usize,
+    sel_end: usize,
+) -> Option<(usize, usize)> {
+    let features = parse_features(ft, text)?;
+    sylven::expand_selection(&features, text.len(), sel_start, sel_end)
+}
+
 /// Parse structural features (highlights, folds, symbols, brackets) for
 /// a buffer via sylven. Returns `None` for filetypes without a registered
 /// plugin (e.g. Plain).
