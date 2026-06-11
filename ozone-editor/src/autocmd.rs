@@ -101,6 +101,7 @@ mod tests {
 
     use ozone_buffer::BufferId;
     use ozone_config::AutocmdConfig;
+    use crate::ViewId;
 
     use super::*;
 
@@ -160,7 +161,7 @@ mod tests {
         registry.register(EventKind::CursorMoved, "*", "cursor.any");
 
         let event = EditorEvent::CursorMoved {
-            view_id: crate::view::ViewId::next(),
+            view_id: ViewId::next(),
             pos: ozone_buffer::Pos::new(2, 4),
         };
 
