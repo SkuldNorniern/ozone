@@ -54,7 +54,9 @@ pub struct Symbol {
 /// order. Unknown filetypes yield an empty list.
 pub fn symbols(filetype: Filetype, text: &str) -> Vec<Symbol> {
     match filetype {
-        Filetype::Rust | Filetype::Toml | Filetype::Markdown => sylven_symbols(filetype, text),
+        Filetype::Rust | Filetype::Toml | Filetype::Markdown | Filetype::Yaml => {
+            sylven_symbols(filetype, text)
+        }
         Filetype::Json | Filetype::Plain => Vec::new(),
     }
 }

@@ -14,6 +14,7 @@ mod rust_buffer;
 pub mod symbols;
 mod toml;
 mod toml_buffer;
+mod yaml_buffer;
 
 use std::sync::OnceLock;
 
@@ -63,6 +64,7 @@ pub enum Filetype {
     Rust,
     Toml,
     Json,
+    Yaml,
     Markdown,
     Plain,
 }
@@ -77,6 +79,7 @@ impl Filetype {
             Some(Language::RUST) => Filetype::Rust,
             Some(Language::TOML) => Filetype::Toml,
             Some(Language::JSON) => Filetype::Json,
+            Some(Language::YAML) => Filetype::Yaml,
             Some(Language::MARKDOWN) => Filetype::Markdown,
             _ => Filetype::Plain,
         }
@@ -123,7 +126,7 @@ pub fn scan_line(ft: Filetype, line: &str, state: ScanState) -> (Vec<TokenSpan>,
         Filetype::Toml => (toml::scan_toml(line), ScanState::clean()),
         Filetype::Json => json::scan_json(line, state),
         Filetype::Markdown => markdown::scan_markdown(line, state),
-        Filetype::Plain => (vec![], ScanState::clean()),
+        Filetype::Yaml | Filetype::Plain => (vec![], ScanState::clean()),
     }
 }
 
@@ -141,6 +144,7 @@ pub fn scan_buffer(ft: Filetype, text: &str) -> Vec<Vec<TokenSpan>> {
         Filetype::Toml => toml_buffer::scan_toml_buffer(text),
         Filetype::Markdown => markdown_buffer::scan_markdown_buffer(text),
         Filetype::Json => json_buffer::scan_json_buffer(text),
+        Filetype::Yaml => yaml_buffer::scan_yaml_buffer(text),
         _ => {
             // Fallback: run the existing line-by-line scanners.
             let mut result = Vec::new();
@@ -171,6 +175,7 @@ fn filetype_to_lang_id(ft: Filetype) -> Option<LanguageId> {
         Filetype::Toml => Some(LanguageId("toml")),
         Filetype::Markdown => Some(LanguageId("markdown")),
         Filetype::Json => Some(LanguageId("json")),
+        Filetype::Yaml => Some(LanguageId("yaml")),
         _ => None,
     }
 }
@@ -231,6 +236,8 @@ mod tests {
         assert_eq!(Filetype::from_path("README.md"), Filetype::Markdown);
         assert_eq!(Filetype::from_path("X.MD"), Filetype::Markdown);
         assert_eq!(Filetype::from_path("c.rs"), Filetype::Rust);
+        assert_eq!(Filetype::from_path("a.yaml"), Filetype::Yaml);
+        assert_eq!(Filetype::from_path("a.yml"), Filetype::Yaml);
         assert_eq!(Filetype::from_path("noext"), Filetype::Plain);
     }
 

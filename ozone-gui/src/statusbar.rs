@@ -266,6 +266,7 @@ fn major_mode_label(filetype: Filetype) -> &'static str {
         Filetype::Rust => "Rust",
         Filetype::Toml => "TOML",
         Filetype::Json => "JSON",
+        Filetype::Yaml => "YAML",
         Filetype::Markdown => "Markdown",
         Filetype::Plain => "Text",
     }

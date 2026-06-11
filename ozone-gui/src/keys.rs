@@ -250,6 +250,7 @@ pub(crate) fn filetype_config_name(ft: Filetype) -> String {
         Filetype::Rust => "rust",
         Filetype::Toml => "toml",
         Filetype::Json => "json",
+        Filetype::Yaml => "yaml",
         Filetype::Markdown => "markdown",
         Filetype::Plain => "plain",
     }
