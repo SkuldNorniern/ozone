@@ -9,7 +9,8 @@ use taste::detect_language;
 
 use super::TextMetrics;
 use super::decorations::{
-    decoration_highlight_color, decoration_role_color, sync_bracket_decorations,
+    decoration_highlight_color, decoration_role_color, gutter_severity_rank,
+    sync_bracket_decorations,
 };
 use super::image::draw_image_pane;
 use super::text::{
@@ -366,23 +367,25 @@ pub(super) fn draw_view(
                 }
             }
 
-            let gutter_signs: String = line_decorations
+            let gutter_role = line_decorations
                 .iter()
                 .filter_map(|decoration| match &decoration.kind {
-                    DecorationKind::GutterSign(sign)
+                    DecorationKind::GutterSign(role)
                         if decoration.start >= line_start && decoration.start <= line_end =>
                     {
-                        Some(sign.as_str())
+                        Some(*role)
                     }
                     _ => None,
                 })
-                .collect();
-            if !gutter_signs.is_empty() && gutter_w > 0.0 {
-                ctx.draw_text_with_font(
-                    &gutter_signs,
-                    Point::new(rect.x + 3.0, baseline),
-                    font,
-                    &solid(palette().picker_prompt),
+                .max_by_key(|role| gutter_severity_rank(*role));
+            if let Some(role) = gutter_role
+                && gutter_w > 0.0
+            {
+                let r = 3.0_f32;
+                ctx.draw_circle(
+                    Point::new(rect.x + 4.0 + r, line_top + line_h / 2.0),
+                    r,
+                    &solid(decoration_role_color(role)),
                 )?;
             }
 

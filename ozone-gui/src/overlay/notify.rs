@@ -19,6 +19,12 @@ use ozone_editor::NotifyLevel;
 use crate::components::{draw_panel, top_right_rect};
 use crate::theme::{notify_accent, palette, solid};
 
+/// Max body lines a single toast shows before truncating with a "+N more"
+/// marker, so a chatty command's full output (e.g. a failed `cargo build`
+/// dumping a wall of warnings) can't grow one card past the screen and starve
+/// the stack of room.
+const MAX_BODY_LINES: usize = 8;
+
 /// Default time a toast stays before auto-dismissing, by severity. Errors linger.
 fn default_ttl(level: NotifyLevel) -> Duration {
     match level {
@@ -140,7 +146,15 @@ impl Notifications {
         // Newest first (top), so iterate the list in reverse.
         let mut y = margin;
         for n in self.items.iter().rev() {
-            let lines = wrap(&n.text, cols);
+            let mut lines = wrap(&n.text, cols);
+            if lines.len() > MAX_BODY_LINES {
+                let remaining = lines.len() - (MAX_BODY_LINES - 1);
+                lines.truncate(MAX_BODY_LINES - 1);
+                lines.push(format!(
+                    "… +{remaining} more line{}",
+                    if remaining == 1 { "" } else { "s" }
+                ));
+            }
             let body_h = lines.len() as f32 * line_h;
             let card_h = body_h + pad * 2.0;
             let card = top_right_rect(width, card_w, card_h, margin);

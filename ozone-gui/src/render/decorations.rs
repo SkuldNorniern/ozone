@@ -18,6 +18,18 @@ pub(super) fn decoration_role_color(role: HlRole) -> Color {
     }
 }
 
+/// Severity ranking for the gutter dot when a line has multiple diagnostics —
+/// the most severe wins (`Error` > `Warn` > `Info` > `Hint`).
+pub(super) fn gutter_severity_rank(role: HlRole) -> u8 {
+    match role {
+        HlRole::Error => 3,
+        HlRole::Warn => 2,
+        HlRole::Info => 1,
+        HlRole::Hint => 0,
+        _ => 0,
+    }
+}
+
 pub(super) fn decoration_highlight_color(role: HlRole) -> Color {
     let color = decoration_role_color(role);
     if role == HlRole::Bracket {
