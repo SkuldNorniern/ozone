@@ -95,6 +95,9 @@ impl Lsp {
         let Some(client) = self.client.as_mut() else {
             return;
         };
+        if !client.capabilities.definition {
+            return;
+        }
         let Some(view) = ws.active_view() else {
             return;
         };
@@ -120,6 +123,9 @@ impl Lsp {
         let Some(client) = self.client.as_mut() else {
             return;
         };
+        if !client.capabilities.hover {
+            return;
+        }
         let Some(view) = ws.active_view() else {
             return;
         };

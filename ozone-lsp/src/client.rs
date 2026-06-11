@@ -22,7 +22,7 @@ use std::thread::JoinHandle;
 use ozone_editor::Diagnostic;
 
 use crate::json::Json;
-use crate::protocol::Location;
+use crate::protocol::{Location, ServerCapabilities};
 use crate::{protocol, rpc};
 
 /// A decoded message from the server, delivered to the GUI via the channel.
@@ -55,6 +55,10 @@ pub struct LspClient {
     rx: Receiver<ServerMessage>,
     pending: PendingRequests,
     _reader: JoinHandle<()>,
+    /// Decoded from the `initialize` response. Request features check this
+    /// before sending so we never ask a server for something it doesn't
+    /// support.
+    pub capabilities: ServerCapabilities,
 }
 
 impl LspClient {
@@ -81,7 +85,12 @@ impl LspClient {
         // Block until the server's initialize response (id 1) lands; keep any
         // leftover bytes for the reader thread.
         let mut buf: Vec<u8> = Vec::new();
-        read_until_response(&mut stdout, &mut buf, 1)?;
+        let init_response = read_until_response(&mut stdout, &mut buf, 1)?;
+        let capabilities = init_response
+            .get("result")
+            .and_then(|r| r.get("capabilities"))
+            .map(protocol::parse_server_capabilities)
+            .unwrap_or_default();
 
         stdin
             .write_all(&rpc::notification("initialized", Json::Object(vec![])))
@@ -102,6 +111,7 @@ impl LspClient {
             rx,
             pending,
             _reader: reader,
+            capabilities,
         })
     }
 

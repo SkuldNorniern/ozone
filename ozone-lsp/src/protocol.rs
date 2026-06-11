@@ -147,6 +147,45 @@ pub fn parse_hover_result(result: &Json) -> Option<String> {
     }
 }
 
+/// Subset of `ServerCapabilities` Ozone acts on, decoded once from the
+/// `initialize` response so request features can check support before sending
+/// a request the server would reject or ignore.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ServerCapabilities {
+    pub hover: bool,
+    pub definition: bool,
+    pub references: bool,
+    pub rename: bool,
+    pub code_action: bool,
+    pub document_formatting: bool,
+    pub completion: bool,
+    pub inlay_hint: bool,
+}
+
+/// A `*Provider` field is "supported" if present and not `false`/`null` —
+/// servers may advertise either `true` or an options object.
+fn provider_enabled(capabilities: &Json, key: &str) -> bool {
+    match capabilities.get(key) {
+        None | Some(Json::Null) => false,
+        Some(Json::Bool(b)) => *b,
+        Some(_) => true,
+    }
+}
+
+/// Decode the `capabilities` object from an `initialize` response's `result`.
+pub fn parse_server_capabilities(capabilities: &Json) -> ServerCapabilities {
+    ServerCapabilities {
+        hover: provider_enabled(capabilities, "hoverProvider"),
+        definition: provider_enabled(capabilities, "definitionProvider"),
+        references: provider_enabled(capabilities, "referencesProvider"),
+        rename: provider_enabled(capabilities, "renameProvider"),
+        code_action: provider_enabled(capabilities, "codeActionProvider"),
+        document_formatting: provider_enabled(capabilities, "documentFormattingProvider"),
+        completion: provider_enabled(capabilities, "completionProvider"),
+        inlay_hint: provider_enabled(capabilities, "inlayHintProvider"),
+    }
+}
+
 /// Decode `textDocument/publishDiagnostics` params into `(uri, diagnostics)`.
 /// Returns `None` if the `uri` is missing; an absent/empty `diagnostics` array
 /// yields an empty `Vec` (which clears the buffer's set when republished).
@@ -257,6 +296,28 @@ mod tests {
         let s = Json::Str("hello".to_string());
         assert_eq!(parse_hover_result(&s).as_deref(), Some("hello"));
         assert!(parse_hover_result(&Json::Null).is_none());
+    }
+
+    #[test]
+    fn server_capabilities_decode_bool_and_object_providers() {
+        let caps = json::parse(
+            r#"{
+                "hoverProvider": true,
+                "definitionProvider": {"workDoneProgress": false},
+                "referencesProvider": false,
+                "completionProvider": {"triggerCharacters": ["."]}
+            }"#,
+        )
+        .unwrap();
+        let parsed = parse_server_capabilities(&caps);
+        assert!(parsed.hover);
+        assert!(parsed.definition);
+        assert!(!parsed.references);
+        assert!(parsed.completion);
+        assert!(!parsed.rename);
+        assert!(!parsed.code_action);
+        assert!(!parsed.document_formatting);
+        assert!(!parsed.inlay_hint);
     }
 
     #[test]
