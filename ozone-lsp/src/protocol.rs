@@ -62,6 +62,91 @@ fn diagnostic(value: &Json) -> Option<Diagnostic> {
     })
 }
 
+/// An LSP `Location` — a URI plus the start of a range. Used by
+/// `textDocument/definition` and similar request features.
+/// `character` is a UTF-16 code-unit offset as received from the server;
+/// callers remap to byte columns via [`crate::lsp::utf16_to_byte_col`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Location {
+    pub uri: String,
+    /// 0-based line.
+    pub line: usize,
+    /// 0-based character (UTF-16 code units).
+    pub character: usize,
+}
+
+fn location(value: &Json) -> Option<Location> {
+    // Accept `Location` (has `uri`) or `LocationLink` (has `targetUri`).
+    let uri = value
+        .get("uri")
+        .or_else(|| value.get("targetUri"))
+        .and_then(Json::as_str)?
+        .to_string();
+    // LocationLink: prefer `targetSelectionRange`; Location: `range`.
+    let range = value
+        .get("targetSelectionRange")
+        .or_else(|| value.get("range"))?;
+    let start = range.get("start")?;
+    let line = start.get("line").and_then(Json::as_i64).unwrap_or(0).max(0) as usize;
+    let character = start
+        .get("character")
+        .and_then(Json::as_i64)
+        .unwrap_or(0)
+        .max(0) as usize;
+    Some(Location {
+        uri,
+        line,
+        character,
+    })
+}
+
+/// Decode a `textDocument/definition` result.
+///
+/// The LSP spec allows `Location | Location[] | LocationLink[] | null`.
+pub fn parse_goto_definition_result(result: &Json) -> Vec<Location> {
+    match result {
+        Json::Null => vec![],
+        Json::Object(_) => location(result).into_iter().collect(),
+        Json::Array(items) => items.iter().filter_map(location).collect(),
+        _ => vec![],
+    }
+}
+
+/// Decode a `textDocument/hover` result into plain text.
+///
+/// The spec allows:
+/// - `null`
+/// - `{ kind, value }` (`MarkupContent`)
+/// - legacy `string` or `{ language, value }` (`MarkedString`)
+/// - array of the above
+///
+/// All forms are flattened to a single string for display.
+pub fn parse_hover_result(result: &Json) -> Option<String> {
+    fn extract(v: &Json) -> Option<String> {
+        match v {
+            Json::Str(s) => Some(s.clone()),
+            Json::Object(_) => {
+                // MarkupContent { kind, value } or MarkedString { language, value }
+                v.get("value").and_then(Json::as_str).map(str::to_string)
+            }
+            _ => None,
+        }
+    }
+
+    match result {
+        Json::Null => None,
+        Json::Array(items) => {
+            let joined: Vec<String> = items.iter().filter_map(extract).collect();
+            if joined.is_empty() {
+                None
+            } else {
+                Some(joined.join("\n\n"))
+            }
+        }
+        other => extract(other),
+    }
+}
+
 /// Decode `textDocument/publishDiagnostics` params into `(uri, diagnostics)`.
 /// Returns `None` if the `uri` is missing; an absent/empty `diagnostics` array
 /// yields an empty `Vec` (which clears the buffer's set when republished).
@@ -125,6 +210,53 @@ mod tests {
         let p = json::parse(r#"{"uri":"file:///a","diagnostics":[]}"#).unwrap();
         let (_, diags) = parse_publish_diagnostics(&p).unwrap();
         assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn parse_goto_definition_location() {
+        // Single Location object.
+        let single = json::parse(
+            r#"{"uri":"file:///src/lib.rs","range":{"start":{"line":10,"character":4},"end":{"line":10,"character":8}}}"#,
+        ).unwrap();
+        let locs = parse_goto_definition_result(&single);
+        assert_eq!(locs.len(), 1);
+        assert_eq!(locs[0].uri, "file:///src/lib.rs");
+        assert_eq!(locs[0].line, 10);
+        assert_eq!(locs[0].character, 4);
+    }
+
+    #[test]
+    fn parse_goto_definition_array_and_null() {
+        // Array of two Location objects.
+        let arr = json::parse(
+            r#"[{"uri":"file:///a.rs","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}},
+               {"uri":"file:///b.rs","range":{"start":{"line":5,"character":2},"end":{"line":5,"character":3}}}]"#,
+        ).unwrap();
+        let locs = parse_goto_definition_result(&arr);
+        assert_eq!(locs.len(), 2);
+        assert_eq!(locs[1].uri, "file:///b.rs");
+        assert_eq!(locs[1].line, 5);
+
+        // Null result (definition not found).
+        assert!(parse_goto_definition_result(&Json::Null).is_empty());
+    }
+
+    #[test]
+    fn parse_hover_markup_content() {
+        let markup = json::parse(
+            r#"{"contents":{"kind":"markdown","value":"**fn foo**\n\nDoes the thing."}}"#,
+        )
+        .unwrap();
+        let text = parse_hover_result(markup.get("contents").unwrap()).unwrap();
+        assert!(text.contains("fn foo"));
+        assert!(text.contains("Does the thing."));
+    }
+
+    #[test]
+    fn parse_hover_legacy_string_and_null() {
+        let s = Json::Str("hello".to_string());
+        assert_eq!(parse_hover_result(&s).as_deref(), Some("hello"));
+        assert!(parse_hover_result(&Json::Null).is_none());
     }
 
     #[test]
