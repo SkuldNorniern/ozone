@@ -47,3 +47,8 @@ aurea-runtime    = { git = "https://github.com/SkuldNorniern/aurea" }
 [patch."https://github.com/SkuldNorniern/sylven.git"]
 sylven     = { path = "sylven" }
 sylven-lex = { path = "sylven/sylven-lex" }
+
+# Use local checkout while taste registry iteration is pending push to origin.
+# Remove once https://github.com/standize/taste.git dev is up to date.
+[patch."https://github.com/standize/taste.git"]
+taste = { path = "taste" }

@@ -796,7 +796,6 @@ dependencies = [
 [[package]]
 name = "taste"
 version = "0.1.0"
-source = "git+https://github.com/standize/taste.git?branch=dev#323296bbdd1121802e5f028b28e3adab3e7ccbca"
 
 [[package]]
 name = "termios"
