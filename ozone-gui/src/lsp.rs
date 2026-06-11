@@ -30,6 +30,16 @@ struct Doc {
     last_change: Instant,
 }
 
+/// Coarse server lifecycle for the status-bar indicator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum LspStatus {
+    #[default]
+    Idle,
+    Starting,
+    Ready,
+    Failed,
+}
+
 /// Frontend LSP state. Holds at most one server for now (Rust); generalizing to
 /// a server-per-language map is a later step.
 #[derive(Default)]
@@ -68,6 +78,18 @@ pub(crate) struct CompletionResult {
 impl Lsp {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn status(&self) -> LspStatus {
+        if self.failed {
+            LspStatus::Failed
+        } else if self.client.is_some() {
+            LspStatus::Ready
+        } else if self.starting.is_some() {
+            LspStatus::Starting
+        } else {
+            LspStatus::Idle
+        }
     }
 
     /// Reconcile the server with the current set of open Rust buffers and drain

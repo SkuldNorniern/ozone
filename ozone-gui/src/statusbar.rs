@@ -9,6 +9,7 @@ use taste::{Language, detect_language};
 use crate::components::draw_pill;
 use crate::input::ActiveMods;
 use crate::layout::{STATUS_H, baseline_in_rect};
+use crate::lsp::LspStatus;
 use crate::theme::{palette, solid, stroke};
 
 pub(crate) fn draw_status_bar(
@@ -18,6 +19,7 @@ pub(crate) fn draw_status_bar(
     font: &Font,
     ws: &Workspace,
     mods: ActiveMods,
+    lsp_status: LspStatus,
 ) -> AureaResult<()> {
     let bar_top = height - STATUS_H;
     ctx.draw_rect(
@@ -129,6 +131,29 @@ pub(crate) fn draw_status_bar(
     }
 
     draw_buffer_dots(ctx, ws, width, bar_top, baseline, font)?;
+
+    // LSP status chip: only when relevant (starting or failed).
+    if let Some((label, color)) = lsp_chip(lsp_status) {
+        let chip_w = ctx
+            .measure_text(label, font)
+            .map(|m| m.advance)
+            .unwrap_or(label.len() as f32 * font.size * 0.6)
+            + 12.0;
+        x -= chip_w;
+        draw_pill(
+            ctx,
+            label,
+            x,
+            bar_top + 4.0,
+            STATUS_H - 8.0,
+            baseline,
+            6.0,
+            font,
+            palette().status_mode_bg,
+            color,
+        )?;
+        x -= 6.0;
+    }
 
     let right = if pane_info.is_empty() {
         "UTF-8".to_string()
@@ -265,6 +290,17 @@ fn draw_buffer_dots(
 
 fn major_mode_label(lang: Option<Language>) -> &'static str {
     lang.map(|l| l.display_name()).unwrap_or("Text")
+}
+
+/// Label + color for the LSP status chip. Returns `None` when idle/ready (no
+/// chip shown — silence is the happy path).
+fn lsp_chip(status: LspStatus) -> Option<(&'static str, aurea::render::Color)> {
+    let p = palette();
+    match status {
+        LspStatus::Starting => Some(("LSP…", p.statusbar_dim)),
+        LspStatus::Failed => Some(("LSP ✗", p.notify_error)),
+        LspStatus::Idle | LspStatus::Ready => None,
+    }
 }
 
 fn pane_status(ws: &Workspace, active: ViewId) -> String {

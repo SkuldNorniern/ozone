@@ -6,6 +6,7 @@ use ozone_editor::{PaneTree, Workspace};
 
 use crate::input::ActiveMods;
 use crate::layout::{STATUS_H, split_rect};
+use crate::lsp::LspStatus;
 use crate::overlay::search::SearchState;
 use crate::statusbar::draw_status_bar;
 use crate::theme::{palette, solid};
@@ -38,6 +39,7 @@ pub(crate) fn draw_editor(
     fold_cache: &mut FoldCache,
     mods: ActiveMods,
     cursor_visible: bool,
+    lsp_status: LspStatus,
     char_w_out: &mut f32,
 ) -> AureaResult<()> {
     let width = ctx.width() as f32;
@@ -108,7 +110,7 @@ pub(crate) fn draw_editor(
         draw_search_bar(ctx, s, &font, width)?;
     }
 
-    draw_status_bar(ctx, width, height, &font, ws, mods)?;
+    draw_status_bar(ctx, width, height, &font, ws, mods, lsp_status)?;
     Ok(())
 }
 

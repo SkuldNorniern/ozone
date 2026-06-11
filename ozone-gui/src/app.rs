@@ -19,6 +19,7 @@ use crate::keys::{
     which_key_entries,
 };
 use crate::layout::STATUS_H;
+use crate::lsp::LspStatus;
 use crate::overlay::completion::{CompletionState, draw_completion};
 use crate::overlay::minibuffer::{Minibuffer, draw_minibuffer};
 use crate::overlay::notify::Notifications;
@@ -273,6 +274,7 @@ impl OzoneGui {
                 &mut lock(&callback_fold_cache),
                 ActiveMods::default(),
                 true,
+                LspStatus::Idle,
                 &mut scratch_char_w,
             )?;
             if let Some(p) = pal.as_ref() {
@@ -327,6 +329,7 @@ impl OzoneGui {
                     &mut init_fold_cache,
                     ActiveMods::default(),
                     true,
+                    LspStatus::Idle,
                     &mut scratch_char_w,
                 )
             })?;
@@ -499,6 +502,7 @@ impl OzoneGui {
                         &mut state.fold_cache,
                         active_mods,
                         state.cursor_visible,
+                        state.lsp.status(),
                         &mut state.measured_char_w,
                     )?;
                     if let Some(p) = pal.as_ref() {
