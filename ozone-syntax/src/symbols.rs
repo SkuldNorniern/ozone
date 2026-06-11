@@ -1,7 +1,7 @@
 //! Document symbol extraction for the symbol picker / outline.
 //!
-//! Rust and TOML: backed by sylven's token-level `derive_symbols`. Other
-//! filetypes still use line-based heuristics and can be upgraded later.
+//! Rust, TOML, and Markdown: backed by sylven's token-level `derive_symbols`.
+//! JSON and Plain have no symbols.
 
 use sylven::SymbolKind as SylvenKind;
 
@@ -54,8 +54,7 @@ pub struct Symbol {
 /// order. Unknown filetypes yield an empty list.
 pub fn symbols(filetype: Filetype, text: &str) -> Vec<Symbol> {
     match filetype {
-        Filetype::Rust | Filetype::Toml => sylven_symbols(filetype, text),
-        Filetype::Markdown => markdown_symbols(text),
+        Filetype::Rust | Filetype::Toml | Filetype::Markdown => sylven_symbols(filetype, text),
         Filetype::Json | Filetype::Plain => Vec::new(),
     }
 }
@@ -88,33 +87,8 @@ fn sylven_kind_to_local(k: SylvenKind) -> SymbolKind {
         SylvenKind::TypeAlias => SymbolKind::TypeAlias,
         SylvenKind::Macro => SymbolKind::Macro,
         SylvenKind::Section => SymbolKind::Section,
+        SylvenKind::Heading => SymbolKind::Heading,
     }
-}
-
-fn markdown_symbols(text: &str) -> Vec<Symbol> {
-    let mut out = Vec::new();
-    let mut in_fence = false;
-    for (line, raw) in text.lines().enumerate() {
-        let t = raw.trim_start();
-        if t.starts_with("```") || t.starts_with("~~~") {
-            in_fence = !in_fence;
-            continue;
-        }
-        if in_fence {
-            continue;
-        }
-        if let Some(rest) = t.strip_prefix('#') {
-            let title = rest.trim_start_matches('#').trim();
-            if !title.is_empty() {
-                out.push(Symbol {
-                    name: title.to_string(),
-                    kind: SymbolKind::Heading,
-                    line,
-                });
-            }
-        }
-    }
-    out
 }
 
 #[cfg(test)]
