@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use ozone_buffer::{Buffer, BufferId, BufferKind, Pos};
@@ -34,6 +35,9 @@ struct Doc {
 #[derive(Default)]
 pub(crate) struct Lsp {
     client: Option<LspClient>,
+    /// Background thread starting the server; polled non-blocking each frame so
+    /// the GUI stays live during the initialize handshake.
+    starting: Option<Receiver<Result<LspClient, String>>>,
     /// True once a start attempt failed, so we don't respawn on every frame.
     failed: bool,
     /// Diagnostics decoration namespace, allocated on first start.
@@ -78,22 +82,47 @@ impl Lsp {
 
         let open: Vec<(BufferId, PathBuf)> = rust_file_buffers(ws);
 
-        // Lazy start: only once a Rust file is actually open.
+        // Lazy start: only once a Rust file is actually open. The handshake
+        // runs on a background thread so the GUI stays live; we poll the
+        // receiver non-blocking each frame until it resolves.
         if self.client.is_none() {
-            if open.is_empty() {
+            if let Some(rx) = &self.starting {
+                use std::sync::mpsc::TryRecvError;
+                match rx.try_recv() {
+                    Ok(Ok(client)) => {
+                        self.client = Some(client);
+                        self.namespace = Some(ws.decorations_mut().namespace());
+                        self.starting = None;
+                        // Fall through to open_and_update below.
+                    }
+                    Ok(Err(e)) => {
+                        self.failed = true;
+                        self.starting = None;
+                        ws.notify(NotifyLevel::Warn, format!("LSP: {e}"));
+                        return true;
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        self.failed = true;
+                        self.starting = None;
+                        ws.notify(NotifyLevel::Warn, "LSP: server thread panicked".to_string());
+                        return true;
+                    }
+                    Err(TryRecvError::Empty) => return false, // still starting
+                }
+            } else {
+                if open.is_empty() {
+                    return false;
+                }
+                let server = cfg.server.clone();
+                let args = cfg.args.clone();
+                let root_uri =
+                    path_to_uri(&std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send(LspClient::start(&server, &args, &root_uri));
+                });
+                self.starting = Some(rx);
                 return false;
-            }
-            let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            match LspClient::start(&cfg.server, &cfg.args, &path_to_uri(&root)) {
-                Ok(client) => {
-                    self.client = Some(client);
-                    self.namespace = Some(ws.decorations_mut().namespace());
-                }
-                Err(e) => {
-                    self.failed = true;
-                    ws.notify(NotifyLevel::Warn, format!("LSP: {e}"));
-                    return true;
-                }
             }
         }
 
