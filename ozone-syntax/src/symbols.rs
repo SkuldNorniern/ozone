@@ -1,7 +1,7 @@
 //! Document symbol extraction for the symbol picker / outline.
 //!
-//! Rust: backed by sylven's token-level `derive_symbols`. Other filetypes still
-//! use line-based heuristics and can be upgraded later.
+//! Rust and TOML: backed by sylven's token-level `derive_symbols`. Other
+//! filetypes still use line-based heuristics and can be upgraded later.
 
 use sylven::SymbolKind as SylvenKind;
 
@@ -54,15 +54,14 @@ pub struct Symbol {
 /// order. Unknown filetypes yield an empty list.
 pub fn symbols(filetype: Filetype, text: &str) -> Vec<Symbol> {
     match filetype {
-        Filetype::Rust => rust_symbols(text),
+        Filetype::Rust | Filetype::Toml => sylven_symbols(filetype, text),
         Filetype::Markdown => markdown_symbols(text),
-        Filetype::Toml => toml_symbols(text),
         Filetype::Json | Filetype::Plain => Vec::new(),
     }
 }
 
-fn rust_symbols(text: &str) -> Vec<Symbol> {
-    let features = match parse_features(Filetype::Rust, text) {
+fn sylven_symbols(filetype: Filetype, text: &str) -> Vec<Symbol> {
+    let features = match parse_features(filetype, text) {
         Some(f) => f,
         None => return Vec::new(),
     };
@@ -88,6 +87,7 @@ fn sylven_kind_to_local(k: SylvenKind) -> SymbolKind {
         SylvenKind::Constant => SymbolKind::Constant,
         SylvenKind::TypeAlias => SymbolKind::TypeAlias,
         SylvenKind::Macro => SymbolKind::Macro,
+        SylvenKind::Section => SymbolKind::Section,
     }
 }
 
@@ -112,21 +112,6 @@ fn markdown_symbols(text: &str) -> Vec<Symbol> {
                     line,
                 });
             }
-        }
-    }
-    out
-}
-
-fn toml_symbols(text: &str) -> Vec<Symbol> {
-    let mut out = Vec::new();
-    for (line, raw) in text.lines().enumerate() {
-        let t = raw.trim();
-        if t.starts_with('[') && t.ends_with(']') && t.len() > 2 {
-            out.push(Symbol {
-                name: t.trim_matches(['[', ']']).trim().to_string(),
-                kind: SymbolKind::Section,
-                line,
-            });
         }
     }
     out
