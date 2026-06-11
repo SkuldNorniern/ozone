@@ -21,6 +21,7 @@ aurea       = "0.0.2"
 toml        = "0.8"
 taste       = { git = "https://github.com/standize/taste.git", branch = "dev" }
 sylven      = { git = "https://github.com/SkuldNorniern/sylven.git", branch = "main" }
+sylven-lex  = { git = "https://github.com/SkuldNorniern/sylven.git", branch = "main" }
 ozone-buffer = { path = "ozone-buffer" }
 ozone-editor = { path = "ozone-editor" }
 ozone-gui    = { path = "ozone-gui" }
@@ -40,3 +41,9 @@ aurea-ffi        = { git = "https://github.com/SkuldNorniern/aurea" }
 aurea-foundation = { git = "https://github.com/SkuldNorniern/aurea" }
 aurea-render     = { git = "https://github.com/SkuldNorniern/aurea" }
 aurea-runtime    = { git = "https://github.com/SkuldNorniern/aurea" }
+
+# Use local checkout while Stage 1 commits are pending push to origin.
+# Remove once https://github.com/SkuldNorniern/sylven.git main is up to date.
+[patch."https://github.com/SkuldNorniern/sylven.git"]
+sylven     = { path = "sylven" }
+sylven-lex = { path = "sylven/sylven-lex" }
