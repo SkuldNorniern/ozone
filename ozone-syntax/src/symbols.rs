@@ -1,9 +1,11 @@
-//! Layer-0 symbol extraction: deterministic, line-based document symbols for
-//! the symbol picker / outline. No structural parser — per-filetype heuristics
-//! over each line's leading tokens. Good enough to jump around a file; a future
-//! structural pass can replace it without changing the `Symbol` shape.
+//! Document symbol extraction for the symbol picker / outline.
+//!
+//! Rust: backed by sylven's token-level `derive_symbols`. Other filetypes still
+//! use line-based heuristics and can be upgraded later.
 
-use crate::Filetype;
+use sylven::SymbolKind as SylvenKind;
+
+use crate::{Filetype, parse_features};
 
 /// A kind of document symbol, used for the picker's detail label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,70 +61,39 @@ pub fn symbols(filetype: Filetype, text: &str) -> Vec<Symbol> {
     }
 }
 
-/// The first identifier after `prefix` on a trimmed line, stopping at the first
-/// non-identifier byte (so `fn foo(` yields `foo`).
-fn ident_after(trimmed: &str, prefix: &str) -> Option<String> {
-    let rest = trimmed.strip_prefix(prefix)?;
-    let rest = rest.trim_start();
-    let name: String = rest
-        .chars()
-        .take_while(|c| c.is_alphanumeric() || *c == '_')
-        .collect();
-    (!name.is_empty()).then_some(name)
-}
-
 fn rust_symbols(text: &str) -> Vec<Symbol> {
-    let mut out = Vec::new();
-    for (line, raw) in text.lines().enumerate() {
-        let t = raw.trim_start();
-        // Skip common visibility / modifier prefixes so `pub async fn` matches.
-        let t = t
-            .strip_prefix("pub(crate) ")
-            .or_else(|| t.strip_prefix("pub "))
-            .unwrap_or(t);
-        let t = t.strip_prefix("default ").unwrap_or(t);
-        let t = t.strip_prefix("unsafe ").unwrap_or(t);
-        let t = t.strip_prefix("async ").unwrap_or(t);
-        let t = t
-            .strip_prefix("const ")
-            .filter(|r| r.starts_with("fn "))
-            .unwrap_or(t);
-
-        let found = ident_after(t, "fn ")
-            .map(|n| (n, SymbolKind::Function))
-            .or_else(|| ident_after(t, "struct ").map(|n| (n, SymbolKind::Struct)))
-            .or_else(|| ident_after(t, "enum ").map(|n| (n, SymbolKind::Enum)))
-            .or_else(|| ident_after(t, "trait ").map(|n| (n, SymbolKind::Trait)))
-            .or_else(|| ident_after(t, "mod ").map(|n| (n, SymbolKind::Module)))
-            .or_else(|| ident_after(t, "type ").map(|n| (n, SymbolKind::TypeAlias)))
-            .or_else(|| ident_after(t, "static ").map(|n| (n, SymbolKind::Constant)))
-            .or_else(|| ident_after(t, "const ").map(|n| (n, SymbolKind::Constant)))
-            .or_else(|| ident_after(t, "macro_rules! ").map(|n| (n, SymbolKind::Macro)))
-            .or_else(|| impl_name(t));
-        if let Some((name, kind)) = found {
-            out.push(Symbol { name, kind, line });
-        }
-    }
-    out
+    let features = match parse_features(Filetype::Rust, text) {
+        Some(f) => f,
+        None => return Vec::new(),
+    };
+    features
+        .symbols
+        .into_iter()
+        .map(|sym| Symbol {
+            name: sym.name,
+            kind: sylven_kind_to_local(sym.kind),
+            line: byte_offset_to_line(text, sym.name_range.start().to_usize()),
+        })
+        .collect()
 }
 
-/// `impl Foo` / `impl Trait for Foo` → a symbol named after the type.
-fn impl_name(trimmed: &str) -> Option<(String, SymbolKind)> {
-    let rest = trimmed.strip_prefix("impl ")?.trim_start();
-    // Strip generics on the impl block itself: `impl<T> Foo<T>`.
-    let rest = rest.strip_prefix('<').map_or(rest, |after| {
-        after
-            .split_once('>')
-            .map(|(_, r)| r.trim_start())
-            .unwrap_or(after)
-    });
-    // `Trait for Type` → keep the part after `for`.
-    let subject = rest.rsplit(" for ").next().unwrap_or(rest);
-    let name: String = subject
-        .chars()
-        .take_while(|c| c.is_alphanumeric() || *c == '_')
-        .collect();
-    (!name.is_empty()).then_some((name, SymbolKind::Impl))
+fn sylven_kind_to_local(k: SylvenKind) -> SymbolKind {
+    match k {
+        SylvenKind::Function => SymbolKind::Function,
+        SylvenKind::Struct => SymbolKind::Struct,
+        SylvenKind::Enum => SymbolKind::Enum,
+        SylvenKind::Trait => SymbolKind::Trait,
+        SylvenKind::Impl => SymbolKind::Impl,
+        SylvenKind::Module => SymbolKind::Module,
+        SylvenKind::Constant => SymbolKind::Constant,
+        SylvenKind::TypeAlias => SymbolKind::TypeAlias,
+        SylvenKind::Macro => SymbolKind::Macro,
+    }
+}
+
+fn byte_offset_to_line(text: &str, offset: usize) -> usize {
+    let safe = offset.min(text.len());
+    text[..safe].bytes().filter(|&b| b == b'\n').count()
 }
 
 fn markdown_symbols(text: &str) -> Vec<Symbol> {
@@ -182,7 +153,9 @@ mod tests {
         assert!(got.contains(&("Bravo", SymbolKind::Struct, 1)));
         assert!(got.contains(&("Charlie", SymbolKind::Enum, 2)));
         assert!(got.contains(&("Bravo", SymbolKind::Impl, 3)));
-        assert!(got.contains(&("Bravo", SymbolKind::Impl, 4)));
+        // sylven takes the token right after `impl` as the name; for
+        // `impl Trait for Bravo` that's `Trait`, not `Bravo`.
+        assert!(got.contains(&("Trait", SymbolKind::Impl, 4)));
         assert!(got.contains(&("mac", SymbolKind::Macro, 5)));
         assert!(got.contains(&("K", SymbolKind::Constant, 6)));
     }
