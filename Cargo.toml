@@ -20,8 +20,8 @@ resolver = "2"
 aurea       = "0.0.2"
 toml        = "0.8"
 taste       = { git = "https://github.com/standize/taste.git", branch = "dev" }
-sylven      = { git = "https://github.com/SkuldNorniern/sylven.git", branch = "main" }
-sylven-lex  = { git = "https://github.com/SkuldNorniern/sylven.git", branch = "main" }
+sylven     = { git = "https://github.com/SkuldNorniern/sylven.git", branch = "main" }
+sylven-lex = { git = "https://github.com/SkuldNorniern/sylven.git", branch = "main" }
 ozone-buffer = { path = "ozone-buffer" }
 ozone-editor = { path = "ozone-editor" }
 ozone-gui    = { path = "ozone-gui" }

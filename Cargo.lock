@@ -514,6 +514,7 @@ name = "ozone-syntax"
 version = "0.1.0"
 dependencies = [
  "ozone-buffer",
+ "sylven",
  "sylven-lex",
  "taste",
 ]
@@ -743,6 +744,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "sylven"
+version = "0.1.0"
+dependencies = [
+ "sylven-lex",
+ "sylven-parse",
+ "sylven-text",
+ "sylven-tree",
+]
+
+[[package]]
 name = "sylven-lex"
 version = "0.1.0"
 dependencies = [
@@ -750,8 +761,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "sylven-parse"
+version = "0.1.0"
+dependencies = [
+ "sylven-lex",
+ "sylven-text",
+ "sylven-tree",
+]
+
+[[package]]
 name = "sylven-text"
 version = "0.1.0"
+
+[[package]]
+name = "sylven-tree"
+version = "0.1.0"
+dependencies = [
+ "sylven-lex",
+ "sylven-text",
+]
 
 [[package]]
 name = "syn"
@@ -1047,7 +1075,3 @@ checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
  "zune-core",
 ]
-
-[[patch.unused]]
-name = "sylven"
-version = "0.1.0"
