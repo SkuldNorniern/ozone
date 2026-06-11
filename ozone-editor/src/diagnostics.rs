@@ -33,16 +33,6 @@ impl Severity {
             Severity::Hint => HlRole::Hint,
         }
     }
-
-    /// One-letter gutter sign.
-    pub fn sign(self) -> &'static str {
-        match self {
-            Severity::Error => "E",
-            Severity::Warn => "W",
-            Severity::Info => "I",
-            Severity::Hint => "H",
-        }
-    }
 }
 
 /// One diagnostic over a `[start, end)` position range.
@@ -103,7 +93,7 @@ pub fn publish(
             namespace,
             line_start,
             line_start,
-            DecorationKind::GutterSign(d.severity.sign().to_string()),
+            DecorationKind::GutterSign(role),
         );
 
         // End-of-line message.
@@ -153,7 +143,7 @@ mod tests {
         assert!(
             kinds
                 .iter()
-                .any(|k| matches!(k, DecorationKind::GutterSign(s) if s == "E"))
+                .any(|k| matches!(k, DecorationKind::GutterSign(HlRole::Error)))
         );
         assert!(kinds.iter().any(|k| matches!(
             k,

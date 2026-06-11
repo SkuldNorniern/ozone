@@ -66,8 +66,9 @@ pub enum DecorationKind {
     Highlight(HlRole),
     /// Underline over `[start, end)` (e.g. diagnostics).
     Underline(HlRole),
-    /// A short sign in the gutter on the start line.
-    GutterSign(String),
+    /// A severity marker in the gutter on the start line, drawn as a coloured
+    /// dot (theme-coloured via [`HlRole`]).
+    GutterSign(HlRole),
     /// Virtual (non-buffer) text anchored at `start`.
     VirtualText {
         text: String,
