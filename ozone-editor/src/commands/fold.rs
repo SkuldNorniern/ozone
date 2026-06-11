@@ -1,6 +1,8 @@
 //! Fold commands: toggle the fold at the cursor, fold every region, or open
 //! all. Fold state is view-local (`View::folds`); see [`crate::fold`].
 
+use ozone_syntax::{Filetype, fold_line_ranges};
+
 use crate::fold;
 
 use super::CommandRegistry;
@@ -16,7 +18,17 @@ pub(super) fn register_fold_commands(reg: &mut CommandRegistry) {
             .get(&ctx.view_id)
             .map(|v| v.cursor.line)
             .unwrap_or(0);
-        let Some(header) = fold::header_for(buf, cursor_line) else {
+        let ft = match &buf.kind {
+            ozone_buffer::BufferKind::File(p) => Filetype::from_path(p.to_str().unwrap_or("")),
+            _ => Filetype::Plain,
+        };
+        let struct_ranges = fold_line_ranges(ft, &buf.text());
+        let header = if struct_ranges.is_empty() {
+            fold::header_for(buf, cursor_line)
+        } else {
+            fold::structural_header_for(&struct_ranges, cursor_line)
+        };
+        let Some(header) = header else {
             return;
         };
         if let Some(view) = ctx.workspace.views.get_mut(&ctx.view_id)
@@ -34,7 +46,16 @@ pub(super) fn register_fold_commands(reg: &mut CommandRegistry) {
         let Some(buf) = ctx.workspace.buffers.get(&ctx.buffer_id) else {
             return;
         };
-        let headers = fold::all_headers(buf);
+        let ft = match &buf.kind {
+            ozone_buffer::BufferKind::File(p) => Filetype::from_path(p.to_str().unwrap_or("")),
+            _ => Filetype::Plain,
+        };
+        let struct_ranges = fold_line_ranges(ft, &buf.text());
+        let headers = if struct_ranges.is_empty() {
+            fold::all_headers(buf)
+        } else {
+            fold::structural_all_headers(&struct_ranges)
+        };
         if let Some(view) = ctx.workspace.views.get_mut(&ctx.view_id) {
             view.folds.extend(headers);
         }

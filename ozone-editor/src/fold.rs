@@ -95,6 +95,49 @@ pub fn all_headers(buf: &Buffer) -> Vec<usize> {
         .collect()
 }
 
+// ---------------------------------------------------------------------------
+// Structural fold helpers (sylven-derived `(start_line, end_line)` ranges)
+// ---------------------------------------------------------------------------
+
+/// Whether `line` is a fold header in a structural fold range set.
+pub fn structural_is_foldable_at(ranges: &[(usize, usize)], line: usize) -> bool {
+    ranges.iter().any(|&(s, _)| s == line)
+}
+
+/// The fold region for `header` in a structural range set.
+pub fn structural_fold_region(ranges: &[(usize, usize)], header: usize) -> Option<(usize, usize)> {
+    ranges.iter().find(|&&(s, _)| s == header).copied()
+}
+
+/// Find the innermost structural fold header that contains `line`.
+pub fn structural_header_for(ranges: &[(usize, usize)], line: usize) -> Option<usize> {
+    ranges
+        .iter()
+        .filter(|&&(s, e)| s <= line && line <= e)
+        .min_by_key(|&&(s, e)| e - s)
+        .map(|&(s, _)| s)
+}
+
+/// All unique start lines from a structural range set (for "fold all").
+pub fn structural_all_headers(ranges: &[(usize, usize)]) -> Vec<usize> {
+    let mut seen = std::collections::HashSet::new();
+    ranges
+        .iter()
+        .filter_map(|&(s, _)| seen.insert(s).then_some(s))
+        .collect()
+}
+
+/// Whether `line` is hidden by a collapsed structural fold.
+pub fn structural_is_hidden(
+    folds: &HashSet<usize>,
+    ranges: &[(usize, usize)],
+    line: usize,
+) -> bool {
+    folds
+        .iter()
+        .any(|&h| structural_fold_region(ranges, h).is_some_and(|(s, e)| line > s && line <= e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
