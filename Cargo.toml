@@ -36,6 +36,9 @@ ozone-editor = { workspace = true }
 ozone-gui    = { workspace = true }
 ozone-config = { workspace = true }
 
+[patch."https://github.com/standize/taste.git"]
+taste = { path = "taste" }
+
 [patch."https://github.com/SkuldNorniern/sylven.git"]
 sylven         = { path = "sylven" }
 sylven-lex     = { path = "sylven/sylven-lex" }

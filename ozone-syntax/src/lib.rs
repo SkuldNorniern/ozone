@@ -220,6 +220,19 @@ mod tests {
         assert_eq!(detect_language("a.yaml"), Some(Language::YAML));
         assert_eq!(detect_language("a.yml"), Some(Language::YAML));
         assert_eq!(detect_language("noext"), None);
+        assert_eq!(detect_language("plugin.oxy"), Some(Language::OXYGEN));
+    }
+
+    #[test]
+    fn oxygen_highlights_via_bundled_plugin() {
+        let lang = detect_language("plugin.oxy");
+        let features = parse_features(lang, "fn main() {}").expect("oxygen plugin registered");
+        assert!(
+            features
+                .highlights
+                .iter()
+                .any(|h| h.kind == sylven::HighlightKind::Keyword)
+        );
     }
 
     #[test]
