@@ -177,6 +177,14 @@ pub(super) fn register_edit_commands(reg: &mut CommandRegistry) {
         duplicate_line,
     );
 
+    reg.register("edit.move-line-up", "Move the current line up", |ctx| {
+        move_line(ctx, -1);
+    });
+
+    reg.register("edit.move-line-down", "Move the current line down", |ctx| {
+        move_line(ctx, 1);
+    });
+
     reg.register(
         "edit.trim-trailing-whitespace",
         "Trim trailing spaces and tabs",
@@ -316,6 +324,82 @@ fn duplicate_line(ctx: &mut CommandContext) {
         if let Some(span) = view.selection.as_mut() {
             span.start.line += block_len;
             span.end.line += block_len;
+        }
+        if view.cursor != old_cursor {
+            cursor_moved_from = Some(old_cursor);
+        }
+    }
+    if let Some(old) = cursor_moved_from {
+        emit_cursor_moved(ctx, old);
+    }
+}
+
+/// Move the current line (or every line touched by the selection) up or
+/// down by one line. `direction` is -1 for up, +1 for down. No-op when
+/// already at the buffer edge.
+fn move_line(ctx: &mut CommandContext, direction: i32) {
+    let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
+    let view = ctx.workspace.views.get(&ctx.view_id).unwrap();
+    let (start_line, end_line) = selection_line_range(view);
+    let line_count = buf.line_count();
+
+    if direction < 0 && start_line == 0 {
+        return;
+    }
+    if direction > 0 && end_line + 1 >= line_count {
+        return;
+    }
+
+    let (block_start, block_end, neighbor) = if direction < 0 {
+        (start_line - 1, end_line, start_line - 1)
+    } else {
+        (start_line, end_line + 1, end_line + 1)
+    };
+
+    let neighbor_text = buf.line(neighbor).unwrap_or_default();
+    let block: Vec<String> = (block_start..=block_end)
+        .filter_map(|l| if l == neighbor { None } else { buf.line(l) })
+        .collect();
+
+    let del_start = Pos::new(block_start, 0);
+    let del_end = Pos::new(block_end, buf.line_len(block_end));
+
+    let new_text = if direction < 0 {
+        format!("{}\n{}", block.join("\n"), neighbor_text)
+    } else {
+        format!("{}\n{}", neighbor_text, block.join("\n"))
+    };
+
+    let delta = ctx
+        .workspace
+        .buffers
+        .get_mut(&ctx.buffer_id)
+        .unwrap()
+        .delete_span(del_start, del_end);
+    ctx.workspace.emit(EditorEvent::BufferChanged {
+        id: ctx.buffer_id,
+        delta,
+    });
+    let delta = ctx
+        .workspace
+        .buffers
+        .get_mut(&ctx.buffer_id)
+        .unwrap()
+        .insert(del_start, &new_text);
+    ctx.workspace.emit(EditorEvent::BufferChanged {
+        id: ctx.buffer_id,
+        delta,
+    });
+
+    let shift = direction as isize;
+    let mut cursor_moved_from = None;
+    if let Some(view) = ctx.workspace.views.get_mut(&ctx.view_id) {
+        let old_cursor = view.cursor;
+        view.cursor.line = (view.cursor.line as isize + shift) as usize;
+        view.col_memory = view.cursor.col;
+        if let Some(span) = view.selection.as_mut() {
+            span.start.line = (span.start.line as isize + shift) as usize;
+            span.end.line = (span.end.line as isize + shift) as usize;
         }
         if view.cursor != old_cursor {
             cursor_moved_from = Some(old_cursor);
@@ -473,6 +557,61 @@ mod tests {
         assert_eq!(buf.line(2).as_deref(), Some("a"));
         assert_eq!(buf.line(3).as_deref(), Some("b"));
         assert_eq!(buf.line(4).as_deref(), Some("c"));
+        let sel = ws.active_view().unwrap().selection.unwrap();
+        assert_eq!(sel.start, Pos::new(2, 0));
+        assert_eq!(sel.end, Pos::new(3, 1));
+    }
+
+    #[test]
+    fn move_line_down_then_up_round_trips() {
+        let mut ws = plain_ws("a\nb\nc");
+        ws.active_view_mut().unwrap().cursor = Pos::new(0, 0);
+
+        run_cmd(&mut ws, "edit.move-line-down");
+        let buf = ws.active_buffer().unwrap();
+        assert_eq!(buf.line(0).as_deref(), Some("b"));
+        assert_eq!(buf.line(1).as_deref(), Some("a"));
+        assert_eq!(buf.line(2).as_deref(), Some("c"));
+        assert_eq!(ws.active_view().unwrap().cursor, Pos::new(1, 0));
+
+        run_cmd(&mut ws, "edit.move-line-up");
+        let buf = ws.active_buffer().unwrap();
+        assert_eq!(buf.line(0).as_deref(), Some("a"));
+        assert_eq!(buf.line(1).as_deref(), Some("b"));
+        assert_eq!(buf.line(2).as_deref(), Some("c"));
+        assert_eq!(ws.active_view().unwrap().cursor, Pos::new(0, 0));
+    }
+
+    #[test]
+    fn move_line_no_op_at_buffer_edges() {
+        let mut ws = plain_ws("a\nb\nc");
+
+        ws.active_view_mut().unwrap().cursor = Pos::new(0, 0);
+        run_cmd(&mut ws, "edit.move-line-up");
+        assert_eq!(ws.active_buffer().unwrap().line(0).as_deref(), Some("a"));
+        assert_eq!(ws.active_view().unwrap().cursor, Pos::new(0, 0));
+
+        ws.active_view_mut().unwrap().cursor = Pos::new(2, 0);
+        run_cmd(&mut ws, "edit.move-line-down");
+        assert_eq!(ws.active_buffer().unwrap().line(2).as_deref(), Some("c"));
+        assert_eq!(ws.active_view().unwrap().cursor, Pos::new(2, 0));
+    }
+
+    #[test]
+    fn move_line_selection_moves_whole_block() {
+        let mut ws = plain_ws("a\nb\nc\nd");
+        ws.active_view_mut().unwrap().selection = Some(Span {
+            start: Pos::new(1, 0),
+            end: Pos::new(2, 1),
+        });
+
+        run_cmd(&mut ws, "edit.move-line-down");
+
+        let buf = ws.active_buffer().unwrap();
+        assert_eq!(buf.line(0).as_deref(), Some("a"));
+        assert_eq!(buf.line(1).as_deref(), Some("d"));
+        assert_eq!(buf.line(2).as_deref(), Some("b"));
+        assert_eq!(buf.line(3).as_deref(), Some("c"));
         let sel = ws.active_view().unwrap().selection.unwrap();
         assert_eq!(sel.start, Pos::new(2, 0));
         assert_eq!(sel.end, Pos::new(3, 1));

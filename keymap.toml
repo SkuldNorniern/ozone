@@ -235,7 +235,15 @@ command = "edit.toggle-comment"
 keys = "ctrl+d"
 command = "edit.duplicate-line"
 
+[[keymap]]
+keys = "meta+up"
+command = "edit.move-line-up"
+
+[[keymap]]
+keys = "meta+down"
+command = "edit.move-line-down"
+
 # ── Selection ────────────────────────────────────────────────────────────────
 [[keymap]]
-keys = "alt+up"
+keys = "meta+shift+up"
 command = "select.expand"

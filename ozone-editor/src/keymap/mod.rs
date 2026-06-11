@@ -119,8 +119,10 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("enter", "edit.insert-newline"),
     ("ctrl+/", "edit.toggle-comment"),
     ("ctrl+d", "edit.duplicate-line"),
+    ("meta+up", "edit.move-line-up"),
+    ("meta+down", "edit.move-line-down"),
     // Selection
-    ("alt+up", "select.expand"),
+    ("meta+shift+up", "select.expand"),
 ];
 
 impl Keymap {
