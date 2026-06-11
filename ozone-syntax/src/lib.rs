@@ -8,6 +8,7 @@
 mod json;
 mod markdown;
 mod rust;
+mod rust_buffer;
 pub mod symbols;
 mod toml;
 
@@ -107,6 +108,9 @@ impl ScanState {
 
 /// Scan one line. Returns token spans and the updated scan state.
 /// Spans cover only the "interesting" (coloured) regions; gaps are Default.
+///
+/// For Rust, prefer [`scan_buffer`] — it uses the full-document sylven lexer
+/// which handles nested block comments and raw strings across lines correctly.
 pub fn scan_line(ft: Filetype, line: &str, state: ScanState) -> (Vec<TokenSpan>, ScanState) {
     match ft {
         Filetype::Rust => rust::scan_rust(line, state),
@@ -114,6 +118,31 @@ pub fn scan_line(ft: Filetype, line: &str, state: ScanState) -> (Vec<TokenSpan>,
         Filetype::Json => json::scan_json(line, state),
         Filetype::Markdown => markdown::scan_markdown(line, state),
         Filetype::Plain => (vec![], ScanState::clean()),
+    }
+}
+
+/// Scan an entire document at once and return per-line token spans.
+///
+/// For Rust this uses the sylven full-document lexer, which handles nested
+/// block comments and raw strings across line boundaries. Other filetypes fall
+/// back to the line-by-line scanners.
+///
+/// The returned `Vec` has one entry per line (split on `\n`). Spans are
+/// relative to the start of each line (byte offsets within the line string).
+pub fn scan_buffer(ft: Filetype, text: &str) -> Vec<Vec<TokenSpan>> {
+    match ft {
+        Filetype::Rust => rust_buffer::scan_rust_buffer(text),
+        _ => {
+            // Fallback: run the existing line-by-line scanners.
+            let mut result = Vec::new();
+            let mut state = ScanState::clean();
+            for line in text.split('\n') {
+                let (spans, new_state) = scan_line(ft, line, state);
+                state = new_state;
+                result.push(spans);
+            }
+            result
+        }
     }
 }
 
