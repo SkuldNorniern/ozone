@@ -4,7 +4,7 @@ use std::fs;
 use ozone_buffer::{BufferId, BufferKind, Pos};
 
 use crate::events::EditorEvent;
-use crate::view::ViewId;
+use crate::view::{View, ViewId};
 use crate::workspace::Workspace;
 
 mod cursor;
@@ -272,6 +272,22 @@ pub fn collect_workspace_files(base: &std::path::Path, cap: usize) -> Vec<String
     }
     out.sort();
     out
+}
+
+/// The inclusive line range touched by `view`'s selection, or just the
+/// cursor line if there is no selection. A line-wise selection that ends at
+/// column 0 doesn't include that final line.
+pub(super) fn selection_line_range(view: &View) -> (usize, usize) {
+    match view.selection {
+        Some(span) => {
+            let mut end = span.end.line;
+            if end > span.start.line && span.end.col == 0 {
+                end -= 1;
+            }
+            (span.start.line, end)
+        }
+        None => (view.cursor.line, view.cursor.line),
+    }
 }
 
 pub(super) fn emit_cursor_moved(ctx: &mut CommandContext, old: Pos) {

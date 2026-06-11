@@ -117,6 +117,7 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("backspace", "edit.delete-char-backward"),
     ("delete", "edit.delete-char-forward"),
     ("enter", "edit.insert-newline"),
+    ("ctrl+/", "edit.toggle-comment"),
     // Selection
     ("alt+up", "select.expand"),
 ];

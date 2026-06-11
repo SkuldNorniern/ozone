@@ -227,6 +227,10 @@ command = "edit.delete-char-forward"
 keys = "enter"
 command = "edit.insert-newline"
 
+[[keymap]]
+keys = "ctrl+/"
+command = "edit.toggle-comment"
+
 # ── Selection ────────────────────────────────────────────────────────────────
 [[keymap]]
 keys = "alt+up"
