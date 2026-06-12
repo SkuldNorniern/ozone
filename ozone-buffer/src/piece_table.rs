@@ -75,6 +75,10 @@ impl PieceTable {
         self.materialized().to_string()
     }
 
+    pub fn text_eq(&self, other: &str) -> bool {
+        &*self.materialized() == other
+    }
+
     pub fn line_count(&self) -> usize {
         let mut n = 1usize;
         for p in &self.pieces {
@@ -86,6 +90,12 @@ impl PieceTable {
     pub fn line(&self, idx: usize) -> Option<String> {
         let text = self.materialized();
         text.split('\n').nth(idx).map(|s| s.to_string())
+    }
+
+    /// Length of one line in bytes, excluding its newline.
+    pub fn line_len(&self, idx: usize) -> Option<usize> {
+        let text = self.materialized();
+        text.split('\n').nth(idx).map(str::len)
     }
 
     /// Return lines `start..end` in a single pass — O(text_len) instead of
@@ -313,6 +323,15 @@ mod tests {
     fn line_count_multiline() {
         let t = PieceTable::new("a\nb\nc");
         assert_eq!(t.line_count(), 3);
+    }
+
+    #[test]
+    fn line_len_does_not_require_an_owned_line() {
+        let t = PieceTable::new("alpha\n한글\n");
+        assert_eq!(t.line_len(0), Some(5));
+        assert_eq!(t.line_len(1), Some(6));
+        assert_eq!(t.line_len(2), Some(0));
+        assert_eq!(t.line_len(3), None);
     }
 
     #[test]

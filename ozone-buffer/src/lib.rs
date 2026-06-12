@@ -212,6 +212,18 @@ impl Buffer {
         self.table.text()
     }
 
+    pub fn text_eq(&self, other: &str) -> bool {
+        self.table.text_eq(other)
+    }
+
+    pub fn len(&self) -> usize {
+        self.table.total_len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Replace the entire buffer contents (used for streamed/generated buffers
     /// like the terminal). Clears undo history; does not mark the buffer dirty.
     pub fn set_text(&mut self, content: &str) {
@@ -236,7 +248,7 @@ impl Buffer {
 
     /// Length of a line in bytes (excludes the newline).
     pub fn line_len(&self, line: usize) -> usize {
-        self.table.line(line).map(|l| l.len()).unwrap_or(0)
+        self.table.line_len(line).unwrap_or(0)
     }
 
     pub fn pos_to_offset(&self, pos: Pos) -> usize {
@@ -440,6 +452,17 @@ mod tests {
         let r3 = buf.revision();
         buf.set_text("fresh");
         assert!(buf.revision() > r3, "set_text should bump revision");
+    }
+
+    #[test]
+    fn len_and_empty_follow_edits() {
+        let mut buffer = Buffer::new_scratch();
+        assert!(buffer.is_empty());
+        assert_eq!(buffer.len(), 0);
+
+        buffer.insert(Pos::new(0, 0), "한");
+        assert!(!buffer.is_empty());
+        assert_eq!(buffer.len(), 3);
     }
 
     #[test]

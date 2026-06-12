@@ -292,10 +292,10 @@ impl Workspace {
         let Some(buf) = self.buffers.get_mut(&id) else {
             return false;
         };
-        if buf.text() == new_text {
+        if buf.text_eq(new_text) {
             return false;
         }
-        let len = buf.text().len();
+        let len = buf.len();
         if let Some(delta) = buf.delete_at(0, len) {
             self.emit(EditorEvent::BufferChanged { id, delta });
         }

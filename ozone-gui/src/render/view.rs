@@ -86,7 +86,7 @@ pub(super) fn draw_view(
     let Some(buf) = ws.buffers.get(&buffer_id) else {
         return Ok(());
     };
-    let show_welcome = matches!(buf.kind, BufferKind::Scratch) && buf.text().is_empty();
+    let show_welcome = matches!(buf.kind, BufferKind::Scratch) && buf.is_empty();
 
     ctx.draw_rect(rect, &solid(palette().background))?;
 
@@ -133,7 +133,7 @@ pub(super) fn draw_view(
     let visible_start = buf.pos_to_offset(Pos::new(scroll, 0));
     let visible_end_line = (scroll + visible).min(line_count);
     let visible_end = if visible_end_line >= line_count {
-        buf.text().len().saturating_add(1)
+        buf.len().saturating_add(1)
     } else {
         buf.pos_to_offset(Pos::new(visible_end_line, 0))
     };
@@ -186,11 +186,14 @@ pub(super) fn draw_view(
     let mut line_idx = scroll;
     while visual_i < visible && line_idx < line_count {
         let line_offset = line_idx - scroll;
-        let full_line_text = visible_texts.get(line_offset).cloned().unwrap_or_default();
+        let full_line_text = visible_texts
+            .get(line_offset)
+            .map(String::as_str)
+            .unwrap_or_default();
         let wrap_segments = if word_wrap {
-            wrap_line_segments(&full_line_text, text_cols)
+            wrap_line_segments(full_line_text, text_cols)
         } else {
-            vec![(0, line_prefix_end(&full_line_text, text_cols))]
+            vec![(0, line_prefix_end(full_line_text, text_cols))]
         };
         let line_start = buf.pos_to_offset(Pos::new(line_idx, 0));
         let spans: &[ozone_syntax::TokenSpan] = cached_spans
@@ -257,7 +260,7 @@ pub(super) fn draw_view(
             // Only drawn on the first wrap segment; only for text buffers.
             if config.ui.indent_guides && segment_index == 0 && term_grid.is_none() {
                 let tab_w = config.editor.tab_width.max(1);
-                let indent_cols = leading_indent_cols(&full_line_text, tab_w);
+                let indent_cols = leading_indent_cols(full_line_text, tab_w);
                 let guide_color = solid(palette().indent_guide);
                 let guide_w = 1.0_f32.max(metrics.char_w * 0.1);
                 for level in 1..=indent_cols / tab_w {
