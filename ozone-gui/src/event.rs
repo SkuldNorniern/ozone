@@ -7,7 +7,7 @@ use aurea::{MouseButton, WindowEvent};
 use ozone_buffer::{BufferId, BufferKind};
 use ozone_editor::{KeyStroke, Workspace};
 
-use crate::actions::{dispatch_autocmds, handle_minibuffer_key, insert_text_raw};
+use crate::actions::{apply_auto_save, dispatch_autocmds, handle_minibuffer_key, insert_text_raw};
 use crate::canvas::SendableCanvas;
 use crate::input::{corrected_mods, terminal_key_bytes};
 use crate::keys::{Overlays, active_terminal, apply_ui_intents, handle_key};
@@ -308,6 +308,13 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                 ) {
                     state.needs_redraw = true;
                 }
+                apply_auto_save(
+                    &mut lock(state.workspace.as_ref()),
+                    &state.config,
+                    &state.commands,
+                    &state.autocmds,
+                    &mut state.shell_jobs,
+                );
                 if palette.is_some() || search.is_some() || minibuffer.is_some() {
                     state.swallow_text = true;
                 }
@@ -364,6 +371,13 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                     } else if insert_text_raw(text, &mut workspace) {
                         dispatch_autocmds(
                             &mut workspace,
+                            &state.commands,
+                            &state.autocmds,
+                            &mut state.shell_jobs,
+                        );
+                        apply_auto_save(
+                            &mut workspace,
+                            &state.config,
                             &state.commands,
                             &state.autocmds,
                             &mut state.shell_jobs,

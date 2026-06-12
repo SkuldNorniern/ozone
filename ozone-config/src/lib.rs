@@ -171,11 +171,22 @@ pub struct ModifierOverrides {
 }
 
 /// Frontend behavior toggles (mirrors config.toml `[ui]`).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UiConfig {
     /// Enables mouse-driven editor interaction. Keyboard input remains active
     /// regardless of this setting.
     pub mouse: bool,
+    /// Draw vertical lines at each indentation level in text buffers.
+    pub indent_guides: bool,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            mouse: false,
+            indent_guides: true,
+        }
+    }
 }
 
 /// Top-level configuration.
@@ -288,10 +299,13 @@ impl Config {
             config.theme = name.to_string();
         }
 
-        if let Some(ui) = table.get("ui").and_then(|v| v.as_table())
-            && let Some(mouse) = ui.get("mouse").and_then(|v| v.as_bool())
-        {
-            config.ui.mouse = mouse;
+        if let Some(ui) = table.get("ui").and_then(|v| v.as_table()) {
+            if let Some(mouse) = ui.get("mouse").and_then(|v| v.as_bool()) {
+                config.ui.mouse = mouse;
+            }
+            if let Some(v) = ui.get("indent_guides").and_then(|v| v.as_bool()) {
+                config.ui.indent_guides = v;
+            }
         }
 
         config.keymaps = parse::parse_keymaps(&table);

@@ -1,9 +1,9 @@
 use aurea::AureaResult;
 use aurea::render::{Color, DrawingContext, Font, Path, PathCommand, Point, Rect};
 
-use ozone_buffer::{BufferKind, Pos};
+use ozone_buffer::{Buffer, BufferId, BufferKind, Pos};
 use ozone_config::{Config, CursorStyle, LineNumbers};
-use ozone_editor::{Decoration, DecorationKind, ViewId, VirtualPos, Workspace, fold};
+use ozone_editor::{Decoration, DecorationKind, HlRole, ViewId, VirtualPos, Workspace, fold};
 use ozone_syntax::{TokenKind, fold_line_ranges, scan_buffer};
 use taste::detect_language;
 
@@ -70,6 +70,7 @@ pub(super) fn draw_view(
 
     if let Some(view) = ws.views.get_mut(&view_id) {
         view.page_height = visible;
+        view.scroll_off = config.editor.scroll_off;
         view.scroll_line = view.scroll_line.min(max_scroll_line(line_count, visible));
         if view.scroll_line >= max_scroll_line(line_count, visible) {
             view.scroll_y = 0.0;
@@ -251,6 +252,19 @@ pub(super) fn draw_view(
                     Rect::new(rect.x, line_top + 1.0, rect.width, line_h - 1.0),
                     &solid(palette().cursor_line),
                 )?;
+            }
+
+            // Indent guides: one 1-px vertical line per indent level.
+            // Only drawn on the first wrap segment; only for text buffers.
+            if config.ui.indent_guides && segment_index == 0 && term_grid.is_none() {
+                let tab_w = config.editor.tab_width.max(1);
+                let indent_cols = leading_indent_cols(&full_line_text, tab_w);
+                let guide_color = solid(palette().indent_guide);
+                let guide_w = 1.0_f32.max(metrics.char_w * 0.1);
+                for level in 1..=indent_cols / tab_w {
+                    let gx = text_x + (level * tab_w) as f32 * metrics.char_w - guide_w * 0.5;
+                    ctx.draw_rect(Rect::new(gx, line_top, guide_w, line_h), &guide_color)?;
+                }
             }
 
             if let Some(selection) = view.selection
@@ -579,6 +593,8 @@ pub(super) fn draw_view(
         };
         let thumb_y = rect.y + t * (track_h - thumb_h);
         let bar_x = rect.x + rect.width - 4.0;
+        // Annotations: diagnostic ticks + search-match ticks on the track.
+        draw_scrollbar_annotations(ctx, ws, buffer_id, line_count, rect, bar_x, track_h, buf)?;
         ctx.draw_rect(
             Rect::new(bar_x, thumb_y, 3.0, thumb_h),
             &solid(palette().scrollbar_thumb),
@@ -592,6 +608,47 @@ pub(super) fn draw_view(
         )?;
     }
 
+    Ok(())
+}
+
+/// Draw colored tick marks on the scrollbar track for diagnostics and search
+/// matches. Ticks are drawn before the thumb so the thumb slides over them.
+#[allow(clippy::too_many_arguments)]
+fn draw_scrollbar_annotations(
+    ctx: &mut dyn DrawingContext,
+    ws: &Workspace,
+    buffer_id: BufferId,
+    line_count: usize,
+    rect: Rect,
+    bar_x: f32,
+    track_h: f32,
+    buf: &Buffer,
+) -> AureaResult<()> {
+    if line_count == 0 {
+        return Ok(());
+    }
+    let tick_w = 3.0_f32;
+    let tick_h = 2.0_f32.max(track_h / line_count as f32 * 0.6);
+    let line_count_f = line_count as f32;
+
+    for dec in ws.decorations().all(buffer_id) {
+        let color =
+            match &dec.kind {
+                DecorationKind::Underline(HlRole::Error)
+                | DecorationKind::GutterSign(HlRole::Error) => palette().notify_error,
+                DecorationKind::Underline(HlRole::Warn)
+                | DecorationKind::GutterSign(HlRole::Warn) => palette().notify_warn,
+                DecorationKind::Underline(HlRole::Info)
+                | DecorationKind::GutterSign(HlRole::Info) => palette().notify_info,
+                DecorationKind::Highlight(HlRole::Search)
+                | DecorationKind::Highlight(HlRole::SearchCurrent) => palette().search_match_active,
+                _ => continue,
+            };
+        let line = buf.offset_to_pos(dec.start).line;
+        let t = (line as f32 + 0.5) / line_count_f;
+        let ty = rect.y + t * track_h - tick_h * 0.5;
+        ctx.draw_rect(Rect::new(bar_x, ty, tick_w, tick_h), &solid(color))?;
+    }
     Ok(())
 }
 
@@ -859,6 +916,21 @@ fn draw_tree_line(
     )?;
 
     Ok(())
+}
+
+/// Count leading indentation columns in `text`, expanding tabs to `tab_w`.
+/// Returns the total column count of leading whitespace. Blank lines return 0.
+fn leading_indent_cols(text: &str, tab_w: usize) -> usize {
+    let mut col = 0usize;
+    for ch in text.chars() {
+        match ch {
+            ' ' => col += 1,
+            '\t' => col = (col / tab_w + 1) * tab_w,
+            _ => break,
+        }
+    }
+    // Blank or all-whitespace lines contribute no guide levels.
+    if text.trim().is_empty() { 0 } else { col }
 }
 
 /// Maps a file's extension to an icon color; `dim` is the fallback.

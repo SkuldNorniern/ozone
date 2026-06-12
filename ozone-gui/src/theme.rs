@@ -74,6 +74,7 @@ pub(crate) struct Theme {
     pub picker_fg: Color,
     pub picker_detail: Color,
     pub picker_prompt: Color,
+    pub indent_guide: Color,
     pub search_match: Color,
     pub search_match_active: Color,
     pub notify_info: Color,
@@ -117,6 +118,7 @@ impl Default for Theme {
             picker_fg: Color::rgb(205, 214, 244),
             picker_detail: Color::rgb(127, 132, 156),
             picker_prompt: Color::rgb(203, 166, 247),
+            indent_guide: Color::rgba(49, 50, 68, 100),
             search_match: Color::rgba(249, 226, 175, 70),
             search_match_active: Color::rgba(250, 179, 135, 150),
             notify_info: blue,
@@ -199,6 +201,7 @@ impl Theme {
         apply(ui, "picker_fg", &mut self.picker_fg);
         apply(ui, "picker_detail", &mut self.picker_detail);
         apply(ui, "picker_prompt", &mut self.picker_prompt);
+        apply(ui, "indent_guide", &mut self.indent_guide);
         apply(ui, "search_match", &mut self.search_match);
         apply(ui, "search_match_active", &mut self.search_match_active);
 

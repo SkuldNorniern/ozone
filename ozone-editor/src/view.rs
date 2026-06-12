@@ -34,6 +34,10 @@ pub struct View {
     pub col_memory: usize,
     /// Visible line count — set by ozone-gui each frame so page commands work.
     pub page_height: usize,
+    /// Lines of context kept above/below cursor when scrolling. Set by the GUI
+    /// from `[editor] scroll_off`; defaults to 0 so the editor is usable before
+    /// the GUI propagates it.
+    pub scroll_off: usize,
     /// Header lines whose fold is collapsed (interior lines hidden). View-local,
     /// like Neovim window folds. See [`crate::fold`].
     pub folds: HashSet<usize>,
@@ -51,6 +55,7 @@ impl View {
             anchor: None,
             col_memory: 0,
             page_height: 40,
+            scroll_off: 0,
             folds: HashSet::new(),
         }
     }
@@ -66,6 +71,7 @@ impl View {
             anchor: self.anchor,
             col_memory: self.col_memory,
             page_height: self.page_height,
+            scroll_off: self.scroll_off,
             folds: self.folds.clone(),
         }
     }
@@ -76,14 +82,23 @@ impl View {
         self.anchor = None;
     }
 
-    /// Ensure the cursor is visible within `visible_lines` lines.
+    /// Ensure the cursor is visible within `visible_lines` lines, keeping at
+    /// least `self.scroll_off` context lines above and below the cursor.
     pub fn scroll_to_cursor(&mut self, visible_lines: usize) {
-        if self.cursor.line < self.scroll_line {
-            self.scroll_line = self.cursor.line;
+        // Cap scroll_off so it can never push the cursor off-screen on its own
+        // (e.g. tiny split panes or very large scroll_off values).
+        let off = self.scroll_off.min(visible_lines.saturating_sub(1) / 2);
+        let top_trigger = self.scroll_line + off;
+        if self.cursor.line < top_trigger {
+            self.scroll_line = self.cursor.line.saturating_sub(off);
             self.scroll_y = 0.0;
-        } else if self.cursor.line >= self.scroll_line + visible_lines {
-            self.scroll_line = self.cursor.line + 1 - visible_lines;
-            self.scroll_y = 0.0;
+        } else {
+            let bot_trigger = self.scroll_line + visible_lines;
+            let cursor_bot = self.cursor.line + off + 1;
+            if cursor_bot > bot_trigger {
+                self.scroll_line = cursor_bot.saturating_sub(visible_lines);
+                self.scroll_y = 0.0;
+            }
         }
     }
 
@@ -125,5 +140,45 @@ mod tests {
         view.scroll_by_pixels(-1000.0, 10.0, 3);
         assert_eq!(view.scroll_line, 0);
         assert_eq!(view.scroll_y, 0.0);
+    }
+
+    #[test]
+    fn scroll_to_cursor_no_off_scrolls_exactly_to_edge() {
+        let mut view = View::new(BufferId::next());
+        // cursor moves below viewport
+        view.cursor = Pos::new(20, 0);
+        view.scroll_to_cursor(10);
+        assert_eq!(view.scroll_line, 11); // 20 + 0 + 1 - 10 = 11
+        // cursor moves above viewport
+        view.cursor = Pos::new(5, 0);
+        view.scroll_to_cursor(10);
+        assert_eq!(view.scroll_line, 5);
+    }
+
+    #[test]
+    fn scroll_to_cursor_with_scroll_off() {
+        let mut view = View::new(BufferId::next());
+        view.scroll_off = 3;
+        // cursor moves below viewport (visible=10, off=3 → bot_trigger = scroll_line+10)
+        view.scroll_line = 0;
+        view.cursor = Pos::new(9, 0); // 9 + 3 + 1 = 13 > 10
+        view.scroll_to_cursor(10);
+        assert_eq!(view.scroll_line, 3); // 13 - 10 = 3
+        // cursor near top — should pull scroll back
+        view.scroll_line = 10;
+        view.cursor = Pos::new(12, 0); // 12 < 10 + 3 = 13 → scroll_line = 12 - 3 = 9
+        view.scroll_to_cursor(10);
+        assert_eq!(view.scroll_line, 9);
+    }
+
+    #[test]
+    fn scroll_off_capped_at_half_page() {
+        let mut view = View::new(BufferId::next());
+        // scroll_off=100 is capped to (10-1)/2 = 4.
+        view.scroll_off = 100;
+        view.cursor = Pos::new(9, 0);
+        view.scroll_to_cursor(10);
+        // bottom: cursor_bot = 9 + 4 + 1 = 14 > 0 + 10 → scroll_line = 14 - 10 = 4
+        assert_eq!(view.scroll_line, 4);
     }
 }

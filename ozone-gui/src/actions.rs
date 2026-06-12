@@ -7,6 +7,7 @@
 //! keymap, palette, minibuffer, picker — drives commands the same way.
 
 use ozone_buffer::{BufferId, BufferKind};
+use ozone_config::Config;
 use ozone_editor::{AutocommandRegistry, CommandContext, CommandRegistry, EditorEvent, Workspace};
 
 use crate::overlay::minibuffer::Minibuffer;
@@ -233,6 +234,30 @@ pub(crate) fn dispatch_autocmds(
             }
             execute_command(&command, ws, reg, shell_jobs);
         }
+    }
+}
+
+/// Save all dirty file buffers when `[editor] auto_save = true`. Called after
+/// any operation that may have left buffers dirty (key press, text input,
+/// completion commit). Pre-save autocmds (trim whitespace, etc.) run first,
+/// then the full `file.save-all` path fires so notifications and post-save
+/// events (e.g. `!cargo fmt`) behave identically to a manual Ctrl+S.
+pub(crate) fn apply_auto_save(
+    ws: &mut Workspace,
+    config: &Config,
+    reg: &CommandRegistry,
+    autocmds: &AutocommandRegistry,
+    shell_jobs: &mut ShellJobs,
+) {
+    if !config.editor.auto_save {
+        return;
+    }
+    let has_dirty_file = ws
+        .buffers
+        .values()
+        .any(|buf| buf.is_dirty() && matches!(&buf.kind, BufferKind::File(_)));
+    if has_dirty_file {
+        run_cmd("file.save-all", ws, reg, autocmds, shell_jobs);
     }
 }
 
