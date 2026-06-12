@@ -36,6 +36,25 @@ struct Binding {
     layer: Layer,
 }
 
+/// A user keybinding that overwrites an earlier binding in the same scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeymapConflict {
+    pub chord: String,
+    pub filetype: Option<String>,
+    pub previous_command: String,
+    pub command: String,
+}
+
+impl KeymapConflict {
+    pub fn message(&self) -> String {
+        let scope = self.filetype.as_deref().unwrap_or("global");
+        format!(
+            "{} ({scope}): {} is overwritten by {}",
+            self.chord, self.previous_command, self.command
+        )
+    }
+}
+
 /// The result of feeding a stroke to the keymap.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeymapOutcome {
@@ -190,7 +209,8 @@ impl Keymap {
     ///
     /// Entries with a `platform` field are silently skipped on non-matching OSes,
     /// so the same `keymap.toml` works across platforms without editing.
-    pub fn add_user_config(&mut self, configs: &[KeymapConfig]) {
+    pub fn add_user_config(&mut self, configs: &[KeymapConfig]) -> Vec<KeymapConflict> {
+        let mut conflicts = Vec::new();
         for cfg in configs {
             if let Some(platform) = &cfg.platform {
                 let matches = match platform.trim().to_ascii_lowercase().as_str() {
@@ -211,6 +231,16 @@ impl Keymap {
             } else {
                 Layer::Global
             };
+            if let Some(previous) = self.bindings.iter().rev().find(|binding| {
+                binding.layer == layer && binding.filetype == cfg.filetype && binding.chord == chord
+            }) {
+                conflicts.push(KeymapConflict {
+                    chord: chord_label(&chord),
+                    filetype: cfg.filetype.clone(),
+                    previous_command: previous.command.clone(),
+                    command: cfg.command.clone(),
+                });
+            }
             self.bindings.push(Binding {
                 chord,
                 command: cfg.command.clone(),
@@ -218,6 +248,7 @@ impl Keymap {
                 layer,
             });
         }
+        conflicts
     }
 
     fn applies(binding: &Binding, filetype: Option<&str>) -> bool {
@@ -394,7 +425,8 @@ mod tests {
         assert!(k.control && k.shift && !k.meta && !k.super_);
         assert_eq!(k.key, Key::Char('f'));
         assert!(KeyStroke::parse("ctrl").is_none());
-        assert!(KeyStroke::parse("ctrl+k ctrl+s").is_some());
+        assert!(KeyStroke::parse("ctrl+k ctrl+s").is_none());
+        assert!(parse_chord("ctrl+k ctrl+s").is_some());
         assert_eq!(Key::parse("f5"), Some(Key::F(5)));
         assert_eq!(Key::parse("pgdn"), Some(Key::PageDown));
         assert_eq!(KeyStroke::parse("option+x"), KeyStroke::parse("meta+x"));
@@ -445,6 +477,13 @@ mod tests {
         assert_eq!(chord.len(), 2);
         assert_eq!(chord[0], s('k').with_control());
         assert_eq!(chord[1], s('s').with_control());
+    }
+
+    #[test]
+    fn rejects_chords_with_invalid_strokes() {
+        assert!(parse_chord("ctrl+k definitely-not-a-key ctrl+s").is_none());
+        assert!(parse_chord("ctrl+bogus+k").is_none());
+        assert!(parse_chord("ctrl+k+s").is_none());
     }
 
     #[test]
@@ -684,7 +723,7 @@ mod tests {
     #[test]
     fn later_binding_wins_within_the_same_layer() {
         let mut km = Keymap::new();
-        km.add_user_config(&[
+        let conflicts = km.add_user_config(&[
             KeymapConfig {
                 keys: "meta+x".to_string(),
                 command: "command.palette".to_string(),
@@ -704,5 +743,35 @@ mod tests {
             km.resolve(&[], &stroke, None),
             KeymapOutcome::Execute("edit.cut".to_string())
         );
+        assert_eq!(
+            conflicts,
+            vec![KeymapConflict {
+                chord: "M-X".to_string(),
+                filetype: None,
+                previous_command: "command.palette".to_string(),
+                command: "edit.cut".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn global_and_filetype_bindings_are_not_duplicates() {
+        let mut km = Keymap::new();
+        let conflicts = km.add_user_config(&[
+            KeymapConfig {
+                keys: "ctrl+s".to_string(),
+                command: "file.save".to_string(),
+                filetype: None,
+                platform: None,
+            },
+            KeymapConfig {
+                keys: "control+s".to_string(),
+                command: "rust.save".to_string(),
+                filetype: Some("rust".to_string()),
+                platform: None,
+            },
+        ]);
+
+        assert!(conflicts.is_empty());
     }
 }

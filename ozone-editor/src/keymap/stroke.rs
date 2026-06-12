@@ -153,7 +153,12 @@ impl KeyStroke {
                 "meta" | "alt" | "option" => meta = true,
                 "super" | "cmd" | "command" | "win" => super_ = true,
                 "shift" => shift = true,
-                other => key = Key::parse(other),
+                other => {
+                    if key.is_some() {
+                        return None;
+                    }
+                    key = Some(Key::parse(other)?);
+                }
             }
         }
         Some(Self {
@@ -201,8 +206,8 @@ pub fn chord_label(chord: &[KeyStroke]) -> String {
 pub fn parse_chord(keys: &str) -> Option<Vec<KeyStroke>> {
     let strokes: Vec<KeyStroke> = keys
         .split_whitespace()
-        .filter_map(KeyStroke::parse)
-        .collect();
+        .map(KeyStroke::parse)
+        .collect::<Option<_>>()?;
     if strokes.is_empty() {
         None
     } else {

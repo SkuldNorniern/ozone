@@ -28,8 +28,8 @@ pub use decoration::{
 pub use diagnostics::{Diagnostic, Severity};
 pub use events::{EditorEvent, EventKind};
 pub use keymap::{
-    Key, KeyStroke, Keymap, KeymapOutcome, ModifierMap, PhysicalModifier, PhysicalMods,
-    stroke_label,
+    Key, KeyStroke, Keymap, KeymapConflict, KeymapOutcome, ModifierMap, PhysicalModifier,
+    PhysicalMods, stroke_label,
 };
 pub use language::buffer_language;
 pub use options::{BufferLocal, OptionValue};

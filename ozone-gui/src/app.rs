@@ -6,8 +6,8 @@ use ozone_buffer::{BufferId, BufferKind};
 use ozone_config::Config;
 use ozone_editor::commands::register_defaults;
 use ozone_editor::{
-    AutocommandRegistry, CommandRegistry, IndentConfig, Keymap, ModifierMap, NotifyLevel,
-    Workspace, buffer_language,
+    AutocommandRegistry, CommandRegistry, IndentConfig, Keymap, KeymapConflict, ModifierMap,
+    NotifyLevel, Workspace, buffer_language,
 };
 
 use crate::actions::dispatch_autocmds;
@@ -161,6 +161,7 @@ pub struct OzoneGui {
     pub(crate) config: Arc<Config>,
     pub(crate) autocmds: Arc<AutocommandRegistry>,
     pub(crate) keymap: Arc<Keymap>,
+    keymap_conflicts: Vec<KeymapConflict>,
     pub(crate) modmap: ModifierMap,
 }
 
@@ -186,7 +187,7 @@ impl OzoneGui {
         // which is generated on first launch. Removing a binding there unbinds
         // it — there is no built-in default layer underneath.
         let mut keymap = Keymap::new();
-        keymap.add_user_config(&config.keymaps);
+        let keymap_conflicts = keymap.add_user_config(&config.keymaps);
 
         let modmap = ModifierMap::platform_default().with_overrides(
             config.modifiers.control.as_deref(),
@@ -200,6 +201,7 @@ impl OzoneGui {
             config: Arc::new(config),
             autocmds: Arc::new(autocmds),
             keymap: Arc::new(keymap),
+            keymap_conflicts,
             modmap,
         }
     }
@@ -226,6 +228,19 @@ impl OzoneGui {
                 "No keybindings configured — Ctrl/Meta shortcuts are unbound. \
                  Run `ozone --reset-config` to regenerate the default keymap."
                     .to_string(),
+                Some(15_000),
+            );
+        }
+        if !self.keymap_conflicts.is_empty() {
+            let details = self
+                .keymap_conflicts
+                .iter()
+                .map(KeymapConflict::message)
+                .collect::<Vec<_>>()
+                .join("\n");
+            startup_notifications.push(
+                NotifyLevel::Error,
+                format!("Duplicate keybindings detected:\n{details}"),
                 Some(15_000),
             );
         }
