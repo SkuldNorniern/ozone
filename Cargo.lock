@@ -43,7 +43,7 @@ dependencies = [
 [[package]]
 name = "aurea"
 version = "0.0.2"
-source = "git+https://github.com/SkuldNorniern/aurea#62049227dd2606d7a04a9fda5407a90e0fba9111"
+source = "git+https://github.com/SkuldNorniern/aurea#256cdb18d37be883246df390dbe5624ccf3bf2ec"
 dependencies = [
  "aurea-ffi",
  "aurea-foundation",
@@ -57,7 +57,7 @@ dependencies = [
 [[package]]
 name = "aurea-ffi"
 version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/aurea#62049227dd2606d7a04a9fda5407a90e0fba9111"
+source = "git+https://github.com/SkuldNorniern/aurea#256cdb18d37be883246df390dbe5624ccf3bf2ec"
 dependencies = [
  "cc",
  "pkg-config",
@@ -66,12 +66,12 @@ dependencies = [
 [[package]]
 name = "aurea-foundation"
 version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/aurea#62049227dd2606d7a04a9fda5407a90e0fba9111"
+source = "git+https://github.com/SkuldNorniern/aurea#256cdb18d37be883246df390dbe5624ccf3bf2ec"
 
 [[package]]
 name = "aurea-render"
 version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/aurea#62049227dd2606d7a04a9fda5407a90e0fba9111"
+source = "git+https://github.com/SkuldNorniern/aurea#256cdb18d37be883246df390dbe5624ccf3bf2ec"
 dependencies = [
  "aurea-foundation",
  "dwrote",
@@ -83,7 +83,7 @@ dependencies = [
 [[package]]
 name = "aurea-runtime"
 version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/aurea#62049227dd2606d7a04a9fda5407a90e0fba9111"
+source = "git+https://github.com/SkuldNorniern/aurea#256cdb18d37be883246df390dbe5624ccf3bf2ec"
 dependencies = [
  "aurea-foundation",
  "aurea-render",
@@ -497,9 +497,9 @@ checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
 
 [[package]]
 name = "memchr"
-version = "2.8.1"
+version = "2.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b947ae49db0d222b1dbc6b113ce7248a3fc3a6ca21b696717bfc000ba4484d8"
+checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
 
 [[package]]
 name = "memmap2"
