@@ -123,15 +123,23 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("ctrl+d", "edit.duplicate-line"),
     ("meta+up", "edit.move-line-up"),
     ("meta+down", "edit.move-line-down"),
-    // Clipboard — ctrl+c/x/v (Windows/Linux); meta+c/x/v = Cmd (macOS)
+    // Clipboard — ctrl+c/x/v universal; meta+c/x/v are macOS-only (see MACOS_BINDINGS)
     ("ctrl+c", "edit.copy"),
     ("ctrl+x", "edit.cut"),
     ("ctrl+v", "edit.paste"),
+    // Selection
+    ("meta+shift+up", "select.expand"),
+];
+
+/// macOS-specific default bindings (applied only on `target_os = "macos"`).
+/// `meta` = Cmd on macOS, so these are the standard Cmd+C/X/V clipboard
+/// shortcuts and a `meta+space` completion alternative that avoids the macOS
+/// input-source-switcher collision on `ctrl+space`.
+pub const MACOS_BINDINGS: &[(&str, &str)] = &[
     ("meta+c", "edit.copy"),
     ("meta+x", "edit.cut"),
     ("meta+v", "edit.paste"),
-    // Selection
-    ("meta+shift+up", "select.expand"),
+    ("meta+space", "lsp.completion"),
 ];
 
 impl Keymap {
@@ -166,8 +174,22 @@ impl Keymap {
     }
 
     /// Layer user `[[keymap]]` config on top of the defaults.
+    ///
+    /// Entries with a `platform` field are silently skipped on non-matching OSes,
+    /// so the same `keymap.toml` works across platforms without editing.
     pub fn add_user_config(&mut self, configs: &[KeymapConfig]) {
         for cfg in configs {
+            if let Some(platform) = &cfg.platform {
+                let matches = match platform.trim().to_ascii_lowercase().as_str() {
+                    "macos" => cfg!(target_os = "macos"),
+                    "windows" => cfg!(target_os = "windows"),
+                    "linux" => cfg!(target_os = "linux"),
+                    _ => false,
+                };
+                if !matches {
+                    continue;
+                }
+            }
             let Some(chord) = parse_chord(&cfg.keys) else {
                 continue;
             };
@@ -449,6 +471,7 @@ mod tests {
             keys: "ctrl+p".to_string(),
             command: "command.palette".to_string(),
             filetype: None,
+            platform: None,
         }]);
         assert_eq!(
             km.resolve(&[], &s('p').with_control(), None),
@@ -465,6 +488,7 @@ mod tests {
             keys: "ctrl+p".to_string(),
             command: "buffer.picker".to_string(),
             filetype: None,
+            platform: None,
         }]);
         assert_eq!(
             km.display_bindings(None, 2),
@@ -489,6 +513,7 @@ mod tests {
             keys: "ctrl+s".to_string(),
             command: "file.save".to_string(),
             filetype: None,
+            platform: None,
         }]);
         assert_eq!(
             km.resolve(&[], &s('s').with_control(), None),
@@ -501,6 +526,7 @@ mod tests {
             keys: "ctrl+z".to_string(),
             command: "edit.undo".to_string(),
             filetype: None,
+            platform: None,
         }]);
         assert_eq!(
             km.resolve(&[], &s('s').with_control(), None),
@@ -510,23 +536,41 @@ mod tests {
 
     #[test]
     fn shipped_keymap_matches_defaults() {
-        // The generated `keymap.toml` template must list exactly the built-in
-        // defaults — guards the hand-maintained file against drift.
+        // keymap.toml must mirror DEFAULT_BINDINGS (platform-agnostic entries)
+        // and MACOS_BINDINGS (entries with `platform = "macos"`). Guards both
+        // constants against drift from the hand-maintained file.
         use std::collections::BTreeSet;
         let text = include_str!("../../../keymap.toml");
         let cfg = Config::parse_str(text);
-        let from_file: BTreeSet<(String, String)> = cfg
+
+        let from_file_global: BTreeSet<(String, String)> = cfg
             .keymaps
             .iter()
+            .filter(|k| k.platform.is_none())
             .map(|k| (k.keys.clone(), k.command.clone()))
             .collect();
-        let from_const: BTreeSet<(String, String)> = DEFAULT_BINDINGS
+        let from_const_global: BTreeSet<(String, String)> = DEFAULT_BINDINGS
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
         assert_eq!(
-            from_file, from_const,
-            "keymap.toml has drifted from DEFAULT_BINDINGS"
+            from_file_global, from_const_global,
+            "keymap.toml global entries have drifted from DEFAULT_BINDINGS"
+        );
+
+        let from_file_macos: BTreeSet<(String, String)> = cfg
+            .keymaps
+            .iter()
+            .filter(|k| k.platform.as_deref() == Some("macos"))
+            .map(|k| (k.keys.clone(), k.command.clone()))
+            .collect();
+        let from_const_macos: BTreeSet<(String, String)> = MACOS_BINDINGS
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        assert_eq!(
+            from_file_macos, from_const_macos,
+            "keymap.toml macos entries have drifted from MACOS_BINDINGS"
         );
     }
 
@@ -609,6 +653,7 @@ mod tests {
             keys: "ctrl+shift+f".to_string(),
             command: "lsp.format".to_string(),
             filetype: Some("rust".to_string()),
+            platform: None,
         }]);
         let stroke = s('f').with_control().with_shift();
         assert_eq!(

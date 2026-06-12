@@ -244,7 +244,8 @@ keys = "meta+down"
 command = "edit.move-line-down"
 
 # ── Clipboard ────────────────────────────────────────────────────────────────
-# ctrl+c/x/v = Windows/Linux standard; meta+c/x/v = Cmd on macOS (meta=Cmd there)
+# ctrl+c/x/v work everywhere.  meta+c/x/v activate only on macOS (meta=Cmd
+# there); on Windows/Linux meta=Alt and these are not standard clipboard keys.
 [[keymap]]
 keys = "ctrl+c"
 command = "edit.copy"
@@ -257,17 +258,27 @@ command = "edit.cut"
 keys = "ctrl+v"
 command = "edit.paste"
 
+# macOS-only: Cmd+C/X/V clipboard and Cmd+Space completion (ctrl+space
+# collides with the macOS input-source switcher).
 [[keymap]]
 keys = "meta+c"
 command = "edit.copy"
+platform = "macos"
 
 [[keymap]]
 keys = "meta+x"
 command = "edit.cut"
+platform = "macos"
 
 [[keymap]]
 keys = "meta+v"
 command = "edit.paste"
+platform = "macos"
+
+[[keymap]]
+keys = "meta+space"
+command = "lsp.completion"
+platform = "macos"
 
 # ── Selection ────────────────────────────────────────────────────────────────
 [[keymap]]

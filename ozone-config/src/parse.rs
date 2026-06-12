@@ -83,6 +83,7 @@ fn parse_keymap_array(table: &toml::Table) -> Vec<KeymapConfig> {
                 keys: non_empty_string(entry, "keys")?,
                 command: non_empty_string(entry, "command")?,
                 filetype: non_empty_string(entry, "filetype"),
+                platform: non_empty_string(entry, "platform"),
             })
         })
         .collect()
@@ -118,6 +119,7 @@ fn push_bind(out: &mut Vec<KeymapConfig>, chord: &str, command: &str, filetype: 
             keys: chord.to_string(),
             command: command.to_string(),
             filetype,
+            platform: None,
         });
     }
 }

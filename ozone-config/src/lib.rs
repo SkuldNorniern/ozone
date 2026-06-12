@@ -92,6 +92,8 @@ pub struct KeymapConfig {
     pub keys: String,
     pub command: String,
     pub filetype: Option<String>,
+    /// If set, binding only applies on the named OS: `"macos"`, `"windows"`, `"linux"`.
+    pub platform: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
