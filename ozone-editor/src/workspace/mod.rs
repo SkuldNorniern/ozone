@@ -1,7 +1,8 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::{Path, PathBuf};
 
-use ozone_buffer::{Buffer, BufferId, BufferKind, Pos};
+use ozone_buffer::{Buffer, BufferId, BufferKind, LineEnding, Pos};
 
 use crate::decoration::{DecorationStore, NamespaceId};
 use crate::diagnostics::{Diagnostic, publish};
@@ -61,6 +62,8 @@ pub struct Workspace {
     pub active_view_id: Option<ViewId>,
     pub panes: Option<PaneTree>,
     pub indent: IndentConfig,
+    /// Dir paths (workspace-relative) collapsed in the file tree pane.
+    pub tree_collapsed: HashSet<String>,
     pub(super) buffer_options: HashMap<BufferId, BufferLocal>,
     pub(super) decorations: DecorationStore,
     pub(super) events: Vec<EditorEvent>,
@@ -76,6 +79,7 @@ impl Workspace {
             active_view_id: None,
             panes: None,
             indent: IndentConfig::default(),
+            tree_collapsed: HashSet::new(),
             buffer_options: HashMap::new(),
             decorations: DecorationStore::new(),
             events: Vec::new(),
@@ -99,7 +103,7 @@ impl Workspace {
 
     pub fn open_file(&mut self, path: PathBuf) -> std::io::Result<(BufferId, ViewId)> {
         self.push_jump();
-        let path = std::fs::canonicalize(&path).unwrap_or(path);
+        let path = fs::canonicalize(&path).unwrap_or(path);
         let buf = if is_image_path(&path) {
             Buffer::open_image(path.clone())
         } else {
@@ -107,8 +111,8 @@ impl Workspace {
         };
         let buf_id = buf.id;
         let path = match &buf.kind {
-            ozone_buffer::BufferKind::File(path) => path.clone(),
-            ozone_buffer::BufferKind::Image(path) => path.clone(),
+            BufferKind::File(path) => path.clone(),
+            BufferKind::Image(path) => path.clone(),
             _ => PathBuf::new(),
         };
         self.buffers.insert(buf_id, buf);
@@ -243,7 +247,7 @@ impl Workspace {
 
     pub fn save_buffer(&mut self, id: BufferId) -> std::io::Result<()> {
         let path = self.buffers.get(&id).and_then(|buf| match &buf.kind {
-            ozone_buffer::BufferKind::File(path) => Some(path.clone()),
+            BufferKind::File(path) => Some(path.clone()),
             _ => None,
         });
 
@@ -267,11 +271,11 @@ impl Workspace {
             Some(BufferKind::File(p)) => p.clone(),
             _ => return false,
         };
-        let Ok(disk) = std::fs::read_to_string(&path) else {
+        let Ok(disk) = fs::read_to_string(&path) else {
             return false;
         };
         // Normalize to internal LF; the buffer restores its own ending on save.
-        let disk = ozone_buffer::LineEnding::normalize(&disk);
+        let disk = LineEnding::normalize(&disk);
         let changed = self.replace_buffer_text(id, &disk);
         // The buffer now matches disk; clear the dirty flag (undo still works).
         if let Some(buf) = self.buffers.get_mut(&id) {
@@ -334,7 +338,7 @@ impl Default for Workspace {
 }
 
 /// Whether a path is a renderable raster image (by extension).
-pub fn is_image_path(path: &std::path::Path) -> bool {
+pub fn is_image_path(path: &Path) -> bool {
     matches!(
         path.extension()
             .and_then(|e| e.to_str())
@@ -344,7 +348,7 @@ pub fn is_image_path(path: &std::path::Path) -> bool {
     )
 }
 
-fn filetype_name(path: &std::path::Path) -> String {
+fn filetype_name(path: &Path) -> String {
     let ext = path
         .extension()
         .and_then(|ext| ext.to_str())
@@ -363,6 +367,9 @@ fn filetype_name(path: &std::path::Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+    use std::process;
+
     use super::*;
     use crate::SplitAxis;
 
@@ -375,20 +382,20 @@ mod tests {
 
     #[test]
     fn reload_buffer_rereads_disk_and_marks_clean() {
-        let path = std::env::temp_dir().join(format!("ozone_reload_{}.txt", std::process::id()));
-        std::fs::write(&path, "before\n").unwrap();
+        let path = env::temp_dir().join(format!("ozone_reload_{}.txt", process::id()));
+        fs::write(&path, "before\n").unwrap();
         let mut ws = Workspace::new();
         let (id, _) = ws.open_file(path.clone()).unwrap();
 
         // An external tool rewrites the file on disk.
-        std::fs::write(&path, "after\n").unwrap();
+        fs::write(&path, "after\n").unwrap();
         assert!(ws.reload_buffer(id));
         assert_eq!(ws.buffers.get(&id).unwrap().text(), "after\n");
         // Matches disk now — not dirty — but the reload is still undoable.
         assert!(!ws.buffers.get(&id).unwrap().is_dirty());
         assert!(ws.buffers.get_mut(&id).unwrap().undo().is_some());
 
-        let _ = std::fs::remove_file(&path);
+        let _ = fs::remove_file(&path);
     }
 
     #[test]
@@ -420,7 +427,7 @@ mod tests {
         let original_view = ws.active_view_id.unwrap();
         {
             let view = ws.views.get_mut(&original_view).unwrap();
-            view.cursor = ozone_buffer::Pos::new(4, 2);
+            view.cursor = Pos::new(4, 2);
             view.scroll_line = 3;
         }
         let original = ws.views.get(&original_view).unwrap();
@@ -516,8 +523,8 @@ mod tests {
         let mut ws = Workspace::new();
         let scratch = ws.active_buffer().unwrap().id;
 
-        let tmp = std::env::temp_dir().join(format!("ozone_cycle_{}.txt", std::process::id()));
-        std::fs::write(&tmp, "alpha\nbeta\n").unwrap();
+        let tmp = env::temp_dir().join(format!("ozone_cycle_{}.txt", process::id()));
+        fs::write(&tmp, "alpha\nbeta\n").unwrap();
         let (file_buf, _) = ws.open_file(tmp.clone()).unwrap();
 
         assert_eq!(ws.active_view().unwrap().buffer_id, file_buf);
@@ -526,7 +533,7 @@ mod tests {
         assert!(ws.cycle_buffer(true));
         assert_eq!(ws.active_view().unwrap().buffer_id, file_buf);
 
-        let _ = std::fs::remove_file(&tmp);
+        let _ = fs::remove_file(&tmp);
     }
 
     #[test]
@@ -540,8 +547,8 @@ mod tests {
         let mut ws = Workspace::new();
         let scratch = ws.active_buffer().unwrap().id;
 
-        let tmp = std::env::temp_dir().join(format!("ozone_jump_{}.txt", std::process::id()));
-        std::fs::write(&tmp, "alpha\nbeta\n").unwrap();
+        let tmp = env::temp_dir().join(format!("ozone_jump_{}.txt", process::id()));
+        fs::write(&tmp, "alpha\nbeta\n").unwrap();
         let (file_buf, _) = ws.open_file(tmp.clone()).unwrap();
         assert_eq!(ws.active_buffer().unwrap().id, file_buf);
 
@@ -551,15 +558,15 @@ mod tests {
         assert_eq!(ws.active_buffer().unwrap().id, file_buf);
         assert!(!ws.jump_forward());
 
-        let _ = std::fs::remove_file(&tmp);
+        let _ = fs::remove_file(&tmp);
     }
 
     #[test]
     fn switch_active_buffer_changes_buffer_and_is_reversible() {
         let mut ws = Workspace::new();
         let scratch = ws.active_buffer().unwrap().id;
-        let tmp = std::env::temp_dir().join(format!("ozone_switch_{}.txt", std::process::id()));
-        std::fs::write(&tmp, "x\n").unwrap();
+        let tmp = env::temp_dir().join(format!("ozone_switch_{}.txt", process::id()));
+        fs::write(&tmp, "x\n").unwrap();
         let (file_buf, _) = ws.open_file(tmp.clone()).unwrap();
 
         assert!(ws.switch_active_buffer(scratch));
@@ -568,7 +575,7 @@ mod tests {
         assert!(ws.jump_back());
         assert_eq!(ws.active_buffer().unwrap().id, file_buf);
 
-        let _ = std::fs::remove_file(&tmp);
+        let _ = fs::remove_file(&tmp);
     }
 
     #[test]
@@ -593,7 +600,7 @@ mod tests {
         let eff = ws.indent_for(bid);
         assert_eq!(eff.width, 2);
         assert!(!eff.soft_tabs);
-        let other = ozone_buffer::Buffer::from_text("x");
+        let other = Buffer::from_text("x");
         let oid = other.id;
         ws.buffers.insert(oid, other);
         assert_eq!(ws.indent_for(oid).width, 4);

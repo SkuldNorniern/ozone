@@ -1,5 +1,6 @@
 //! Bounded literal search across workspace text files.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::commands::collect_workspace_files;
@@ -57,7 +58,7 @@ pub fn search_workspace(
 
     let mut results = Vec::new();
     for relative in collect_workspace_files(base, file_cap) {
-        let Ok(text) = std::fs::read_to_string(base.join(&relative)) else {
+        let Ok(text) = fs::read_to_string(base.join(&relative)) else {
             continue;
         };
         for (line, content) in text.lines().enumerate() {
@@ -79,6 +80,10 @@ pub fn search_workspace(
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+    use std::fs;
+    use std::process;
+
     use super::*;
 
     #[test]
@@ -94,39 +99,37 @@ mod tests {
 
     #[test]
     fn searches_text_files_and_skips_ignored_directories() {
-        let base =
-            std::env::temp_dir().join(format!("ozone_workspace_search_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(base.join("src")).unwrap();
-        std::fs::create_dir_all(base.join("target")).unwrap();
-        std::fs::write(
+        let base = env::temp_dir().join(format!("ozone_workspace_search_{}", process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("src")).unwrap();
+        fs::create_dir_all(base.join("target")).unwrap();
+        fs::write(
             base.join("src").join("one.rs"),
             "Needle here\nand needle again",
         )
         .unwrap();
-        std::fs::write(base.join("target").join("ignored.rs"), "needle").unwrap();
+        fs::write(base.join("target").join("ignored.rs"), "needle").unwrap();
 
         let hits = search_workspace(&base, "needle", 100, 100);
         assert_eq!(hits.len(), 2);
         assert!(
             hits.iter()
-                .all(|hit| hit.path.as_path() == std::path::Path::new("src/one.rs"))
+                .all(|hit| hit.path.as_path() == Path::new("src/one.rs"))
         );
         assert_eq!((hits[0].line, hits[0].column), (0, 0));
 
-        let _ = std::fs::remove_dir_all(&base);
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]
     fn respects_result_cap() {
-        let base =
-            std::env::temp_dir().join(format!("ozone_workspace_search_cap_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).unwrap();
-        std::fs::write(base.join("many.txt"), "x x x x x").unwrap();
+        let base = env::temp_dir().join(format!("ozone_workspace_search_cap_{}", process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        fs::write(base.join("many.txt"), "x x x x x").unwrap();
 
         assert_eq!(search_workspace(&base, "x", 100, 3).len(), 3);
 
-        let _ = std::fs::remove_dir_all(&base);
+        let _ = fs::remove_dir_all(&base);
     }
 }

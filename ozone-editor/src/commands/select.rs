@@ -102,9 +102,9 @@ mod tests {
     use crate::commands::register_defaults;
     use crate::workspace::Workspace;
     use crate::{CommandContext, CommandRegistry};
-    use ozone_buffer::Pos;
+    use ozone_buffer::{Pos, Span};
 
-    fn run(text: &str, cursor: Pos, command: &str) -> (ozone_buffer::Span, Pos) {
+    fn run(text: &str, cursor: Pos, command: &str) -> (Span, Pos) {
         let mut ws = Workspace::new();
         ws.active_buffer_mut().unwrap().set_text(text);
         ws.active_view_mut().unwrap().cursor = cursor;

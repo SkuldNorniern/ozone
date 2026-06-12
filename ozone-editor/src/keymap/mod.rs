@@ -10,6 +10,8 @@
 //! [`KeymapOutcome::Pending`] while a longer binding could still match, so the
 //! caller holds the pending prefix between key events.
 
+use std::collections::BTreeMap;
+
 use ozone_config::KeymapConfig;
 
 mod keys;
@@ -186,7 +188,7 @@ impl Keymap {
     /// Insert or upgrade a which-key entry: higher layer wins; a resolved
     /// command beats a `"+prefix"` placeholder at the same layer.
     fn upgrade_entry(
-        map: &mut std::collections::BTreeMap<String, (Layer, String)>,
+        map: &mut BTreeMap<String, (Layer, String)>,
         label: String,
         layer: Layer,
         desc: String,
@@ -207,7 +209,7 @@ impl Keymap {
         pending: &[KeyStroke],
         filetype: Option<&str>,
     ) -> Vec<(String, String)> {
-        let mut next = std::collections::BTreeMap::new();
+        let mut next = BTreeMap::new();
         for b in &self.bindings {
             if !Self::applies(b, filetype) || b.chord.len() <= pending.len() {
                 continue;
@@ -238,7 +240,7 @@ impl Keymap {
         super_: bool,
         filetype: Option<&str>,
     ) -> Vec<(String, String)> {
-        let mut next = std::collections::BTreeMap::new();
+        let mut next = BTreeMap::new();
         for b in &self.bindings {
             if !Self::applies(b, filetype) {
                 continue;
@@ -334,6 +336,8 @@ impl Keymap {
 
 #[cfg(test)]
 mod tests {
+    use ozone_config::Config;
+
     use super::*;
 
     fn s(c: char) -> KeyStroke {
@@ -503,7 +507,7 @@ mod tests {
         // defaults — guards the hand-maintained file against drift.
         use std::collections::BTreeSet;
         let text = include_str!("../../../keymap.toml");
-        let cfg = ozone_config::Config::parse_str(text);
+        let cfg = Config::parse_str(text);
         let from_file: BTreeSet<(String, String)> = cfg
             .keymaps
             .iter()

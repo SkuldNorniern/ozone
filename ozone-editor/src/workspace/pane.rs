@@ -1,4 +1,4 @@
-use ozone_buffer::BufferKind;
+use ozone_buffer::{BufferId, BufferKind};
 
 use crate::events::EditorEvent;
 use crate::pane::{FocusDirection, PaneTree, SplitAxis};
@@ -123,7 +123,7 @@ impl Workspace {
         self.panes = Some(PaneTree::leaf(view_id));
     }
 
-    pub(super) fn remove_unreferenced_virtual_buffer(&mut self, buffer_id: ozone_buffer::BufferId) {
+    pub(super) fn remove_unreferenced_virtual_buffer(&mut self, buffer_id: BufferId) {
         if self.views.values().any(|view| view.buffer_id == buffer_id) {
             return;
         }

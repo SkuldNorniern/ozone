@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::path::Path;
 
-use ozone_buffer::{BufferId, BufferKind, Pos};
+use ozone_buffer::{Buffer, BufferId, BufferKind, Pos};
 
 use crate::events::EditorEvent;
 use crate::view::{View, ViewId};
@@ -162,7 +163,7 @@ fn is_ignored_name(name: &str) -> bool {
 }
 
 pub(super) fn workspace_tree_buffer(
-    base: &std::path::Path,
+    base: &Path,
     collapsed: &HashSet<String>,
     cap: usize,
 ) -> String {
@@ -177,7 +178,7 @@ pub(super) fn workspace_tree_buffer(
 }
 
 fn collect_workspace_tree_rows(
-    base: &std::path::Path,
+    base: &Path,
     relative_dir: &str,
     prefix: &str,
     collapsed: &HashSet<String>,
@@ -372,7 +373,7 @@ pub(super) fn leading_whitespace(line: &str) -> &str {
     &line[..end]
 }
 
-pub(super) fn word_forward(buf: &ozone_buffer::Buffer, pos: Pos) -> Pos {
+pub(super) fn word_forward(buf: &Buffer, pos: Pos) -> Pos {
     let line_count = buf.line_count();
     let mut line = pos.line;
     let mut col = pos.col;
@@ -404,7 +405,7 @@ pub(super) fn word_forward(buf: &ozone_buffer::Buffer, pos: Pos) -> Pos {
     }
 }
 
-pub(super) fn word_backward(buf: &ozone_buffer::Buffer, pos: Pos) -> Pos {
+pub(super) fn word_backward(buf: &Buffer, pos: Pos) -> Pos {
     let mut line = pos.line;
     let mut col = pos.col;
 
@@ -438,6 +439,9 @@ pub(super) fn word_backward(buf: &ozone_buffer::Buffer, pos: Pos) -> Pos {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::env;
+    use std::fs;
+    use std::process;
 
     use super::{
         collect_workspace_files, is_ignored_name, trailing_whitespace_ranges, tree_row_dir_path,
@@ -463,42 +467,42 @@ mod tests {
 
     #[test]
     fn collect_walks_recursively_skipping_ignored() {
-        let base = std::env::temp_dir().join(format!("ozone_pick_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(base.join("src")).unwrap();
-        std::fs::create_dir_all(base.join("target")).unwrap();
-        std::fs::write(base.join("Cargo.toml"), "x").unwrap();
-        std::fs::write(base.join("src").join("main.rs"), "x").unwrap();
-        std::fs::write(base.join("target").join("junk.o"), "x").unwrap();
+        let base = env::temp_dir().join(format!("ozone_pick_{}", process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("src")).unwrap();
+        fs::create_dir_all(base.join("target")).unwrap();
+        fs::write(base.join("Cargo.toml"), "x").unwrap();
+        fs::write(base.join("src").join("main.rs"), "x").unwrap();
+        fs::write(base.join("target").join("junk.o"), "x").unwrap();
 
         let files = collect_workspace_files(&base, 5000);
         assert!(files.contains(&"Cargo.toml".to_string()));
         assert!(files.contains(&"src/main.rs".to_string()));
         assert!(!files.iter().any(|f| f.contains("target")));
 
-        let _ = std::fs::remove_dir_all(&base);
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]
     fn collect_respects_cap() {
-        let base = std::env::temp_dir().join(format!("ozone_cap_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).unwrap();
+        let base = env::temp_dir().join(format!("ozone_cap_{}", process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
         for i in 0..10 {
-            std::fs::write(base.join(format!("f{i}.txt")), "x").unwrap();
+            fs::write(base.join(format!("f{i}.txt")), "x").unwrap();
         }
         let files = collect_workspace_files(&base, 3);
         assert!(files.len() <= 3);
-        let _ = std::fs::remove_dir_all(&base);
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]
     fn workspace_tree_lists_dirs_and_files() {
-        let base = std::env::temp_dir().join(format!("ozone_tree_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(base.join("src")).unwrap();
-        std::fs::write(base.join("src").join("main.rs"), "x").unwrap();
-        std::fs::write(base.join("Cargo.toml"), "x").unwrap();
+        let base = env::temp_dir().join(format!("ozone_tree_{}", process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("src")).unwrap();
+        fs::write(base.join("src").join("main.rs"), "x").unwrap();
+        fs::write(base.join("Cargo.toml"), "x").unwrap();
 
         let collapsed = HashSet::new();
         let tree = workspace_tree_buffer(&base, &collapsed, 100);
@@ -508,15 +512,15 @@ mod tests {
         assert!(tree.contains("main.rs  src/main.rs"));
         assert!(tree.contains("Cargo.toml  Cargo.toml"));
 
-        let _ = std::fs::remove_dir_all(&base);
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]
     fn workspace_tree_respects_collapsed() {
-        let base = std::env::temp_dir().join(format!("ozone_tree_col_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(base.join("src")).unwrap();
-        std::fs::write(base.join("src").join("main.rs"), "x").unwrap();
+        let base = env::temp_dir().join(format!("ozone_tree_col_{}", process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("src")).unwrap();
+        fs::write(base.join("src").join("main.rs"), "x").unwrap();
 
         let mut collapsed = HashSet::new();
         collapsed.insert("src".to_string());
@@ -525,7 +529,7 @@ mod tests {
         assert!(tree.contains("▸ src/"));
         assert!(!tree.contains("main.rs"));
 
-        let _ = std::fs::remove_dir_all(&base);
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]
