@@ -187,7 +187,14 @@ pub fn stroke_label(stroke: &KeyStroke) -> String {
 
 /// Human-readable label for a full chord (`"C-K C-S"`).
 pub fn chord_label(chord: &[KeyStroke]) -> String {
-    chord.iter().map(stroke_label).collect::<Vec<_>>().join(" ")
+    let mut out = String::new();
+    for (i, stroke) in chord.iter().enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        out.push_str(&stroke_label(stroke));
+    }
+    out
 }
 
 /// Parse a full chord string like `"ctrl+k ctrl+s"` into its strokes.

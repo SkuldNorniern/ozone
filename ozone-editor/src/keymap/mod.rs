@@ -146,14 +146,14 @@ impl Keymap {
 
     /// Add a shipped default binding (lowest priority).
     pub fn bind_default(&mut self, keys: &str, command: &str) {
-        if let Some(chord) = parse_chord(keys) {
-            self.bindings.push(Binding {
-                chord,
-                command: command.to_string(),
-                filetype: None,
-                layer: Layer::Default,
-            });
-        }
+        let chord = parse_chord(keys)
+            .unwrap_or_else(|| panic!("invalid shipped default binding: {keys:?}"));
+        self.bindings.push(Binding {
+            chord,
+            command: command.to_string(),
+            filetype: None,
+            layer: Layer::Default,
+        });
     }
 
     /// Layer user `[[keymap]]` config on top of the defaults.
@@ -183,14 +183,31 @@ impl Keymap {
         }
     }
 
+    /// Insert or upgrade a which-key entry: higher layer wins; a resolved
+    /// command beats a `"+prefix"` placeholder at the same layer.
+    fn upgrade_entry(
+        map: &mut std::collections::BTreeMap<String, (Layer, String)>,
+        label: String,
+        layer: Layer,
+        desc: String,
+    ) {
+        map.entry(label)
+            .and_modify(|(prev_layer, prev_desc)| {
+                if layer > *prev_layer || (*prev_desc == "+prefix" && desc != "+prefix") {
+                    *prev_layer = layer;
+                    *prev_desc = desc.clone();
+                }
+            })
+            .or_insert((layer, desc));
+    }
+
     /// Possible continuations of a pending chord prefix, for a which-key popup.
     pub fn continuations(
         &self,
         pending: &[KeyStroke],
         filetype: Option<&str>,
     ) -> Vec<(String, String)> {
-        use std::collections::BTreeMap;
-        let mut next: BTreeMap<String, (Layer, String)> = BTreeMap::new();
+        let mut next = std::collections::BTreeMap::new();
         for b in &self.bindings {
             if !Self::applies(b, filetype) || b.chord.len() <= pending.len() {
                 continue;
@@ -199,20 +216,12 @@ impl Keymap {
                 continue;
             }
             let stroke = &b.chord[pending.len()];
-            let label = stroke_label(stroke);
             let desc = if b.chord.len() == pending.len() + 1 {
                 b.command.clone()
             } else {
                 "+prefix".to_string()
             };
-            next.entry(label)
-                .and_modify(|(layer, d)| {
-                    if b.layer > *layer || (*d == "+prefix" && desc != "+prefix") {
-                        *layer = b.layer;
-                        *d = desc.clone();
-                    }
-                })
-                .or_insert((b.layer, desc));
+            Self::upgrade_entry(&mut next, stroke_label(stroke), b.layer, desc);
         }
         next.into_iter().map(|(k, (_, d))| (k, d)).collect()
     }
@@ -229,8 +238,7 @@ impl Keymap {
         super_: bool,
         filetype: Option<&str>,
     ) -> Vec<(String, String)> {
-        use std::collections::BTreeMap;
-        let mut next: BTreeMap<String, (Layer, String)> = BTreeMap::new();
+        let mut next = std::collections::BTreeMap::new();
         for b in &self.bindings {
             if !Self::applies(b, filetype) {
                 continue;
@@ -241,20 +249,12 @@ impl Keymap {
             if stroke.control != control || stroke.meta != meta || stroke.super_ != super_ {
                 continue;
             }
-            let label = stroke_label(stroke);
             let desc = if b.chord.len() == 1 {
                 b.command.clone()
             } else {
                 "+prefix".to_string()
             };
-            next.entry(label)
-                .and_modify(|(layer, d)| {
-                    if b.layer > *layer || (*d == "+prefix" && desc != "+prefix") {
-                        *layer = b.layer;
-                        *d = desc.clone();
-                    }
-                })
-                .or_insert((b.layer, desc));
+            Self::upgrade_entry(&mut next, stroke_label(stroke), b.layer, desc);
         }
         next.into_iter().map(|(k, (_, d))| (k, d)).collect()
     }
@@ -289,32 +289,45 @@ impl Keymap {
     }
 
     /// Resolve `pending + stroke` against the keymap for the active filetype.
+    ///
+    /// Single-pass: no allocation. A longer matching binding always beats an
+    /// exact match (Emacs-style — wait for the full chord before executing).
     pub fn resolve(
         &self,
         pending: &[KeyStroke],
         stroke: &KeyStroke,
         filetype: Option<&str>,
     ) -> KeymapOutcome {
-        let mut seq: Vec<KeyStroke> = pending.to_vec();
-        seq.push(stroke.clone());
+        let seq_len = pending.len() + 1;
+        let mut best: Option<&Binding> = None;
+        let mut has_longer = false;
 
-        let has_longer = self.bindings.iter().any(|b| {
-            Self::applies(b, filetype)
-                && b.chord.len() > seq.len()
-                && b.chord[..seq.len()] == seq[..]
-        });
-        if has_longer {
-            return KeymapOutcome::Pending;
+        for b in &self.bindings {
+            if !Self::applies(b, filetype) {
+                continue;
+            }
+            let chord = &b.chord;
+            if chord.len() < seq_len {
+                continue;
+            }
+            if chord[..pending.len()] != *pending || chord[pending.len()] != *stroke {
+                continue;
+            }
+            if chord.len() == seq_len {
+                if best.is_none_or(|prev| b.layer > prev.layer) {
+                    best = Some(b);
+                }
+            } else {
+                has_longer = true;
+            }
         }
 
-        let best = self
-            .bindings
-            .iter()
-            .filter(|b| Self::applies(b, filetype) && b.chord == seq)
-            .max_by_key(|b| b.layer);
-        match best {
-            Some(b) => KeymapOutcome::Execute(b.command.clone()),
-            None => KeymapOutcome::NoMatch,
+        if has_longer {
+            KeymapOutcome::Pending
+        } else if let Some(b) = best {
+            KeymapOutcome::Execute(b.command.clone())
+        } else {
+            KeymapOutcome::NoMatch
         }
     }
 }

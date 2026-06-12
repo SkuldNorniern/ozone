@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 
 use ozone_buffer::{BufferId, BufferKind, Pos};
@@ -69,15 +69,13 @@ type CommandFn = Box<dyn Fn(&mut CommandContext) + Send + Sync>;
 
 /// Maps command names → handlers. Everything is a command.
 pub struct CommandRegistry {
-    commands: HashMap<String, CommandFn>,
-    descriptions: HashMap<String, String>,
+    commands: HashMap<String, (CommandFn, String)>,
 }
 
 impl CommandRegistry {
     pub fn new() -> Self {
         Self {
             commands: HashMap::new(),
-            descriptions: HashMap::new(),
         }
     }
 
@@ -87,14 +85,13 @@ impl CommandRegistry {
         description: &str,
         f: impl Fn(&mut CommandContext) + Send + Sync + 'static,
     ) {
-        self.commands.insert(name.to_string(), Box::new(f));
-        self.descriptions
-            .insert(name.to_string(), description.to_string());
+        self.commands
+            .insert(name.to_string(), (Box::new(f), description.to_string()));
     }
 
     /// Returns true if the command existed.
     pub fn execute(&self, name: &str, ctx: &mut CommandContext) -> bool {
-        if let Some(cmd) = self.commands.get(name) {
+        if let Some((cmd, _)) = self.commands.get(name) {
             cmd(ctx);
             true
         } else {
@@ -107,7 +104,7 @@ impl CommandRegistry {
     }
 
     pub fn description(&self, name: &str) -> Option<&str> {
-        self.descriptions.get(name).map(String::as_str)
+        self.commands.get(name).map(|(_, d)| d.as_str())
     }
 
     pub fn display_name(&self, name: &str) -> String {
@@ -164,9 +161,17 @@ fn is_ignored_name(name: &str) -> bool {
     matches!(name, "target" | "node_modules" | ".git" | ".hg" | ".svn") || name.starts_with('.')
 }
 
-pub(super) fn workspace_tree_buffer(base: &std::path::Path, cap: usize) -> String {
-    let mut rows = vec!["Workspace Tree".to_string(), "--------------".to_string()];
-    collect_workspace_tree_rows(base, "", 0, cap, &mut rows);
+pub(super) fn workspace_tree_buffer(
+    base: &std::path::Path,
+    collapsed: &HashSet<String>,
+    cap: usize,
+) -> String {
+    let root_name = base
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("workspace");
+    let mut rows = vec![format!("▸ {root_name}/")];
+    collect_workspace_tree_rows(base, "", "", collapsed, cap, &mut rows);
     rows.push(String::new());
     rows.join("\n")
 }
@@ -174,7 +179,8 @@ pub(super) fn workspace_tree_buffer(base: &std::path::Path, cap: usize) -> Strin
 fn collect_workspace_tree_rows(
     base: &std::path::Path,
     relative_dir: &str,
-    depth: usize,
+    prefix: &str,
+    collapsed: &HashSet<String>,
     cap: usize,
     out: &mut Vec<String>,
 ) {
@@ -189,8 +195,8 @@ fn collect_workspace_tree_rows(
     let Ok(read_dir) = fs::read_dir(dir) else {
         return;
     };
-    let mut dirs = Vec::new();
-    let mut files = Vec::new();
+    let mut dirs: Vec<(String, String)> = Vec::new();
+    let mut files: Vec<(String, String)> = Vec::new();
     for entry in read_dir.flatten() {
         let path = entry.path();
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
@@ -205,38 +211,66 @@ fn collect_workspace_tree_rows(
             format!("{relative_dir}/{name}")
         };
         if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            dirs.push(rel);
+            dirs.push((name.to_string(), rel));
         } else {
-            files.push(rel);
+            files.push((name.to_string(), rel));
         }
     }
-    dirs.sort();
-    files.sort();
+    dirs.sort_by(|a, b| a.0.cmp(&b.0));
+    files.sort_by(|a, b| a.0.cmp(&b.0));
 
-    for rel in dirs {
+    let total = dirs.len() + files.len();
+    let mut idx = 0usize;
+
+    for (name, rel) in dirs {
         if out.len() >= cap {
             return;
         }
-        let name = rel.rsplit('/').next().unwrap_or(&rel);
-        out.push(format!("{}+ {name}/  {}", "  ".repeat(depth), rel));
-        collect_workspace_tree_rows(base, &rel, depth + 1, cap, out);
+        idx += 1;
+        let connector = if idx == total {
+            "└── "
+        } else {
+            "├── "
+        };
+        let is_collapsed = collapsed.contains(&rel);
+        let indicator = if is_collapsed { "▸ " } else { "▾ " };
+        // Hidden dir path ends with '/' to distinguish from file rows in tree_row_dir_path.
+        out.push(format!("{prefix}{connector}{indicator}{name}/  {rel}/"));
+        if !is_collapsed {
+            let child_prefix = format!("{}{}", prefix, if idx == total { "    " } else { "│   " });
+            collect_workspace_tree_rows(base, &rel, &child_prefix, collapsed, cap, out);
+        }
     }
-    for rel in files {
+
+    for (name, rel) in files {
         if out.len() >= cap {
             return;
         }
-        let name = rel.rsplit('/').next().unwrap_or(&rel);
-        out.push(format!("{}- {name}  {}", "  ".repeat(depth), rel));
+        idx += 1;
+        let connector = if idx == total {
+            "└── "
+        } else {
+            "├── "
+        };
+        // Hidden path appended after double-space; parsed by tree_row_path.
+        out.push(format!("{prefix}{connector}{name}  {rel}"));
     }
 }
 
+/// Returns the relative file path encoded in a file tree row, or `None` for
+/// dir/header rows. File rows end with `"  path"` (no trailing `/`).
 pub(super) fn tree_row_path(row: &str) -> Option<&str> {
-    if !row.trim_start().starts_with("- ") {
-        return None;
-    }
     let (_, path) = row.rsplit_once("  ")?;
     let path = path.trim();
-    (!path.is_empty()).then_some(path)
+    (!path.is_empty() && !path.ends_with('/')).then_some(path)
+}
+
+/// Returns the relative dir path encoded in a dir tree row (without trailing
+/// `/`), or `None` for file/header rows. Dir rows end with `"  path/"`.
+pub(super) fn tree_row_dir_path(row: &str) -> Option<&str> {
+    let (_, path) = row.rsplit_once("  ")?;
+    let path = path.trim();
+    path.ends_with('/').then(|| path.trim_end_matches('/'))
 }
 
 /// Recursively collect file paths under `base`, relative and `/`-separated,
@@ -403,9 +437,11 @@ pub(super) fn word_backward(buf: &ozone_buffer::Buffer, pos: Pos) -> Pos {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::{
-        collect_workspace_files, is_ignored_name, trailing_whitespace_ranges, tree_row_path,
-        workspace_tree_buffer,
+        collect_workspace_files, is_ignored_name, trailing_whitespace_ranges, tree_row_dir_path,
+        tree_row_path, workspace_tree_buffer,
     };
 
     #[test]
@@ -464,19 +500,60 @@ mod tests {
         std::fs::write(base.join("src").join("main.rs"), "x").unwrap();
         std::fs::write(base.join("Cargo.toml"), "x").unwrap();
 
-        let tree = workspace_tree_buffer(&base, 100);
-        assert!(tree.contains("+ src/  src"));
-        assert!(tree.contains("- main.rs  src/main.rs"));
-        assert!(tree.contains("- Cargo.toml  Cargo.toml"));
+        let collapsed = HashSet::new();
+        let tree = workspace_tree_buffer(&base, &collapsed, 100);
+        let dir_name = base.file_name().unwrap().to_str().unwrap();
+        assert!(tree.contains(&format!("▸ {dir_name}/")));
+        assert!(tree.contains("src/"));
+        assert!(tree.contains("main.rs  src/main.rs"));
+        assert!(tree.contains("Cargo.toml  Cargo.toml"));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn workspace_tree_respects_collapsed() {
+        let base = std::env::temp_dir().join(format!("ozone_tree_col_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("src")).unwrap();
+        std::fs::write(base.join("src").join("main.rs"), "x").unwrap();
+
+        let mut collapsed = HashSet::new();
+        collapsed.insert("src".to_string());
+        let tree = workspace_tree_buffer(&base, &collapsed, 100);
+        // Collapsed dir shows ▸, children hidden
+        assert!(tree.contains("▸ src/"));
+        assert!(!tree.contains("main.rs"));
 
         let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
     fn tree_row_path_extracts_files_only() {
-        assert_eq!(tree_row_path("- main.rs  src/main.rs"), Some("src/main.rs"));
-        assert_eq!(tree_row_path("+ src/  src"), None);
-        assert_eq!(tree_row_path("Workspace Tree"), None);
+        // File rows (tree char prefixes, new format with expand indicator)
+        assert_eq!(
+            tree_row_path("│   └── main.rs  src/main.rs"),
+            Some("src/main.rs")
+        );
+        assert_eq!(
+            tree_row_path("└── Cargo.toml  Cargo.toml"),
+            Some("Cargo.toml")
+        );
+        // Dir rows have trailing '/' in hidden path → excluded
+        assert_eq!(tree_row_path("├── ▾ src/  src/"), None);
+        assert_eq!(tree_row_path("▸ workspace/"), None);
+    }
+
+    #[test]
+    fn tree_row_dir_path_extracts_dirs_only() {
+        assert_eq!(tree_row_dir_path("├── ▾ src/  src/"), Some("src"));
+        assert_eq!(
+            tree_row_dir_path("│   └── ▸ utils/  src/utils/"),
+            Some("src/utils")
+        );
+        // File rows excluded
+        assert_eq!(tree_row_dir_path("└── main.rs  src/main.rs"), None);
+        assert_eq!(tree_row_dir_path("▸ workspace/"), None);
     }
 
     #[test]
