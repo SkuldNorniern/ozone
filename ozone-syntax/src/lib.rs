@@ -246,21 +246,40 @@ pub fn fold_line_ranges(lang: Option<Language>, text: &str) -> Vec<(usize, usize
     let Some(features) = parse_features(lang, text) else {
         return Vec::new();
     };
+    let lines = LineIndex::new(text);
     features
         .folds
         .iter()
         .map(|r| {
-            let start = byte_to_line(text, r.start().to_usize());
-            let end = byte_to_line(text, r.end().to_usize().saturating_sub(1));
+            let start = lines.line_of(r.start().to_usize());
+            let end = lines.line_of(r.end().to_usize().saturating_sub(1));
             (start, end)
         })
         .filter(|&(s, e)| e > s)
         .collect()
 }
 
-pub(crate) fn byte_to_line(text: &str, offset: usize) -> usize {
-    let safe = offset.min(text.len());
-    text[..safe].bytes().filter(|&b| b == b'\n').count()
+/// Byte offsets of every `\n` in a document, used to convert byte offsets to
+/// 0-based line numbers in `O(log n)` rather than rescanning the whole prefix
+/// for every query (folds and symbols each query one offset per item).
+pub(crate) struct LineIndex(Vec<usize>);
+
+impl LineIndex {
+    pub(crate) fn new(text: &str) -> Self {
+        LineIndex(
+            text.bytes()
+                .enumerate()
+                .filter(|&(_, b)| b == b'\n')
+                .map(|(i, _)| i)
+                .collect(),
+        )
+    }
+
+    /// The 0-based line number containing `offset`, i.e. the count of `\n`
+    /// bytes strictly before it.
+    pub(crate) fn line_of(&self, offset: usize) -> usize {
+        self.0.partition_point(|&p| p < offset)
+    }
 }
 
 // ---------------------------------------------------------------------------

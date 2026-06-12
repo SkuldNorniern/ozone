@@ -6,7 +6,7 @@
 use sylven::SymbolKind as SylvenKind;
 use taste::Language;
 
-use crate::{byte_to_line, parse_features};
+use crate::{LineIndex, parse_features};
 
 /// A kind of document symbol, used for the picker's detail label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,13 +67,14 @@ fn sylven_symbols(lang: Option<Language>, text: &str) -> Vec<Symbol> {
         Some(f) => f,
         None => return Vec::new(),
     };
+    let lines = LineIndex::new(text);
     features
         .symbols
         .iter()
         .map(|sym| Symbol {
             name: sym.name.clone(),
             kind: sylven_kind_to_local(sym.kind),
-            line: byte_to_line(text, sym.name_range.start().to_usize()),
+            line: lines.line_of(sym.name_range.start().to_usize()),
         })
         .collect()
 }
