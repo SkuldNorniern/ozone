@@ -10,7 +10,7 @@ use crate::lsp::LspStatus;
 use crate::overlay::search::SearchState;
 use crate::statusbar::draw_status_bar;
 use crate::theme::{palette, solid};
-use crate::{FoldCache, HighlightCache, ImageCache, TermCells, editor_font};
+use crate::{ImageCache, SyntaxCache, TermCells, editor_font};
 
 mod decorations;
 mod image;
@@ -35,8 +35,7 @@ pub(crate) fn draw_editor(
     search: Option<&SearchState>,
     term_cells: &TermCells,
     images: &ImageCache,
-    highlight_cache: &mut HighlightCache,
-    fold_cache: &mut FoldCache,
+    syntax_cache: &mut SyntaxCache,
     mods: ActiveMods,
     cursor_visible: bool,
     lsp_status: LspStatus,
@@ -83,8 +82,7 @@ pub(crate) fn draw_editor(
             welcome_bindings,
             term_cells,
             images,
-            highlight_cache,
-            fold_cache,
+            syntax_cache,
             cursor_visible,
         )?;
     } else if let Some(view_id) = ws.active_view().map(|view| view.id) {
@@ -99,8 +97,7 @@ pub(crate) fn draw_editor(
             welcome_bindings,
             term_cells,
             images,
-            highlight_cache,
-            fold_cache,
+            syntax_cache,
             cursor_visible,
         )?;
     }
@@ -126,8 +123,7 @@ fn draw_pane_tree(
     welcome_bindings: &[(String, String)],
     term_cells: &TermCells,
     images: &ImageCache,
-    highlight_cache: &mut HighlightCache,
-    fold_cache: &mut FoldCache,
+    syntax_cache: &mut SyntaxCache,
     cursor_visible: bool,
 ) -> AureaResult<()> {
     match tree {
@@ -142,8 +138,7 @@ fn draw_pane_tree(
             welcome_bindings,
             term_cells,
             images,
-            highlight_cache,
-            fold_cache,
+            syntax_cache,
             cursor_visible,
         ),
         PaneTree::Split {
@@ -164,8 +159,7 @@ fn draw_pane_tree(
                 welcome_bindings,
                 term_cells,
                 images,
-                highlight_cache,
-                fold_cache,
+                syntax_cache,
                 cursor_visible,
             )?;
             draw_pane_tree(
@@ -179,8 +173,7 @@ fn draw_pane_tree(
                 welcome_bindings,
                 term_cells,
                 images,
-                highlight_cache,
-                fold_cache,
+                syntax_cache,
                 cursor_visible,
             )?;
             ctx.draw_rect(divider, &solid(palette().border))?;

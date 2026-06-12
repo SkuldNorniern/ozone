@@ -29,7 +29,7 @@ use crate::overlay::whichkey::{WhichKeyView, draw_which_key};
 use crate::render::draw_editor;
 use crate::shell::ShellJobs;
 use crate::theme::initialize as initialize_theme;
-use crate::{FoldCache, HighlightCache, ImageCache, TermCells, editor_font, lock};
+use crate::{ImageCache, SyntaxCache, TermCells, editor_font, lock};
 
 /// How long a bare modifier must be held alone before the which-key hint shows.
 const MOD_HINT_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
@@ -260,8 +260,7 @@ impl OzoneGui {
         let notifications_for_draw = notifications.clone();
         let which_key_for_draw = which_key.clone();
         let images_for_draw = images.clone();
-        let callback_highlight_cache = Mutex::new(HighlightCache::new());
-        let callback_fold_cache = Mutex::new(FoldCache::new());
+        let callback_syntax_cache = Mutex::new(SyntaxCache::new());
 
         raw_canvas.set_draw_callback(move |ctx| {
             let pal = lock(palette_for_draw.as_ref());
@@ -282,8 +281,7 @@ impl OzoneGui {
                 srch.as_ref(),
                 &TermCells::new(),
                 &imgs,
-                &mut lock(&callback_highlight_cache),
-                &mut lock(&callback_fold_cache),
+                &mut lock(&callback_syntax_cache),
                 ActiveMods::default(),
                 true,
                 LspStatus::Idle,
@@ -326,8 +324,7 @@ impl OzoneGui {
             let config = self.config.clone();
             let welcome_bindings = welcome_keymap_rows(&self.keymap, &self.commands);
             let mut scratch_char_w = 0.0;
-            let mut init_cache = HighlightCache::new();
-            let mut init_fold_cache = FoldCache::new();
+            let mut init_syntax_cache = SyntaxCache::new();
             canvas.draw(|ctx| {
                 draw_editor(
                     ctx,
@@ -337,8 +334,7 @@ impl OzoneGui {
                     None,
                     &TermCells::new(),
                     &ImageCache::new(),
-                    &mut init_cache,
-                    &mut init_fold_cache,
+                    &mut init_syntax_cache,
                     ActiveMods::default(),
                     true,
                     LspStatus::Idle,
@@ -510,8 +506,7 @@ impl OzoneGui {
                         srch.as_ref(),
                         &state.terms.cells,
                         &imgs,
-                        &mut state.highlight_cache,
-                        &mut state.fold_cache,
+                        &mut state.syntax_cache,
                         active_mods,
                         state.cursor_visible,
                         state.lsp.status(),

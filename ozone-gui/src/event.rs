@@ -28,7 +28,7 @@ use crate::overlay::whichkey::WhichKeyView;
 use crate::shell::ShellJobs;
 use crate::statusbar::buffer_dot_at;
 use crate::terminals::Terminals;
-use crate::{FoldCache, HighlightCache, ImageCache, OzoneGui, lock};
+use crate::{ImageCache, OzoneGui, SyntaxCache, lock};
 
 pub(crate) enum EventResult {
     Continue,
@@ -71,8 +71,7 @@ pub(crate) struct AppState {
     pub(crate) lsp: Lsp,
     /// In-flight `!cmd` / `|cmd` autocommand jobs (non-blocking).
     pub(crate) shell_jobs: ShellJobs,
-    pub(crate) highlight_cache: HighlightCache,
-    pub(crate) fold_cache: FoldCache,
+    pub(crate) syntax_cache: SyntaxCache,
     pub(crate) cursor_visible: bool,
     pub(crate) last_cursor_blink: Instant,
     pub(crate) needs_redraw: bool,
@@ -126,8 +125,7 @@ impl AppState {
             mouse: MouseState::default(),
             lsp: Lsp::new(),
             shell_jobs: ShellJobs::new(),
-            highlight_cache: HighlightCache::new(),
-            fold_cache: FoldCache::new(),
+            syntax_cache: SyntaxCache::new(),
             cursor_visible: true,
             last_cursor_blink: Instant::now(),
             needs_redraw: false,

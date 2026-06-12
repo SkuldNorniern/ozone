@@ -22,9 +22,10 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use sylven::lang::rust::RustLanguage;
-use sylven::{DocumentId, LanguageId, RevisionId, SyntaxEngine, SyntaxFeatures, TextSnapshot};
+use sylven::{DocumentId, LanguageId, RevisionId, SyntaxEngine, TextSnapshot};
 use taste::Language;
 
+pub use sylven::SyntaxFeatures;
 pub use symbols::{Symbol, SymbolKind, symbols};
 
 // ---------------------------------------------------------------------------

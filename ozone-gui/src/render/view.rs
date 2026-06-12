@@ -3,10 +3,8 @@ use aurea::render::{Color, DrawingContext, Font, Path, PathCommand, Point, Rect}
 
 use ozone_buffer::{Buffer, BufferId, BufferKind, Pos};
 use ozone_config::{Config, CursorStyle, LineNumbers};
-use ozone_editor::{
-    Decoration, DecorationKind, HlRole, ViewId, VirtualPos, Workspace, buffer_language, fold,
-};
-use ozone_syntax::{TokenKind, fold_line_ranges, scan_buffer};
+use ozone_editor::{Decoration, DecorationKind, HlRole, ViewId, VirtualPos, Workspace, fold};
+use ozone_syntax::TokenKind;
 use taste::detect_path;
 
 use super::TextMetrics;
@@ -23,7 +21,7 @@ use crate::components::pill::draw_pill;
 use crate::layout::*;
 use crate::terminals::draw_term_row;
 use crate::theme::{palette, solid, stroke, token_color};
-use crate::{FoldCache, HighlightCache, ImageCache, TermCells};
+use crate::{ImageCache, SyntaxCache, TermCells};
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw_view(
@@ -37,8 +35,7 @@ pub(super) fn draw_view(
     welcome_bindings: &[(String, String)],
     term_cells: &TermCells,
     images: &ImageCache,
-    highlight_cache: &mut HighlightCache,
-    fold_cache: &mut FoldCache,
+    syntax_cache: &mut SyntaxCache,
     cursor_visible: bool,
 ) -> AureaResult<()> {
     let Some(buffer_id) = ws.views.get(&view_id).map(|view| view.buffer_id) else {
@@ -89,8 +86,6 @@ pub(super) fn draw_view(
     let show_welcome = matches!(buf.kind, BufferKind::Scratch) && buf.is_empty();
 
     ctx.draw_rect(rect, &solid(palette().background))?;
-
-    let ft = buffer_language(buf);
 
     let line_numbers = match buf.kind {
         BufferKind::Terminal
@@ -151,30 +146,21 @@ pub(super) fn draw_view(
         )?;
     }
 
-    // Populate or refresh the per-buffer highlight cache.
-    // For terminal buffers there's nothing to highlight — skip.
-    let buf_revision = buf.revision();
-    let cached_spans: &[Vec<ozone_syntax::TokenSpan>] = if term_grid.is_none() && ft.is_some() {
-        let entry = highlight_cache
-            .entry(buffer_id)
-            .or_insert((u64::MAX, Vec::new()));
-        if entry.0 != buf_revision {
-            *entry = (buf_revision, scan_buffer(ft, &buf.text()));
-        }
-        &entry.1
+    // Populate or refresh the per-buffer syntax state (language, structural
+    // parse result, highlight spans, fold ranges) for the current revision.
+    // For terminal buffers there's nothing to highlight or fold — skip.
+    let syntax = syntax_cache.entry(buffer_id).or_default();
+    if term_grid.is_none() {
+        syntax.refresh(buf);
+    }
+    let lang = syntax.language;
+    let cached_spans: &[Vec<ozone_syntax::TokenSpan>] = if term_grid.is_none() {
+        &syntax.highlights
     } else {
         &[]
     };
-
-    // Structural fold ranges (sylven): populated once per revision for supported langs.
     let cached_folds: &[(usize, usize)] = if term_grid.is_none() {
-        let entry = fold_cache
-            .entry(buffer_id)
-            .or_insert((u64::MAX, Vec::new()));
-        if entry.0 != buf_revision {
-            *entry = (buf_revision, fold_line_ranges(ft, &buf.text()));
-        }
-        &entry.1
+        &syntax.folds
     } else {
         &[]
     };
@@ -460,7 +446,7 @@ pub(super) fn draw_view(
                         metrics.char_w,
                         font,
                     )?;
-                } else if spans.is_empty() || ft.is_none() {
+                } else if spans.is_empty() || lang.is_none() {
                     ctx.draw_text_with_font(
                         line_text,
                         Point::new(text_x, baseline),

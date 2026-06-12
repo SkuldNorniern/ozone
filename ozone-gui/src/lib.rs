@@ -4,21 +4,12 @@ use std::sync::{Mutex, MutexGuard};
 use aurea::render::Font;
 use ozone_buffer::BufferId;
 use ozone_config::Config;
-use ozone_syntax::TokenSpan;
 
 /// Coloured terminal grids by buffer, captured each frame for the renderer.
 pub(crate) type TermCells = HashMap<BufferId, Vec<Vec<ozone_term::Cell>>>;
 
 /// Decoded images by buffer. `None` = decode failed (shown as an error label).
 pub(crate) type ImageCache = HashMap<BufferId, Option<aurea::render::Image>>;
-
-/// Per-buffer syntax highlight cache. Key: BufferId. Value: (revision, per-line spans).
-/// Invalidated when the buffer's revision changes.
-pub(crate) type HighlightCache = HashMap<BufferId, (u64, Vec<Vec<TokenSpan>>)>;
-
-/// Per-buffer structural fold range cache. Key: BufferId. Value: (revision, fold ranges).
-/// Ranges are `(start_line, end_line)` inclusive pairs derived from sylven.
-pub(crate) type FoldCache = HashMap<BufferId, (u64, Vec<(usize, usize)>)>;
 
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
@@ -44,7 +35,10 @@ mod overlay;
 mod render;
 mod shell;
 mod statusbar;
+mod syntax_cache;
 mod terminals;
 mod theme;
+
+pub(crate) use syntax_cache::SyntaxCache;
 
 pub use app::OzoneGui;
