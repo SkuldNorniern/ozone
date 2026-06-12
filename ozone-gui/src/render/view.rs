@@ -1,5 +1,5 @@
 use aurea::AureaResult;
-use aurea::render::{DrawingContext, Font, Path, PathCommand, Point, Rect};
+use aurea::render::{Color, DrawingContext, Font, Path, PathCommand, Point, Rect};
 
 use ozone_buffer::{BufferKind, Pos};
 use ozone_config::{Config, CursorStyle, LineNumbers};
@@ -433,6 +433,17 @@ pub(super) fn draw_view(
                         metrics.char_w,
                         font,
                     )?;
+                } else if matches!(buf.kind, BufferKind::FileTree) {
+                    draw_tree_line(
+                        ctx,
+                        line_text,
+                        text_x,
+                        line_top,
+                        line_h,
+                        baseline,
+                        metrics.char_w,
+                        font,
+                    )?;
                 } else if spans.is_empty() || ft.is_none() {
                     ctx.draw_text_with_font(
                         line_text,
@@ -698,4 +709,171 @@ fn draw_cursor(
         }
     }
     Ok(())
+}
+
+/// Render a [`BufferKind::FileTree`] line: guide lines, icons, file-type colors.
+#[allow(clippy::too_many_arguments)]
+fn draw_tree_line(
+    ctx: &mut dyn DrawingContext,
+    line: &str,
+    text_x: f32,
+    line_top: f32,
+    line_h: f32,
+    baseline: f32,
+    char_w: f32,
+    font: &Font,
+) -> AureaResult<()> {
+    let p = palette();
+
+    // Header row "▸ root/" — accent, no icon.
+    if line.starts_with('▸') {
+        return ctx.draw_text_with_font(
+            line,
+            Point::new(text_x, baseline),
+            font,
+            &solid(p.picker_prompt),
+        );
+    }
+
+    // Strip hidden path suffix from file/dir rows ("  path" or "  path/" at end).
+    let display = line
+        .rsplit_once("  ")
+        .map(|(before, _)| before)
+        .unwrap_or(line);
+
+    // Find the connector "── " that marks where the entry name begins.
+    let Some(conn_pos) = display.find("── ") else {
+        // No connector (empty line, etc.) — plain draw.
+        return ctx.draw_text_with_font(
+            display,
+            Point::new(text_x, baseline),
+            font,
+            &solid(token_color(TokenKind::Default)),
+        );
+    };
+    let conn_end = conn_pos + "── ".len(); // 7 bytes: U+2500×2 + space
+    let guide_part = &display[..conn_pos]; // everything before ├/└
+    let connector = &display[conn_pos..conn_end]; // "├── " or "└── "
+    let name = &display[conn_end..]; // "▾ src/" or "main.rs" etc.
+
+    // Indentation guides: "│   " units → vertical line; "    " units → skip.
+    let mut gx = text_x;
+    let mut guide_chars = guide_part.chars();
+    while let Some(ch) = guide_chars.next() {
+        if ch == '│' {
+            let cx = gx + char_w * 0.5;
+            ctx.draw_line(cx, line_top, cx, line_top + line_h, &stroke(p.border, 1.0))?;
+            // Skip the three trailing spaces of this "│   " unit.
+            for _ in 0..3 {
+                guide_chars.next();
+            }
+            gx += char_w * 4.0;
+        } else {
+            gx += char_w;
+        }
+    }
+
+    // --- Connector text (dim) -----------------------------------------------
+    let connector_x = text_x + guide_part.chars().count() as f32 * char_w;
+    ctx.draw_text_with_font(
+        connector,
+        Point::new(connector_x, baseline),
+        font,
+        &solid(p.statusbar_dim),
+    )?;
+
+    // --- Icon + name ---------------------------------------------------------
+    let is_dir = name.ends_with('/');
+    // Strip the expand/collapse indicator ("▾ " / "▸ ") from the visible name
+    // to get the bare entry name for extension detection.
+    let bare_name = name
+        .strip_prefix("▾ ")
+        .or_else(|| name.strip_prefix("▸ "))
+        .unwrap_or(name);
+
+    let icon_x = connector_x + connector.chars().count() as f32 * char_w;
+    let icon_h = line_h * 0.52;
+    let icon_w = char_w * 0.82;
+    let icon_y = line_top + (line_h - icon_h) / 2.0;
+
+    if is_dir {
+        // Folder icon: raised tab + body, filled in accent color.
+        let tab_w = icon_w * 0.42;
+        let tab_h = icon_h * 0.24;
+        ctx.draw_rect(
+            Rect::new(icon_x, icon_y, tab_w, tab_h + 1.0),
+            &solid(p.picker_prompt),
+        )?;
+        ctx.draw_rect(
+            Rect::new(icon_x, icon_y + tab_h, icon_w, icon_h - tab_h),
+            &solid(p.picker_prompt),
+        )?;
+    } else {
+        // File icon: page outline with a small folded top-right corner.
+        let corner = (icon_w * 0.28).max(2.0);
+        let col = file_type_color(bare_name, p.statusbar_dim);
+        // Body: left+bottom+partial-top (omit folded corner area).
+        ctx.draw_rect(
+            Rect::new(icon_x, icon_y, icon_w - corner, icon_h),
+            &solid(col),
+        )?;
+        ctx.draw_rect(
+            Rect::new(
+                icon_x + icon_w - corner,
+                icon_y + corner,
+                corner,
+                icon_h - corner,
+            ),
+            &solid(col),
+        )?;
+        // Fold triangle (two lines forming the crease).
+        ctx.draw_line(
+            icon_x + icon_w - corner,
+            icon_y,
+            icon_x + icon_w - corner,
+            icon_y + corner,
+            &stroke(p.background, 1.0),
+        )?;
+        ctx.draw_line(
+            icon_x + icon_w - corner,
+            icon_y + corner,
+            icon_x + icon_w,
+            icon_y + corner,
+            &stroke(p.background, 1.0),
+        )?;
+    }
+
+    let text_after_icon = icon_x + icon_w + char_w * 0.35;
+
+    // Name text: keep the expand/collapse indicator if present, then entry name.
+    let name_color = if is_dir {
+        p.picker_prompt
+    } else {
+        token_color(TokenKind::Default)
+    };
+    ctx.draw_text_with_font(
+        name,
+        Point::new(text_after_icon, baseline),
+        font,
+        &solid(name_color),
+    )?;
+
+    Ok(())
+}
+
+/// Maps a file's extension to an icon color; `dim` is the fallback.
+fn file_type_color(name: &str, dim: Color) -> Color {
+    let ext = name.rsplit('.').next().unwrap_or("");
+    match ext {
+        "rs" => Color::rgb(0xE0, 0x7A, 0x10),
+        "toml" | "yaml" | "yml" | "json" | "ron" => Color::rgb(0x85, 0x99, 0x00),
+        "md" | "txt" | "rst" => Color::rgb(0x26, 0x8B, 0xD2),
+        "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" => Color::rgb(0xF0, 0xC6, 0x74),
+        "py" => Color::rgb(0x2A, 0xA1, 0x98),
+        "go" => Color::rgb(0x00, 0xAD, 0xD8),
+        "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" => Color::rgb(0x6C, 0x71, 0xC4),
+        "html" | "htm" | "css" | "scss" | "sass" => Color::rgb(0xCB, 0x4B, 0x16),
+        "sh" | "bash" | "zsh" | "fish" => Color::rgb(0x85, 0x99, 0x00),
+        _ => dim,
+    }
 }
