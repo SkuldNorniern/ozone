@@ -5,7 +5,7 @@ use ozone_buffer::{Buffer, BufferId, BufferKind, Pos};
 use ozone_config::{Config, CursorStyle, LineNumbers};
 use ozone_editor::{Decoration, DecorationKind, HlRole, ViewId, VirtualPos, Workspace, fold};
 use ozone_syntax::{TokenKind, fold_line_ranges, scan_buffer};
-use taste::detect_language;
+use taste::{detect_language, detect_path};
 
 use super::TextMetrics;
 use super::decorations::{
@@ -933,19 +933,22 @@ fn leading_indent_cols(text: &str, tab_w: usize) -> usize {
     if text.trim().is_empty() { 0 } else { col }
 }
 
-/// Maps a file's extension to an icon color; `dim` is the fallback.
+/// Uses Taste's language metadata for file icon colors; `dim` is the fallback.
 fn file_type_color(name: &str, dim: Color) -> Color {
-    let ext = name.rsplit('.').next().unwrap_or("");
-    match ext {
-        "rs" => Color::rgb(0xE0, 0x7A, 0x10),
-        "toml" | "yaml" | "yml" | "json" | "ron" => Color::rgb(0x85, 0x99, 0x00),
-        "md" | "txt" | "rst" => Color::rgb(0x26, 0x8B, 0xD2),
-        "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" => Color::rgb(0xF0, 0xC6, 0x74),
-        "py" => Color::rgb(0x2A, 0xA1, 0x98),
-        "go" => Color::rgb(0x00, 0xAD, 0xD8),
-        "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" => Color::rgb(0x6C, 0x71, 0xC4),
-        "html" | "htm" | "css" | "scss" | "sass" => Color::rgb(0xCB, 0x4B, 0x16),
-        "sh" | "bash" | "zsh" | "fish" => Color::rgb(0x85, 0x99, 0x00),
-        _ => dim,
+    detect_path(name)
+        .and_then(|detection| detection.language.color())
+        .map(|color| Color::rgb(color.r, color.g, color.b))
+        .unwrap_or(dim)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_type_color_uses_taste_metadata_and_fallback() {
+        let dim = Color::rgb(1, 2, 3);
+        assert_eq!(file_type_color("main.rs", dim), Color::rgb(222, 165, 132));
+        assert_eq!(file_type_color("unknown.nope", dim), dim);
     }
 }
