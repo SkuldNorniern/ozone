@@ -358,7 +358,9 @@ impl Keymap {
                 continue;
             }
             if chord.len() == seq_len {
-                if best.is_none_or(|prev| b.layer > prev.layer) {
+                // Later entries at the same layer override earlier ones. This
+                // lets platform-specific config refine a portable binding.
+                if best.is_none_or(|prev| b.layer >= prev.layer) {
                     best = Some(b);
                 }
             } else {
@@ -676,6 +678,31 @@ mod tests {
         assert_eq!(
             km.resolve(&[], &stroke, Some("toml")),
             KeymapOutcome::NoMatch
+        );
+    }
+
+    #[test]
+    fn later_binding_wins_within_the_same_layer() {
+        let mut km = Keymap::new();
+        km.add_user_config(&[
+            KeymapConfig {
+                keys: "meta+x".to_string(),
+                command: "command.palette".to_string(),
+                filetype: None,
+                platform: None,
+            },
+            KeymapConfig {
+                keys: "meta+x".to_string(),
+                command: "edit.cut".to_string(),
+                filetype: None,
+                platform: Some(std::env::consts::OS.to_string()),
+            },
+        ]);
+
+        let stroke = KeyStroke::parse("meta+x").unwrap();
+        assert_eq!(
+            km.resolve(&[], &stroke, None),
+            KeymapOutcome::Execute("edit.cut".to_string())
         );
     }
 }
