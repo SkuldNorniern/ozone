@@ -34,10 +34,12 @@ navigation, and small project work:
 - editable text buffers with undo, redo, dirty tracking, and save/save-all
 - LF/CRLF aware: files load as LF internally and keep their original ending on save
 - command-line file opening
-- workspace file picker, open-buffer picker, and file tree
+- workspace file picker, open-buffer picker, and a collapsible, icon-rich file tree
 - in-buffer search/replace and literal workspace search
 - code folding, text objects, and a document-symbol picker
-- line numbers, cursor-line highlight, selections, scrollbars, and mouse-wheel scrolling
+- keyboard and mouse selection, OS clipboard copy/cut/paste, and select-all
+- comment toggling, line duplication, and moving lines or selected blocks
+- line numbers, cursor-line highlight, scrollbars, and mouse-wheel scrolling
 - pane splits, pane focus movement, buffer cycling, and status-bar buffer dots (click to switch)
 - which-key hints — for a pending chord *and* for a bare held modifier
 - syntax scanning for Rust, Markdown, TOML, JSON, and plain text
@@ -47,9 +49,9 @@ navigation, and small project work:
 - live LSP diagnostics (underline + gutter sign + message) for Rust via rust-analyzer
 - configurable themes, keymaps, filetype defaults, modifier maps, and autocommands
 
-Some pieces are intentionally still thin. The LSP client speaks the protocol and
-streams diagnostics, but the request features (completion, hover, go-to-definition,
-references, rename) are not wired yet — the editor stays fully useful without a
+Some pieces are intentionally still thin. The LSP client streams diagnostics and
+supports completion, hover, and go-to-definition; references, rename, and richer
+completion edits are still pending. The editor stays fully useful without a
 server. Plugin capability is planned for later, once the command, event, and
 configuration surfaces are stable enough to expose cleanly.
 
@@ -125,6 +127,13 @@ window title also carries the dirty marker for file buffers.
 | `Ctrl+S` | Save current buffer |
 | `Ctrl+K Ctrl+S` | Save all buffers |
 | `Ctrl+Z` / `Ctrl+Y` | Undo / Redo |
+| `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | Copy / cut / paste using the OS clipboard |
+| `Shift+Arrow` | Extend or retract the selection |
+| `Ctrl+Shift+Left` / `Ctrl+Shift+Right` | Extend selection by word |
+| `Ctrl+Shift+Home` / `Ctrl+Shift+End` | Extend selection to start/end of file |
+| `Ctrl+/` | Toggle line comments for the line or selection |
+| `Ctrl+D` | Duplicate the line or selected lines |
+| `Meta+Up` / `Meta+Down` | Move the line or selected lines |
 | `Ctrl+P` | Open workspace file picker |
 | `Ctrl+X B` | Open buffer picker |
 | `Ctrl+Shift+O` | Go to symbol (current buffer) |
@@ -134,6 +143,7 @@ window title also carries the dirty marker for file buffers.
 | `Meta+H` | Search and replace current buffer |
 | `Ctrl+Shift+F` | Search workspace |
 | `Meta+G` | Go to line |
+| `Meta+.` / `Meta+K` / `Ctrl+Space` | LSP definition / hover / completion |
 | `Ctrl+K Ctrl+L` | Toggle fold at cursor |
 | `Ctrl+K Ctrl+J` / `Ctrl+K Ctrl+0` | Fold all / open all |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous buffer |
@@ -148,10 +158,11 @@ launch and the running keymap is built entirely from config. Edit a command to
 rebind a key, or delete a line to unbind it (yes, even a default). See
 [Configuration](#configuration).
 
-Modifiers follow Emacs naming: **Control** is the Ctrl key; **Meta** is Alt on
-Windows/Linux and **Command on macOS** (so `M-x` is `Cmd-X` there); **Super** (the
-Win key, or Option on macOS) is OS-reserved and unbound by default. All three
-mappings can be reassigned in `[modifiers]` config.
+Modifiers follow Emacs naming: **Control** is Ctrl, **Meta** is Alt on
+Windows/Linux and Command on macOS, and **Super** is the Win key or Option.
+`Meta+X` opens the palette on Windows/Linux; macOS uses `Cmd+X` for cut, so
+`Ctrl+Shift+P` remains the portable palette binding. All mappings can be
+reassigned in `[modifiers]` config.
 
 ## Configuration
 
@@ -265,8 +276,8 @@ server   = "rust-analyzer"   # must be on PATH (e.g. `rustup component add rust-
 lazy     = true
 ```
 
-Request features (completion, hover, go-to-definition, references, rename) are
-not wired yet — only diagnostics flow today.
+Completion, hover, and go-to-definition are wired. References and rename remain
+planned.
 
 ## Workspace Layout
 
