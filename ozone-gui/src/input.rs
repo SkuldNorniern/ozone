@@ -54,6 +54,21 @@ pub(crate) fn corrected_mods(
     m
 }
 
+/// Merge a non-modifier key event's snapshot with the separately tracked live
+/// modifier state. Some platforms report an incomplete snapshot on the letter
+/// event even though the modifier press was delivered correctly just before it.
+pub(crate) fn merge_live_mods(
+    snapshot: aurea::Modifiers,
+    live: aurea::Modifiers,
+) -> aurea::Modifiers {
+    aurea::Modifiers {
+        ctrl: snapshot.ctrl || live.ctrl,
+        alt: snapshot.alt || live.alt,
+        shift: snapshot.shift || live.shift,
+        meta: snapshot.meta || live.meta,
+    }
+}
+
 /// Map a key + modifiers to the bytes a PTY shell expects, or `None` to let the
 /// key fall through to the editor keymap (so Ctrl+Tab, M-x, pane focus still work
 /// while a terminal is focused). The shell's line discipline handles echo/editing.
@@ -490,5 +505,35 @@ mod tests {
         assert_eq!(keycode_to_char(aurea::KeyCode::A, true), Some('A'));
         assert_eq!(keycode_to_char(aurea::KeyCode::Key1, true), Some('!'));
         assert_eq!(keycode_to_char(aurea::KeyCode::Enter, false), None);
+    }
+
+    #[test]
+    fn platform_meta_resolves_to_logical_meta() {
+        let map = ModifierMap::platform_default();
+        let physical = if cfg!(target_os = "macos") {
+            aurea::Modifiers {
+                meta: true,
+                ..Default::default()
+            }
+        } else {
+            aurea::Modifiers {
+                alt: true,
+                ..Default::default()
+            }
+        };
+
+        let active = ActiveMods::from_physical(physical, &map);
+        assert!(active.meta);
+        assert!(!active.control);
+    }
+
+    #[test]
+    fn live_modifier_fills_in_incomplete_key_snapshot() {
+        let snapshot = aurea::Modifiers::default();
+        let live = aurea::Modifiers {
+            alt: true,
+            ..Default::default()
+        };
+        assert!(merge_live_mods(snapshot, live).alt);
     }
 }

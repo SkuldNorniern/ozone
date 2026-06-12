@@ -9,7 +9,9 @@ use ozone_editor::{KeyStroke, Workspace};
 
 use crate::actions::{apply_auto_save, dispatch_autocmds, handle_minibuffer_key, insert_text_raw};
 use crate::canvas::SendableCanvas;
-use crate::input::{corrected_mods, terminal_key_bytes};
+use crate::input::{
+    ActiveMods, corrected_mods, keycode_to_char, merge_live_mods, terminal_key_bytes,
+};
 use crate::keys::{Overlays, active_terminal, apply_ui_intents, handle_key};
 use crate::layout::{STATUS_H, max_scroll_line, pane_at};
 use crate::lsp::Lsp;
@@ -168,7 +170,18 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
             pressed: false,
             modifiers,
         } => {
-            let mods = corrected_mods(*modifiers, *key, false);
+            let snapshot = corrected_mods(*modifiers, *key, false);
+            let mods = if matches!(
+                *key,
+                aurea::KeyCode::Shift
+                    | aurea::KeyCode::Control
+                    | aurea::KeyCode::Alt
+                    | aurea::KeyCode::Meta
+            ) {
+                snapshot
+            } else {
+                merge_live_mods(snapshot, state.live_mods)
+            };
             if state.live_mods != mods {
                 state.live_mods = mods;
                 state.needs_redraw = true;
@@ -180,12 +193,30 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
             pressed: true,
             modifiers,
         } => {
-            let mods = corrected_mods(*modifiers, *key, true);
+            let snapshot = corrected_mods(*modifiers, *key, true);
+            let mods = if matches!(
+                *key,
+                aurea::KeyCode::Shift
+                    | aurea::KeyCode::Control
+                    | aurea::KeyCode::Alt
+                    | aurea::KeyCode::Meta
+            ) {
+                snapshot
+            } else {
+                merge_live_mods(snapshot, state.live_mods)
+            };
             if state.live_mods != mods {
                 state.live_mods = mods;
                 state.needs_redraw = true;
             }
             state.cursor_activity = true;
+            let active = ActiveMods::from_physical(mods, &state.modmap);
+            if state.has_text_input
+                && keycode_to_char(*key, mods.shift).is_some()
+                && (active.control || active.meta || active.super_)
+            {
+                state.swallow_text = true;
+            }
 
             let mut completion = lock(state.completion.as_ref());
             if completion.is_some() {
@@ -270,7 +301,7 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                 }
             } else if search.is_some() {
                 let mut workspace = lock(state.workspace.as_ref());
-                if handle_search_key(*key, *modifiers, &mut search, &mut workspace) {
+                if handle_search_key(*key, mods, &mut search, &mut workspace) {
                     dispatch_autocmds(
                         &mut workspace,
                         &state.commands,
@@ -281,14 +312,14 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                 }
             } else if let Some((term_id, bytes)) = active_terminal(&lock(state.workspace.as_ref()))
                 .filter(|id| state.terms.sessions.contains_key(id))
-                .zip(terminal_key_bytes(*key, *modifiers))
+                .zip(terminal_key_bytes(*key, mods))
             {
                 state.terms.sessions[&term_id].write_str(bytes);
                 state.needs_redraw = true;
             } else {
-                if handle_key(
+                let handled = handle_key(
                     *key,
-                    *modifiers,
+                    mods,
                     !state.has_text_input,
                     &mut lock(state.workspace.as_ref()),
                     &state.commands,
@@ -305,8 +336,12 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                     &state.buffer_mru,
                     &mut state.lsp,
                     &mut state.shell_jobs,
-                ) {
+                );
+                if handled {
                     state.needs_redraw = true;
+                    if state.has_text_input && keycode_to_char(*key, mods.shift).is_some() {
+                        state.swallow_text = true;
+                    }
                 }
                 apply_auto_save(
                     &mut lock(state.workspace.as_ref()),
@@ -324,6 +359,10 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
         WindowEvent::TextInput { text } => {
             if state.swallow_text {
                 state.swallow_text = false;
+                return EventResult::Continue;
+            }
+            let active = ActiveMods::from_physical(state.live_mods, &state.modmap);
+            if active.control || active.meta || active.super_ {
                 return EventResult::Continue;
             }
             state.cursor_activity = true;
