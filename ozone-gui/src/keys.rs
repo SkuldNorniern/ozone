@@ -11,8 +11,8 @@
 use ozone_buffer::{BufferId, BufferKind};
 use ozone_config::FiletypeConfig;
 use ozone_editor::{
-    AutocommandRegistry, CommandRegistry, KeyStroke, Keymap, KeymapOutcome, ModifierMap,
-    SelectItem, UiIntent, Workspace,
+    AutocommandRegistry, CommandContext, CommandRegistry, KeyStroke, Keymap, KeymapOutcome,
+    ModifierMap, SelectItem, UiIntent, Workspace,
 };
 use ozone_syntax::symbols;
 use taste::{Language, detect_language};
@@ -306,6 +306,22 @@ pub(crate) fn apply_ui_intents(
             }
             UiIntent::LspCompletion => {
                 lsp.request_completion(ws);
+            }
+            UiIntent::SetClipboard(text) => {
+                if let Ok(mut cb) = arboard::Clipboard::new() {
+                    cb.set_text(text).ok();
+                }
+            }
+            UiIntent::Paste => {
+                let text = arboard::Clipboard::new()
+                    .ok()
+                    .and_then(|mut cb| cb.get_text().ok());
+                if let Some(text) = text
+                    && let Some(mut ctx) = CommandContext::new(ws)
+                {
+                    ctx = ctx.with_arg(Some(text));
+                    reg.execute("edit.paste", &mut ctx);
+                }
             }
         }
     }

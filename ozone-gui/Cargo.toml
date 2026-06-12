@@ -25,4 +25,5 @@ image = { version = "0.25", default-features = false, features = [
     "qoi",
     "ff",
 ] }
+arboard    = "3"
 toml.workspace = true

@@ -66,6 +66,12 @@ pub enum UiIntent {
     /// Request completions at the cursor via the active LSP server. The
     /// frontend owns the connection and shows the results in a popup.
     LspCompletion,
+    /// Copy `text` to the OS clipboard. The frontend performs the write.
+    SetClipboard(String),
+    /// Read the OS clipboard and insert it at the cursor via `edit.paste`.
+    /// The frontend reads the clipboard and re-dispatches the command with the
+    /// text as its argument.
+    Paste,
 }
 
 /// One row of a [`UiIntent::Select`] list. Choosing it runs `command` with

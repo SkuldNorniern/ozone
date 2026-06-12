@@ -4,6 +4,7 @@ use ozone_buffer::{BufferKind, Pos};
 use taste::detect_language;
 
 use crate::events::EditorEvent;
+use crate::ui::UiIntent;
 
 use super::{
     CommandContext, CommandRegistry, emit_cursor_moved, leading_whitespace, selection_line_range,
@@ -163,6 +164,71 @@ pub(super) fn register_edit_commands(reg: &mut CommandRegistry) {
             view.col_memory = pos.col;
             emit_cursor_moved(ctx, old);
         }
+    });
+
+    reg.register(
+        "edit.copy",
+        "Copy selection (or current line) to OS clipboard",
+        |ctx| {
+            let text = selection_text(ctx);
+            if !text.is_empty() {
+                ctx.workspace.request_ui(UiIntent::SetClipboard(text));
+            }
+        },
+    );
+
+    reg.register(
+        "edit.cut",
+        "Cut selection (or current line) to OS clipboard",
+        |ctx| {
+            let text = selection_text(ctx);
+            if text.is_empty() {
+                return;
+            }
+            ctx.workspace.request_ui(UiIntent::SetClipboard(text));
+            delete_selection(ctx);
+        },
+    );
+
+    reg.register("edit.paste", "Paste from OS clipboard at cursor", |ctx| {
+        let Some(text) = ctx.arg.take() else {
+            ctx.workspace.request_ui(UiIntent::Paste);
+            return;
+        };
+        if text.is_empty() {
+            return;
+        }
+        // Replace selection if active, otherwise insert at cursor.
+        let has_selection = ctx
+            .workspace
+            .views
+            .get(&ctx.view_id)
+            .and_then(|v| v.selection)
+            .is_some_and(|s| !s.is_empty());
+        if has_selection {
+            delete_selection(ctx);
+        }
+        let pos = ctx.workspace.views.get(&ctx.view_id).unwrap().cursor;
+        let delta = ctx
+            .workspace
+            .buffers
+            .get_mut(&ctx.buffer_id)
+            .unwrap()
+            .insert(pos, &text);
+        ctx.workspace.emit(EditorEvent::BufferChanged {
+            id: ctx.buffer_id,
+            delta,
+        });
+        // Move cursor to end of inserted text.
+        let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
+        let end_off = (buf.pos_to_offset(pos) + text.len()).min(buf.text().len());
+        let end_pos = buf.offset_to_pos(end_off);
+        let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+        let old = view.cursor;
+        view.cursor = end_pos;
+        view.col_memory = end_pos.col;
+        view.selection = None;
+        emit_cursor_moved(ctx, old);
     });
 
     reg.register(
@@ -408,6 +474,54 @@ fn move_line(ctx: &mut CommandContext, direction: i32) {
     if let Some(old) = cursor_moved_from {
         emit_cursor_moved(ctx, old);
     }
+}
+
+/// Extract the selected text, or the entire cursor line if no selection.
+fn selection_text(ctx: &CommandContext) -> String {
+    let view = ctx.workspace.views.get(&ctx.view_id).unwrap();
+    let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
+    if let Some(span) = view.selection.filter(|s| !s.is_empty()) {
+        let full = buf.text();
+        let a = buf.pos_to_offset(span.start).min(full.len());
+        let b = buf.pos_to_offset(span.end).min(full.len());
+        let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+        full[lo..hi].to_string()
+    } else {
+        // No selection — copy the cursor line (with newline).
+        let line = view.cursor.line;
+        let mut text = buf.line(line).unwrap_or_default();
+        text.push('\n');
+        text
+    }
+}
+
+/// Delete the active selection, leaving cursor at the selection start.
+fn delete_selection(ctx: &mut CommandContext) {
+    let view = ctx.workspace.views.get(&ctx.view_id).unwrap();
+    let Some(span) = view.selection.filter(|s| !s.is_empty()) else {
+        return;
+    };
+    let (start, end) = if span.start <= span.end {
+        (span.start, span.end)
+    } else {
+        (span.end, span.start)
+    };
+    let delta = ctx
+        .workspace
+        .buffers
+        .get_mut(&ctx.buffer_id)
+        .unwrap()
+        .delete_span(start, end);
+    ctx.workspace.emit(EditorEvent::BufferChanged {
+        id: ctx.buffer_id,
+        delta,
+    });
+    let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
+    let old = view.cursor;
+    view.cursor = start;
+    view.col_memory = start.col;
+    view.selection = None;
+    emit_cursor_moved(ctx, old);
 }
 
 #[cfg(test)]

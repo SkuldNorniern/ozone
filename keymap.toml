@@ -243,6 +243,32 @@ command = "edit.move-line-up"
 keys = "meta+down"
 command = "edit.move-line-down"
 
+# ── Clipboard ────────────────────────────────────────────────────────────────
+# ctrl+c/x/v = Windows/Linux standard; meta+c/x/v = Cmd on macOS (meta=Cmd there)
+[[keymap]]
+keys = "ctrl+c"
+command = "edit.copy"
+
+[[keymap]]
+keys = "ctrl+x"
+command = "edit.cut"
+
+[[keymap]]
+keys = "ctrl+v"
+command = "edit.paste"
+
+[[keymap]]
+keys = "meta+c"
+command = "edit.copy"
+
+[[keymap]]
+keys = "meta+x"
+command = "edit.cut"
+
+[[keymap]]
+keys = "meta+v"
+command = "edit.paste"
+
 # ── Selection ────────────────────────────────────────────────────────────────
 [[keymap]]
 keys = "meta+shift+up"

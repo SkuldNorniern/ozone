@@ -123,6 +123,13 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("ctrl+d", "edit.duplicate-line"),
     ("meta+up", "edit.move-line-up"),
     ("meta+down", "edit.move-line-down"),
+    // Clipboard — ctrl+c/x/v (Windows/Linux); meta+c/x/v = Cmd (macOS)
+    ("ctrl+c", "edit.copy"),
+    ("ctrl+x", "edit.cut"),
+    ("ctrl+v", "edit.paste"),
+    ("meta+c", "edit.copy"),
+    ("meta+x", "edit.cut"),
+    ("meta+v", "edit.paste"),
     // Selection
     ("meta+shift+up", "select.expand"),
 ];
