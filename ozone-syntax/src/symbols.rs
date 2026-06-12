@@ -69,9 +69,9 @@ fn sylven_symbols(lang: Option<Language>, text: &str) -> Vec<Symbol> {
     };
     features
         .symbols
-        .into_iter()
+        .iter()
         .map(|sym| Symbol {
-            name: sym.name,
+            name: sym.name.clone(),
             kind: sylven_kind_to_local(sym.kind),
             line: byte_to_line(text, sym.name_range.start().to_usize()),
         })

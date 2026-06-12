@@ -17,7 +17,9 @@ mod toml;
 mod toml_buffer;
 mod yaml_buffer;
 
-use std::sync::{Arc, OnceLock};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use sylven::lang::rust::RustLanguage;
 use sylven::{DocumentId, LanguageId, RevisionId, SyntaxEngine, SyntaxFeatures, TextSnapshot};
@@ -171,13 +173,69 @@ pub fn expand_selection(
     sylven::expand_selection(&features, text.len(), sel_start, sel_end)
 }
 
+/// One remembered parse: language + content fingerprint → features.
+/// `text` is kept to verify a hash match (collisions must not corrupt
+/// highlighting), and `Arc`d so verification doesn't copy the buffer.
+struct ParseMemo {
+    lang: &'static str,
+    hash: u64,
+    text: Arc<str>,
+    features: Arc<SyntaxFeatures>,
+}
+
+/// Content-addressed memo over recent parses, most-recent first.
+///
+/// Every structural consumer funnels through [`parse_features`]: render
+/// highlights and folds, fold commands, expand-selection, the symbol picker,
+/// and fold-gutter mouse clicks. Without the memo each of those costs a full
+/// document parse; with it, one buffer revision is parsed once and every
+/// other query is a hash + compare.
+static PARSE_MEMO: Mutex<Vec<ParseMemo>> = Mutex::new(Vec::new());
+const PARSE_MEMO_CAP: usize = 8;
+
+fn text_hash(text: &str) -> u64 {
+    let mut h = DefaultHasher::new();
+    text.hash(&mut h);
+    h.finish()
+}
+
 /// Parse structural features (highlights, folds, symbols, brackets) for
 /// a buffer via sylven. Returns `None` for languages without a registered
 /// plugin (e.g. unknown / plain text).
-pub fn parse_features(lang: Option<Language>, text: &str) -> Option<SyntaxFeatures> {
-    let lang_id = LanguageId(lang?.name());
+///
+/// Results are memoized on (language, content), so calling this repeatedly
+/// for the same buffer revision is cheap.
+pub fn parse_features(lang: Option<Language>, text: &str) -> Option<Arc<SyntaxFeatures>> {
+    let name = lang?.name();
+    let hash = text_hash(text);
+
+    let mut memo = PARSE_MEMO.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(i) = memo
+        .iter()
+        .position(|m| m.lang == name && m.hash == hash && *m.text == *text)
+    {
+        let entry = memo.remove(i);
+        let features = Arc::clone(&entry.features);
+        memo.insert(0, entry); // refresh LRU position
+        return Some(features);
+    }
+    drop(memo); // don't hold the lock across a potentially slow parse
+
     let snapshot = TextSnapshot::new(DocumentId(0), RevisionId(0), text);
-    Some(engine().parse(lang_id, &snapshot)?.features)
+    let features = Arc::new(engine().parse(LanguageId(name), &snapshot)?.features);
+
+    let mut memo = PARSE_MEMO.lock().unwrap_or_else(|e| e.into_inner());
+    memo.insert(
+        0,
+        ParseMemo {
+            lang: name,
+            hash,
+            text: Arc::from(text),
+            features: Arc::clone(&features),
+        },
+    );
+    memo.truncate(PARSE_MEMO_CAP);
+    Some(features)
 }
 
 /// Return structural fold ranges as `(start_line, end_line)` pairs (inclusive,
