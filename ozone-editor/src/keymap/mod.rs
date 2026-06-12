@@ -127,8 +127,21 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("ctrl+c", "edit.copy"),
     ("ctrl+x", "edit.cut"),
     ("ctrl+v", "edit.paste"),
-    // Selection
+    // Selection — text-object
     ("meta+shift+up", "select.expand"),
+    // Keyboard extend-selection (shift+arrow family)
+    ("shift+left", "select.extend-left"),
+    ("shift+right", "select.extend-right"),
+    ("shift+up", "select.extend-up"),
+    ("shift+down", "select.extend-down"),
+    ("shift+home", "select.extend-line-start"),
+    ("shift+end", "select.extend-line-end"),
+    ("ctrl+shift+left", "select.extend-word-backward"),
+    ("ctrl+shift+right", "select.extend-word-forward"),
+    ("ctrl+shift+home", "select.extend-file-start"),
+    ("ctrl+shift+end", "select.extend-file-end"),
+    ("shift+pageup", "select.extend-page-up"),
+    ("shift+pagedown", "select.extend-page-down"),
 ];
 
 /// macOS-specific default bindings (applied only on `target_os = "macos"`).

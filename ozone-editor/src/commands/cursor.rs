@@ -13,7 +13,7 @@ pub(super) fn register_cursor_commands(reg: &mut CommandRegistry) {
         |ctx| {
             let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
             let old = view.cursor;
-            view.selection = None;
+            view.clear_selection();
             if view.cursor.col > 0 {
                 view.cursor.col -= 1;
             } else if view.cursor.line > 0 {
@@ -33,7 +33,7 @@ pub(super) fn register_cursor_commands(reg: &mut CommandRegistry) {
             let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
             let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
             let old = view.cursor;
-            view.selection = None;
+            view.clear_selection();
             let line_len = buf.line_len(view.cursor.line);
             if view.cursor.col < line_len {
                 view.cursor.col += 1;
@@ -50,7 +50,7 @@ pub(super) fn register_cursor_commands(reg: &mut CommandRegistry) {
         let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
         let old = view.cursor;
-        view.selection = None;
+        view.clear_selection();
         if view.cursor.line > 0 {
             view.cursor.line -= 1;
             let target_col = view.col_memory;
@@ -63,7 +63,7 @@ pub(super) fn register_cursor_commands(reg: &mut CommandRegistry) {
         let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
         let old = view.cursor;
-        view.selection = None;
+        view.clear_selection();
         if view.cursor.line + 1 < buf.line_count() {
             view.cursor.line += 1;
             let target_col = view.col_memory;
@@ -75,7 +75,7 @@ pub(super) fn register_cursor_commands(reg: &mut CommandRegistry) {
     reg.register("cursor.line-start", "Move cursor to line start", |ctx| {
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
         let old = view.cursor;
-        view.selection = None;
+        view.clear_selection();
         view.cursor.col = 0;
         view.col_memory = 0;
         emit_cursor_moved(ctx, old);
@@ -85,7 +85,7 @@ pub(super) fn register_cursor_commands(reg: &mut CommandRegistry) {
         let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
         let old = view.cursor;
-        view.selection = None;
+        view.clear_selection();
         view.cursor.col = buf.line_len(view.cursor.line);
         view.col_memory = view.cursor.col;
         emit_cursor_moved(ctx, old);
@@ -95,7 +95,7 @@ pub(super) fn register_cursor_commands(reg: &mut CommandRegistry) {
         ctx.workspace.push_jump();
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
         let old = view.cursor;
-        view.selection = None;
+        view.clear_selection();
         view.cursor = Pos::zero();
         view.col_memory = 0;
         view.scroll_line = 0;
@@ -108,7 +108,7 @@ pub(super) fn register_cursor_commands(reg: &mut CommandRegistry) {
         let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
         let old = view.cursor;
-        view.selection = None;
+        view.clear_selection();
         let last_line = buf.line_count().saturating_sub(1);
         view.cursor = Pos::new(last_line, buf.line_len(last_line));
         view.col_memory = view.cursor.col;
@@ -153,7 +153,7 @@ pub(super) fn register_cursor_commands(reg: &mut CommandRegistry) {
         ctx.workspace.push_jump();
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
         let old = view.cursor;
-        view.selection = None;
+        view.clear_selection();
         view.cursor = Pos::new(line, 0);
         view.col_memory = 0;
         emit_cursor_moved(ctx, old);
@@ -170,7 +170,7 @@ pub(super) fn register_cursor_commands(reg: &mut CommandRegistry) {
             let pos = word_forward(buf, view.cursor);
             let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
             let old = view.cursor;
-            view.selection = None;
+            view.clear_selection();
             view.cursor = pos;
             view.col_memory = pos.col;
             emit_cursor_moved(ctx, old);
@@ -186,7 +186,7 @@ pub(super) fn register_cursor_commands(reg: &mut CommandRegistry) {
             let pos = word_backward(buf, view.cursor);
             let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
             let old = view.cursor;
-            view.selection = None;
+            view.clear_selection();
             view.cursor = pos;
             view.col_memory = pos.col;
             emit_cursor_moved(ctx, old);
@@ -200,6 +200,7 @@ pub(super) fn register_cursor_commands(reg: &mut CommandRegistry) {
         let line_count = buf.line_count();
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
         let old = view.cursor;
+        view.clear_selection();
         let page = view.page_height.max(1);
         view.cursor.line = (view.cursor.line + page).min(line_count.saturating_sub(1));
         view.cursor.col = view.cursor.col.min(buf.line_len(view.cursor.line));
@@ -213,6 +214,7 @@ pub(super) fn register_cursor_commands(reg: &mut CommandRegistry) {
         let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
         let view = ctx.workspace.views.get_mut(&ctx.view_id).unwrap();
         let old = view.cursor;
+        view.clear_selection();
         let page = view.page_height.max(1);
         view.cursor.line = view.cursor.line.saturating_sub(page);
         view.cursor.col = view.cursor.col.min(buf.line_len(view.cursor.line));

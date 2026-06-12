@@ -284,3 +284,52 @@ platform = "macos"
 [[keymap]]
 keys = "meta+shift+up"
 command = "select.expand"
+
+# Keyboard extend-selection (shift+arrow family — standard across all platforms)
+[[keymap]]
+keys = "shift+left"
+command = "select.extend-left"
+
+[[keymap]]
+keys = "shift+right"
+command = "select.extend-right"
+
+[[keymap]]
+keys = "shift+up"
+command = "select.extend-up"
+
+[[keymap]]
+keys = "shift+down"
+command = "select.extend-down"
+
+[[keymap]]
+keys = "shift+home"
+command = "select.extend-line-start"
+
+[[keymap]]
+keys = "shift+end"
+command = "select.extend-line-end"
+
+[[keymap]]
+keys = "ctrl+shift+left"
+command = "select.extend-word-backward"
+
+[[keymap]]
+keys = "ctrl+shift+right"
+command = "select.extend-word-forward"
+
+[[keymap]]
+keys = "ctrl+shift+home"
+command = "select.extend-file-start"
+
+[[keymap]]
+keys = "ctrl+shift+end"
+command = "select.extend-file-end"
+
+[[keymap]]
+keys = "shift+pageup"
+command = "select.extend-page-up"
+
+[[keymap]]
+keys = "shift+pagedown"
+command = "select.extend-page-down"

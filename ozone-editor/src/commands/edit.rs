@@ -227,7 +227,7 @@ pub(super) fn register_edit_commands(reg: &mut CommandRegistry) {
         let old = view.cursor;
         view.cursor = end_pos;
         view.col_memory = end_pos.col;
-        view.selection = None;
+        view.clear_selection();
         emit_cursor_moved(ctx, old);
     });
 
@@ -520,7 +520,7 @@ fn delete_selection(ctx: &mut CommandContext) {
     let old = view.cursor;
     view.cursor = start;
     view.col_memory = start.col;
-    view.selection = None;
+    view.clear_selection();
     emit_cursor_moved(ctx, old);
 }
 

@@ -23,8 +23,13 @@ pub struct View {
     pub scroll_y: f32,
     /// Cursor position.
     pub cursor: Pos,
-    /// Active selection anchor (None = no selection).
+    /// Active selection span (None = no selection).
     pub selection: Option<Span>,
+    /// Fixed end of a keyboard-extended selection; None when no selection is
+    /// active. The cursor tracks the *moving* end; anchor tracks the *fixed*
+    /// end. Text-object commands set anchor=span.start / cursor=span.end;
+    /// extend commands keep anchor and move cursor only.
+    pub anchor: Option<Pos>,
     /// Column memory for up/down movement across short lines.
     pub col_memory: usize,
     /// Visible line count — set by ozone-gui each frame so page commands work.
@@ -43,6 +48,7 @@ impl View {
             scroll_y: 0.0,
             cursor: Pos::zero(),
             selection: None,
+            anchor: None,
             col_memory: 0,
             page_height: 40,
             folds: HashSet::new(),
@@ -57,10 +63,17 @@ impl View {
             scroll_y: self.scroll_y,
             cursor: self.cursor,
             selection: self.selection,
+            anchor: self.anchor,
             col_memory: self.col_memory,
             page_height: self.page_height,
             folds: self.folds.clone(),
         }
+    }
+
+    /// Clear both the selection span and the selection anchor.
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+        self.anchor = None;
     }
 
     /// Ensure the cursor is visible within `visible_lines` lines.
