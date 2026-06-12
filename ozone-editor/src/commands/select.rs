@@ -2,9 +2,9 @@
 //! enclosing bracket pair (inside/around), or surrounding quotes at the cursor.
 //! Each sets the active view's selection and moves the cursor to its end.
 
-use ozone_buffer::{Buffer, BufferKind, Pos, Span};
-use taste::detect_language;
+use ozone_buffer::{Buffer, Pos, Span};
 
+use crate::language::buffer_language;
 use crate::text_object;
 
 use super::{CommandContext, CommandRegistry, emit_cursor_moved, word_backward, word_forward};
@@ -245,11 +245,7 @@ pub(super) fn register_select_commands(reg: &mut CommandRegistry) {
 fn compute_expand(ctx: &CommandContext) -> Option<Span> {
     let buf = ctx.workspace.buffers.get(&ctx.buffer_id)?;
     let view = ctx.workspace.views.get(&ctx.view_id)?;
-    let path = match &buf.kind {
-        BufferKind::File(p) => p.to_string_lossy().into_owned(),
-        _ => return None,
-    };
-    let lang = detect_language(&path);
+    let lang = buffer_language(buf);
     let text = buf.text();
     let (sel_start, sel_end) = match view.selection {
         Some(span) => (buf.pos_to_offset(span.start), buf.pos_to_offset(span.end)),

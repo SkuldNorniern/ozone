@@ -12,9 +12,9 @@ use std::time::{Duration, Instant};
 
 use ozone_buffer::{Buffer, BufferId, BufferKind, Pos};
 use ozone_config::Config;
-use ozone_editor::{Diagnostic, NamespaceId, NotifyLevel, Workspace};
+use ozone_editor::{Diagnostic, NamespaceId, NotifyLevel, Workspace, buffer_language};
 use ozone_lsp::{CompletionItem, Location, LspClient, ServerMessage};
-use taste::{Language, detect_language};
+use taste::Language;
 
 /// Coalesce rapid edits: send at most one `didChange` per document per window.
 const CHANGE_DEBOUNCE: Duration = Duration::from_millis(150);
@@ -504,10 +504,7 @@ fn rust_file_buffers(ws: &Workspace) -> Vec<(BufferId, PathBuf)> {
     ws.buffers
         .iter()
         .filter_map(|(id, b)| match &b.kind {
-            BufferKind::File(p)
-                if detect_language(p.as_os_str().to_str().unwrap_or(""))
-                    == Some(Language::RUST) =>
-            {
+            BufferKind::File(p) if buffer_language(b) == Some(Language::RUST) => {
                 Some((*id, p.clone()))
             }
             _ => None,

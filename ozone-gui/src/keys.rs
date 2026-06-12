@@ -12,10 +12,10 @@ use ozone_buffer::{BufferId, BufferKind};
 use ozone_config::FiletypeConfig;
 use ozone_editor::{
     AutocommandRegistry, CommandContext, CommandRegistry, KeyStroke, Keymap, KeymapOutcome,
-    ModifierMap, SelectItem, UiIntent, Workspace,
+    ModifierMap, SelectItem, UiIntent, Workspace, buffer_language,
 };
 use ozone_syntax::symbols;
-use taste::{Language, detect_language};
+use taste::Language;
 
 use crate::actions::{insert_text_raw, run_cmd};
 use crate::input::{keycode_to_char, keystroke_from};
@@ -196,10 +196,7 @@ fn symbol_select_items(ws: &Workspace) -> Vec<SelectItem> {
     let Some(buf) = ws.active_buffer() else {
         return Vec::new();
     };
-    let lang = match &buf.kind {
-        BufferKind::File(p) => detect_language(p.as_os_str().to_str().unwrap_or("")),
-        _ => None,
-    };
+    let lang = buffer_language(buf);
     let text = buf.text();
     symbols(lang, &text)
         .into_iter()
@@ -223,10 +220,7 @@ pub(crate) fn active_terminal(ws: &Workspace) -> Option<BufferId> {
 
 /// Filetype token for the active buffer (for filetype-scoped keymaps).
 pub(crate) fn active_filetype_name(ws: &Workspace) -> Option<String> {
-    let lang = match &ws.active_buffer()?.kind {
-        BufferKind::File(p) => detect_language(p.as_os_str().to_str().unwrap_or("")),
-        _ => return None,
-    };
+    let lang = buffer_language(ws.active_buffer()?);
     Some(filetype_config_name(lang))
 }
 

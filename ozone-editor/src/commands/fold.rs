@@ -1,11 +1,10 @@
 //! Fold commands: toggle the fold at the cursor, fold every region, or open
 //! all. Fold state is view-local (`View::folds`); see [`crate::fold`].
 
-use ozone_buffer::BufferKind;
 use ozone_syntax::fold_line_ranges;
-use taste::detect_language;
 
 use crate::fold;
+use crate::language::buffer_language;
 
 use super::CommandRegistry;
 
@@ -20,10 +19,7 @@ pub(super) fn register_fold_commands(reg: &mut CommandRegistry) {
             .get(&ctx.view_id)
             .map(|v| v.cursor.line)
             .unwrap_or(0);
-        let lang = match &buf.kind {
-            BufferKind::File(p) => detect_language(p),
-            _ => None,
-        };
+        let lang = buffer_language(buf);
         let struct_ranges = fold_line_ranges(lang, &buf.text());
         let header = if struct_ranges.is_empty() {
             fold::header_for(buf, cursor_line)
@@ -48,10 +44,7 @@ pub(super) fn register_fold_commands(reg: &mut CommandRegistry) {
         let Some(buf) = ctx.workspace.buffers.get(&ctx.buffer_id) else {
             return;
         };
-        let lang = match &buf.kind {
-            BufferKind::File(p) => detect_language(p),
-            _ => None,
-        };
+        let lang = buffer_language(buf);
         let struct_ranges = fold_line_ranges(lang, &buf.text());
         let headers = if struct_ranges.is_empty() {
             fold::all_headers(buf)

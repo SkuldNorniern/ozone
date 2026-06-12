@@ -15,14 +15,13 @@
 use aurea::render::Rect;
 use ozone_buffer::{BufferKind, Pos, Span};
 use ozone_config::{Config, LineNumbers};
-use ozone_editor::{EditorEvent, ViewId, Workspace};
+use ozone_editor::{EditorEvent, ViewId, Workspace, buffer_language};
 
 use crate::layout::{
     EDITOR_TOP_PAD, PAD, STATUS_H, gutter_width, max_scroll_line, pane_at, pane_rect,
 };
 use ozone_editor::fold;
 use ozone_syntax::fold_line_ranges;
-use taste::detect_language;
 
 /// Run-loop pointer state. See the module docs for the planned growth.
 #[derive(Default)]
@@ -315,10 +314,7 @@ pub(crate) fn handle_fold_click(
     let line_idx =
         (scroll + ((relative_y + scroll_y) / line_h).floor() as usize).min(line_count - 1);
 
-    let lang = match &buf.kind {
-        ozone_buffer::BufferKind::File(p) => detect_language(p.as_os_str().to_str().unwrap_or("")),
-        _ => None,
-    };
+    let lang = buffer_language(buf);
     let struct_ranges = fold_line_ranges(lang, &buf.text());
     let header = if struct_ranges.is_empty() {
         if fold::is_visual_fold_header(buf, line_idx) {

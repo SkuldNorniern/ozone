@@ -6,9 +6,9 @@ use ozone_buffer::{BufferId, BufferKind};
 use ozone_config::Config;
 use ozone_editor::commands::register_defaults;
 use ozone_editor::{
-    AutocommandRegistry, CommandRegistry, IndentConfig, Keymap, ModifierMap, NotifyLevel, Workspace,
+    AutocommandRegistry, CommandRegistry, IndentConfig, Keymap, ModifierMap, NotifyLevel,
+    Workspace, buffer_language,
 };
-use taste::detect_language;
 
 use crate::actions::dispatch_autocmds;
 use crate::canvas::{SendableCanvas, SharedCanvas};
@@ -74,11 +74,8 @@ fn apply_pending_filetypes(state: &mut AppState) {
         .buffers
         .iter()
         .filter(|(id, _)| !state.ft_applied.contains(id))
-        .filter_map(|(id, b)| match &b.kind {
-            BufferKind::File(p) => Some((
-                *id,
-                filetype_config_name(detect_language(p.as_os_str().to_str().unwrap_or(""))),
-            )),
+        .filter_map(|(id, b)| match b.kind {
+            BufferKind::File(_) => Some((*id, filetype_config_name(buffer_language(b)))),
             _ => None,
         })
         .collect();

@@ -3,9 +3,11 @@ use aurea::render::{Color, DrawingContext, Font, Path, PathCommand, Point, Rect}
 
 use ozone_buffer::{Buffer, BufferId, BufferKind, Pos};
 use ozone_config::{Config, CursorStyle, LineNumbers};
-use ozone_editor::{Decoration, DecorationKind, HlRole, ViewId, VirtualPos, Workspace, fold};
+use ozone_editor::{
+    Decoration, DecorationKind, HlRole, ViewId, VirtualPos, Workspace, buffer_language, fold,
+};
 use ozone_syntax::{TokenKind, fold_line_ranges, scan_buffer};
-use taste::{detect_language, detect_path};
+use taste::detect_path;
 
 use super::TextMetrics;
 use super::decorations::{
@@ -88,10 +90,7 @@ pub(super) fn draw_view(
 
     ctx.draw_rect(rect, &solid(palette().background))?;
 
-    let ft = match &buf.kind {
-        BufferKind::File(p) => detect_language(p.as_os_str().to_str().unwrap_or("")),
-        _ => None,
-    };
+    let ft = buffer_language(buf);
 
     let line_numbers = match buf.kind {
         BufferKind::Terminal

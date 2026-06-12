@@ -3,8 +3,8 @@
 use aurea::AureaResult;
 use aurea::render::{DrawingContext, Font, Point, Rect};
 use ozone_buffer::{BufferId, BufferKind};
-use ozone_editor::{ViewId, Workspace};
-use taste::{Language, detect_language};
+use ozone_editor::{ViewId, Workspace, buffer_language};
+use taste::Language;
 
 use crate::components::draw_pill;
 use crate::input::ActiveMods;
@@ -45,9 +45,7 @@ pub(crate) fn draw_status_bar(
             let cursor_info = format!("{}:{}", view.cursor.line + 1, view.cursor.col + 1);
             let dirty = if buf.is_dirty() { "*" } else { "" };
             let mode = match &buf.kind {
-                BufferKind::File(p) => {
-                    major_mode_label(detect_language(p.as_os_str().to_str().unwrap_or("")))
-                }
+                BufferKind::File(_) => major_mode_label(buffer_language(buf)),
                 BufferKind::Search => "Files",
                 BufferKind::References => "Refs",
                 BufferKind::FileTree => "Tree",

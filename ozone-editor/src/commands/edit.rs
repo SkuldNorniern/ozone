@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use ozone_buffer::{BufferKind, Pos};
-use taste::detect_language;
+use ozone_buffer::Pos;
 
 use crate::events::EditorEvent;
+use crate::language::buffer_language;
 use crate::ui::UiIntent;
 
 use super::{
@@ -284,10 +284,7 @@ fn toggle_comment(ctx: &mut CommandContext) {
     let Some(buf) = ctx.workspace.buffers.get(&ctx.buffer_id) else {
         return;
     };
-    let lang = match &buf.kind {
-        BufferKind::File(p) => detect_language(p),
-        _ => None,
-    };
+    let lang = buffer_language(buf);
     let Some(prefix) = lang.and_then(|l| l.comments().primary_line()) else {
         return;
     };

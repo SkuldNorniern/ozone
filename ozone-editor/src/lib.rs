@@ -7,6 +7,7 @@ pub mod diagnostics;
 pub mod events;
 pub mod fold;
 pub mod keymap;
+pub mod language;
 pub mod options;
 pub mod pane;
 pub mod search;
@@ -30,6 +31,7 @@ pub use keymap::{
     Key, KeyStroke, Keymap, KeymapOutcome, ModifierMap, PhysicalModifier, PhysicalMods,
     stroke_label,
 };
+pub use language::buffer_language;
 pub use options::{BufferLocal, OptionValue};
 pub use pane::{FocusDirection, PaneTree, SplitAxis};
 pub use search::find_matches;
