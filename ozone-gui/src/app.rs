@@ -171,6 +171,9 @@ pub struct OzoneGui {
     /// Complete bindings shadowed by a longer chord sharing their prefix, so
     /// the shorter command can never fire. Reported at startup.
     shadowed_chords: Vec<String>,
+    /// Command ids registered more than once (later handler won). Reported at
+    /// startup; should always be empty in a clean build.
+    duplicate_commands: Vec<String>,
     /// Warnings produced before the GUI exists (e.g. config read/parse issues
     /// from `Config::load_user_with_warning`), shown as startup toasts so a
     /// windowed release build — which has no console for stderr — still sees them.
@@ -192,6 +195,10 @@ impl OzoneGui {
 
         let mut reg = CommandRegistry::new();
         register_defaults(&mut reg);
+        // A command id registered twice silently loses its first handler — a
+        // programming bug (guarded by a test for built-ins, surfaced here for
+        // any future runtime/plugin registration).
+        let duplicate_commands = reg.duplicate_registrations().to_vec();
         let autocmds = AutocommandRegistry::from_config(&config.autocmds);
         dispatch_autocmds(&mut workspace, &reg, &autocmds, &mut ShellJobs::new());
 
@@ -224,6 +231,7 @@ impl OzoneGui {
             keymap_report,
             unknown_commands,
             shadowed_chords,
+            duplicate_commands,
             startup_warnings: Vec::new(),
             modmap,
         }
@@ -309,6 +317,14 @@ impl OzoneGui {
                 format!(
                     "These bindings can never fire — a longer chord shares their prefix:\n{details}"
                 ),
+                Some(15_000),
+            );
+        }
+        if !self.duplicate_commands.is_empty() {
+            let details = self.duplicate_commands.join("\n");
+            startup_notifications.push(
+                NotifyLevel::Error,
+                format!("Commands registered more than once (later handler won):\n{details}"),
                 Some(15_000),
             );
         }

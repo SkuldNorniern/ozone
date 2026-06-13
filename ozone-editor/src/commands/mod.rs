@@ -71,12 +71,19 @@ type CommandFn = Box<dyn Fn(&mut CommandContext) + Send + Sync>;
 /// Maps command names → handlers. Everything is a command.
 pub struct CommandRegistry {
     commands: HashMap<String, (CommandFn, String)>,
+    /// Ids registered more than once, in registration order. A later
+    /// `register` silently replaces the earlier handler, which is almost always
+    /// a bug (a typo'd id or two features claiming the same command); recording
+    /// it lets the caller surface a diagnostic instead of losing a command
+    /// invisibly.
+    duplicates: Vec<String>,
 }
 
 impl CommandRegistry {
     pub fn new() -> Self {
         Self {
             commands: HashMap::new(),
+            duplicates: Vec::new(),
         }
     }
 
@@ -86,8 +93,19 @@ impl CommandRegistry {
         description: &str,
         f: impl Fn(&mut CommandContext) + Send + Sync + 'static,
     ) {
-        self.commands
+        let replaced = self
+            .commands
             .insert(name.to_string(), (Box::new(f), description.to_string()));
+        if replaced.is_some() {
+            self.duplicates.push(name.to_string());
+        }
+    }
+
+    /// Command ids that were registered more than once (each later
+    /// registration overwrote an earlier one). Empty when registration is
+    /// clean. See [`Self::register`].
+    pub fn duplicate_registrations(&self) -> &[String] {
+        &self.duplicates
     }
 
     /// Returns true if the command existed.
@@ -449,9 +467,30 @@ mod tests {
     use std::process;
 
     use super::{
-        collect_workspace_files, is_ignored_name, trailing_whitespace_ranges, tree_row_dir_path,
-        tree_row_path, workspace_tree_buffer,
+        CommandRegistry, collect_workspace_files, is_ignored_name, register_defaults,
+        trailing_whitespace_ranges, tree_row_dir_path, tree_row_path, workspace_tree_buffer,
     };
+
+    #[test]
+    fn register_defaults_registers_each_id_once() {
+        let mut reg = CommandRegistry::new();
+        register_defaults(&mut reg);
+        assert!(
+            reg.duplicate_registrations().is_empty(),
+            "built-in commands registered more than once: {:?}",
+            reg.duplicate_registrations()
+        );
+    }
+
+    #[test]
+    fn duplicate_registration_is_recorded() {
+        let mut reg = CommandRegistry::new();
+        reg.register("a.cmd", "first", |_| {});
+        reg.register("b.cmd", "other", |_| {});
+        assert!(reg.duplicate_registrations().is_empty());
+        reg.register("a.cmd", "second", |_| {});
+        assert_eq!(reg.duplicate_registrations(), ["a.cmd"]);
+    }
 
     #[test]
     fn finds_trailing_space_ranges() {
