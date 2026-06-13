@@ -163,6 +163,10 @@ pub struct OzoneGui {
     pub(crate) keymap: Arc<Keymap>,
     keymap_report: KeymapReport,
     unknown_commands: Vec<String>,
+    /// Warnings produced before the GUI exists (e.g. config read/parse issues
+    /// from `Config::load_user_with_warning`), shown as startup toasts so a
+    /// windowed release build — which has no console for stderr — still sees them.
+    startup_warnings: Vec<String>,
     pub(crate) modmap: ModifierMap,
 }
 
@@ -210,8 +214,18 @@ impl OzoneGui {
             keymap: Arc::new(keymap),
             keymap_report,
             unknown_commands,
+            startup_warnings: Vec::new(),
             modmap,
         }
+    }
+
+    /// Attach warnings gathered before the GUI was constructed (e.g. config
+    /// load/parse problems). They are shown as startup toasts in [`Self::run`].
+    /// Empty strings are ignored.
+    pub fn with_startup_warnings(mut self, warnings: impl IntoIterator<Item = String>) -> Self {
+        self.startup_warnings
+            .extend(warnings.into_iter().filter(|w| !w.trim().is_empty()));
+        self
     }
 
     pub fn run(self) -> AureaResult<()> {
@@ -226,6 +240,9 @@ impl OzoneGui {
         let minibuffer: Arc<Mutex<Option<Minibuffer>>> = Arc::new(Mutex::new(None));
         let completion: Arc<Mutex<Option<CompletionState>>> = Arc::new(Mutex::new(None));
         let mut startup_notifications = Notifications::new();
+        for warning in &self.startup_warnings {
+            startup_notifications.push(NotifyLevel::Warn, warning.clone(), Some(15_000));
+        }
         if self.config.keymaps.is_empty() {
             // No `[keymap]`/keymap.toml means every key (Ctrl/Meta chords
             // included) is unbound — config-driven keymaps have no hardcoded

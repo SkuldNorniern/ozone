@@ -24,8 +24,13 @@ fn main() {
     // Load user config (~/.config/ozone/config.toml or %APPDATA%\ozone\config.toml),
     // falling back to defaults when absent or malformed.
     let (config, config_warning) = Config::load_user_with_warning();
+    let mut startup_warnings: Vec<String> = Vec::new();
     if let Some(warning) = config_warning {
+        // Keep the stderr line for console launches, but also carry it into the
+        // GUI: a windowed release build (`windows_subsystem = "windows"`) has no
+        // console, so stderr alone would silently swallow config problems.
         eprintln!("ozone: {warning}");
+        startup_warnings.push(format!("Config: {warning}"));
     }
     #[cfg(debug_assertions)]
     {
@@ -55,7 +60,7 @@ fn main() {
         }
     }
 
-    let gui = OzoneGui::with_config(workspace, config);
+    let gui = OzoneGui::with_config(workspace, config).with_startup_warnings(startup_warnings);
 
     if let Err(e) = gui.run() {
         eprintln!("ozone: fatal: {e}");
