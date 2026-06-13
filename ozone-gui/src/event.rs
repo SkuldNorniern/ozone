@@ -83,7 +83,16 @@ pub(crate) struct AppState {
     pub(crate) window_width: u32,
     pub(crate) window_height: u32,
     cursor_activity: bool,
-    swallow_text: bool,
+    /// Text-routing gate correlating `KeyInput` with the `TextInput` it
+    /// produces. A shortcut key (modified chord, a consumed binding, or a key
+    /// that opened an overlay) arms this so the platform-emitted character
+    /// byproduct(s) are dropped instead of being typed into the buffer. It
+    /// stays armed across *every* `TextInput` until the next non-modifier
+    /// `KeyInput` re-arms it (so a key that emits several characters has them
+    /// all dropped) or the batch ends. IME-committed text arrives as a
+    /// `TextInput` with no preceding shortcut key, so the gate is clear and the
+    /// composed string is inserted normally.
+    suppress_text_until_next_key: bool,
     has_text_input: bool,
 }
 
@@ -139,7 +148,7 @@ impl AppState {
             window_width,
             window_height,
             cursor_activity: false,
-            swallow_text: false,
+            suppress_text_until_next_key: false,
             has_text_input: false,
         }
     }
@@ -147,7 +156,11 @@ impl AppState {
     pub(crate) fn begin_event_batch(&mut self, has_text_input: bool) {
         self.needs_redraw = false;
         self.cursor_activity = false;
-        self.swallow_text = false;
+        // A new poll batch: any shortcut-text suppression from the previous
+        // batch is stale. (Within a batch a key and its character byproduct
+        // arrive together, so suppression never needs to outlive the batch —
+        // which keeps IME commits in a later batch from being dropped.)
+        self.suppress_text_until_next_key = false;
         self.has_text_input = has_text_input;
     }
 
@@ -233,11 +246,24 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
             }
             state.cursor_activity = true;
             let active = ActiveMods::from_physical(mods, &state.modmap);
+            // A fresh non-modifier keystroke re-arms text routing: clear any
+            // leftover shortcut-text suppression so normal typing after a
+            // shortcut isn't dropped. Modifier-only presses belong to a chord
+            // and leave the gate alone.
+            if !matches!(
+                *key,
+                aurea::KeyCode::Shift
+                    | aurea::KeyCode::Control
+                    | aurea::KeyCode::Alt
+                    | aurea::KeyCode::Meta
+            ) {
+                state.suppress_text_until_next_key = false;
+            }
             if state.has_text_input
                 && keycode_to_char(*key, mods.shift).is_some()
                 && (active.control || active.meta || active.super_)
             {
-                state.swallow_text = true;
+                state.suppress_text_until_next_key = true;
             }
 
             let mut completion = lock(state.completion.as_ref());
@@ -362,7 +388,7 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                 if handled {
                     state.needs_redraw = true;
                     if state.has_text_input && keycode_to_char(*key, mods.shift).is_some() {
-                        state.swallow_text = true;
+                        state.suppress_text_until_next_key = true;
                     }
                 }
                 apply_auto_save(
@@ -373,14 +399,17 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                     &mut state.shell_jobs,
                 );
                 if palette.is_some() || search.is_some() || minibuffer.is_some() {
-                    state.swallow_text = true;
+                    state.suppress_text_until_next_key = true;
                 }
             }
         }
 
         WindowEvent::TextInput { text } => {
-            if state.swallow_text {
-                state.swallow_text = false;
+            // Drop characters that are byproducts of a shortcut key. The gate
+            // stays armed (not cleared here) so a key that emits several
+            // characters has them all dropped; the next non-modifier KeyInput
+            // or the next batch re-arms it.
+            if state.suppress_text_until_next_key {
                 return EventResult::Continue;
             }
             let active = ActiveMods::from_physical(state.live_mods, &state.modmap);
