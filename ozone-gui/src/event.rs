@@ -54,6 +54,11 @@ pub(crate) struct AppState {
     pub(crate) canvas: Arc<Mutex<SendableCanvas>>,
     pub(crate) last_title: String,
     pub(crate) chord_pending: Vec<KeyStroke>,
+    /// When the current `chord_pending` prefix was last extended, for the
+    /// idle-chord timeout. `None` while no chord is pending. Paired with
+    /// `chord_pending_seen` to restart the clock each time the prefix grows.
+    pub(crate) chord_pending_since: Option<Instant>,
+    pub(crate) chord_pending_seen: usize,
     pub(crate) terms: Terminals,
     pub(crate) measured_char_w: f32,
     pub(crate) buffer_mru: Vec<BufferId>,
@@ -114,6 +119,8 @@ impl AppState {
             canvas,
             last_title: String::new(),
             chord_pending: Vec::new(),
+            chord_pending_since: None,
+            chord_pending_seen: 0,
             terms: Terminals::new(),
             measured_char_w,
             buffer_mru: Vec::new(),
@@ -152,6 +159,23 @@ impl AppState {
 pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> EventResult {
     match event {
         WindowEvent::CloseRequested => return EventResult::Close,
+
+        // Losing focus abandons any half-typed chord: the next stroke could
+        // arrive in another app, so a dangling prefix must not survive. Also
+        // drop the held-modifier snapshot, which is stale once focus is gone.
+        WindowEvent::Unfocused => {
+            if !state.chord_pending.is_empty() {
+                state.chord_pending.clear();
+                state.chord_pending_since = None;
+                state.chord_pending_seen = 0;
+                state.needs_redraw = true;
+            }
+            if state.live_mods != aurea::Modifiers::default() {
+                state.live_mods = aurea::Modifiers::default();
+                state.needs_redraw = true;
+            }
+        }
+
         WindowEvent::Resized { width, height } => {
             state.window_width = *width;
             state.window_height = *height;

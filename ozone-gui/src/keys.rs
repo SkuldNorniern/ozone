@@ -63,6 +63,15 @@ pub(crate) fn handle_key(
         return false;
     }
 
+    // Escape always abandons a pending chord prefix (Emacs C-g / vim Esc), so a
+    // half-typed chord like `C-k` can be backed out without guessing a stroke
+    // that happens not to continue it. With no chord pending, Escape falls
+    // through to its normal handling (e.g. closing a picker below).
+    if key == Escape && !pending.is_empty() {
+        pending.clear();
+        return true;
+    }
+
     // Picker buffers take precedence so Enter/Esc act on the selection rather
     // than the editing defaults. (Edit keys are swallowed to keep the list.)
     let transient_kind = ws.active_buffer().map(|b| &b.kind);

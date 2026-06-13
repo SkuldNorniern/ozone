@@ -34,6 +34,11 @@ use crate::{ImageCache, SyntaxCache, TermCells, editor_font, lock};
 /// How long a bare modifier must be held alone before the which-key hint shows.
 const MOD_HINT_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
 
+/// How long an unfinished chord prefix (e.g. `C-k` waiting for its second
+/// stroke) may stay pending before it is auto-cancelled, so a half-typed chord
+/// can't trap input. Generous enough to type a deliberate two-stroke chord.
+const CHORD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Which single logical modifier is held alone, eligible for the bare-modifier
 /// which-key hint. Returns `(control, meta, super_)` with exactly one set, or
 /// `None` when zero or several are held. `shift` is ignored (it pairs with a key
@@ -484,6 +489,29 @@ impl OzoneGui {
             {
                 let mut ws = lock(state.workspace.as_ref());
                 if state.shell_jobs.poll(&mut ws) {
+                    state.needs_redraw = true;
+                }
+            }
+
+            // Idle-chord timeout: a prefix left pending too long is cancelled so
+            // half-typed chords can't trap input. The clock restarts whenever the
+            // prefix grows (its length changes), tracked via `chord_pending_seen`.
+            {
+                if state.chord_pending.is_empty() {
+                    state.chord_pending_since = None;
+                } else if state.chord_pending.len() != state.chord_pending_seen
+                    || state.chord_pending_since.is_none()
+                {
+                    state.chord_pending_since = Some(std::time::Instant::now());
+                }
+                state.chord_pending_seen = state.chord_pending.len();
+
+                if let Some(since) = state.chord_pending_since
+                    && since.elapsed() >= CHORD_TIMEOUT
+                {
+                    state.chord_pending.clear();
+                    state.chord_pending_since = None;
+                    state.chord_pending_seen = 0;
                     state.needs_redraw = true;
                 }
             }
