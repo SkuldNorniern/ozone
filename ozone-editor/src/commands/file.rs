@@ -42,6 +42,14 @@ pub(super) fn register_file_commands(reg: &mut CommandRegistry) {
             .notify(NotifyLevel::Success, format!("Saved {saved} buffer(s)"));
     });
 
+    reg.register(
+        "config.reload",
+        "Reload config from disk (keymaps, modifiers, autocommands)",
+        |ctx| {
+            ctx.workspace.request_config_reload();
+        },
+    );
+
     // Frontend-driven overlays: real commands that queue a UiIntent for the GUI.
     reg.register("command.palette", "Open the command palette", |ctx| {
         ctx.workspace.request_ui(UiIntent::CommandPalette);

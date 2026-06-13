@@ -181,6 +181,61 @@ pub struct OzoneGui {
     pub(crate) modmap: ModifierMap,
 }
 
+/// Push the keymap validation diagnostics (conflicts / dropped bindings /
+/// unknown commands / prefix-shadowed bindings) as toasts. Shared by startup
+/// and `config.reload` so both report the same problems the same way.
+fn push_keymap_diagnostics(
+    notes: &mut Notifications,
+    report: &KeymapReport,
+    unknown_commands: &[String],
+    shadowed_chords: &[String],
+) {
+    if !report.conflicts.is_empty() {
+        let details = report
+            .conflicts
+            .iter()
+            .map(KeymapConflict::message)
+            .collect::<Vec<_>>()
+            .join("\n");
+        notes.push(
+            NotifyLevel::Error,
+            format!("Duplicate keybindings detected:\n{details}"),
+            Some(15_000),
+        );
+    }
+    if !report.warnings.is_empty() {
+        let details = report
+            .warnings
+            .iter()
+            .map(KeymapWarning::message)
+            .collect::<Vec<_>>()
+            .join("\n");
+        notes.push(
+            NotifyLevel::Warn,
+            format!("Some keybindings were ignored:\n{details}"),
+            Some(15_000),
+        );
+    }
+    if !unknown_commands.is_empty() {
+        let details = unknown_commands.join("\n");
+        notes.push(
+            NotifyLevel::Warn,
+            format!("Keybindings point to unknown commands:\n{details}"),
+            Some(15_000),
+        );
+    }
+    if !shadowed_chords.is_empty() {
+        let details = shadowed_chords.join("\n");
+        notes.push(
+            NotifyLevel::Warn,
+            format!(
+                "These bindings can never fire — a longer chord shares their prefix:\n{details}"
+            ),
+            Some(15_000),
+        );
+    }
+}
+
 impl OzoneGui {
     pub fn new(workspace: Workspace) -> Self {
         Self::with_config(workspace, Config::default_config())
@@ -274,52 +329,12 @@ impl OzoneGui {
                 Some(15_000),
             );
         }
-        if !self.keymap_report.conflicts.is_empty() {
-            let details = self
-                .keymap_report
-                .conflicts
-                .iter()
-                .map(KeymapConflict::message)
-                .collect::<Vec<_>>()
-                .join("\n");
-            startup_notifications.push(
-                NotifyLevel::Error,
-                format!("Duplicate keybindings detected:\n{details}"),
-                Some(15_000),
-            );
-        }
-        if !self.keymap_report.warnings.is_empty() {
-            let details = self
-                .keymap_report
-                .warnings
-                .iter()
-                .map(KeymapWarning::message)
-                .collect::<Vec<_>>()
-                .join("\n");
-            startup_notifications.push(
-                NotifyLevel::Warn,
-                format!("Some keybindings were ignored:\n{details}"),
-                Some(15_000),
-            );
-        }
-        if !self.unknown_commands.is_empty() {
-            let details = self.unknown_commands.join("\n");
-            startup_notifications.push(
-                NotifyLevel::Warn,
-                format!("Keybindings point to unknown commands:\n{details}"),
-                Some(15_000),
-            );
-        }
-        if !self.shadowed_chords.is_empty() {
-            let details = self.shadowed_chords.join("\n");
-            startup_notifications.push(
-                NotifyLevel::Warn,
-                format!(
-                    "These bindings can never fire — a longer chord shares their prefix:\n{details}"
-                ),
-                Some(15_000),
-            );
-        }
+        push_keymap_diagnostics(
+            &mut startup_notifications,
+            &self.keymap_report,
+            &self.unknown_commands,
+            &self.shadowed_chords,
+        );
         if !self.duplicate_commands.is_empty() {
             let details = self.duplicate_commands.join("\n");
             startup_notifications.push(
@@ -470,6 +485,11 @@ impl OzoneGui {
             }
             if should_close {
                 break;
+            }
+
+            // `config.reload` requested a rebuild of keymaps/modifiers/autocmds.
+            if lock(state.workspace.as_ref()).take_config_reload() {
+                state.reload_config();
             }
 
             if state.take_cursor_activity() {
@@ -652,6 +672,66 @@ impl OzoneGui {
         }
 
         Ok(())
+    }
+}
+
+impl AppState {
+    /// Re-read the user config from disk and rebuild the keymap, modifier map,
+    /// and autocommands as one atomic swap, re-running keymap validation and
+    /// surfacing its diagnostics. Triggered by the `config.reload` command.
+    ///
+    /// Appearance (font/theme/render) is intentionally **not** reloaded here:
+    /// the draw callback captured its own config/keymap clones at startup, so
+    /// those still need a restart. This covers the input/behavior config the
+    /// event loop reads live.
+    pub(crate) fn reload_config(&mut self) {
+        let (config, config_warning) = Config::load_user_with_warning();
+
+        let mut keymap = Keymap::new();
+        let report = keymap.add_user_config(&config.keymaps);
+        let unknown_commands = keymap.unknown_commands(|name| {
+            name.starts_with('|') || name.starts_with('!') || self.commands.contains(name)
+        });
+        let shadowed_chords = keymap.shadowed_by_longer_chord();
+        let modmap = ModifierMap::platform_default().with_overrides(
+            config.modifiers.control.as_deref(),
+            config.modifiers.meta.as_deref(),
+            config.modifiers.super_.as_deref(),
+        );
+        let autocmds = AutocommandRegistry::from_config(&config.autocmds);
+
+        // Atomic swap: nothing reads a half-updated keymap/config.
+        self.modmap = modmap;
+        self.keymap = Arc::new(keymap);
+        self.autocmds = Arc::new(autocmds);
+        self.config = Arc::new(config);
+        // A pending chord prefix referred to the old bindings — abandon it.
+        self.chord_pending.clear();
+        self.chord_pending_since = None;
+        self.chord_pending_seen = 0;
+        // Indent is a behavioral editor setting the event path reads live.
+        {
+            let mut ws = lock(self.workspace.as_ref());
+            ws.indent = IndentConfig {
+                width: self.config.editor.tab_width,
+                soft_tabs: self.config.editor.soft_tabs,
+            };
+        }
+
+        let mut notes = lock(self.notifications.as_ref());
+        notes.push(
+            NotifyLevel::Success,
+            "Config reloaded — keymaps, modifiers, and autocommands updated \
+             (appearance changes need a restart)"
+                .to_string(),
+            Some(6_000),
+        );
+        if let Some(w) = config_warning {
+            notes.push(NotifyLevel::Warn, format!("Config: {w}"), Some(15_000));
+        }
+        push_keymap_diagnostics(&mut notes, &report, &unknown_commands, &shadowed_chords);
+        drop(notes);
+        self.needs_redraw = true;
     }
 }
 

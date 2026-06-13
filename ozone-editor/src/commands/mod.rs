@@ -483,6 +483,22 @@ mod tests {
     }
 
     #[test]
+    fn config_reload_command_sets_the_flag() {
+        use crate::Workspace;
+        let mut reg = CommandRegistry::new();
+        register_defaults(&mut reg);
+        let mut ws = Workspace::new();
+        assert!(!ws.take_config_reload());
+        {
+            let mut ctx = super::CommandContext::new(&mut ws).unwrap();
+            assert!(reg.execute("config.reload", &mut ctx));
+        }
+        assert!(ws.take_config_reload());
+        // take_config_reload clears it.
+        assert!(!ws.take_config_reload());
+    }
+
+    #[test]
     fn duplicate_registration_is_recorded() {
         let mut reg = CommandRegistry::new();
         reg.register("a.cmd", "first", |_| {});

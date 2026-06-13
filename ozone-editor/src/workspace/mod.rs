@@ -69,6 +69,11 @@ pub struct Workspace {
     pub(super) events: Vec<EditorEvent>,
     pub(super) ui_intents: Vec<UiIntent>,
     pub(super) jumps: JumpList,
+    /// Set by the `config.reload` command; the frontend consumes it to rebuild
+    /// keymaps/modifier maps/autocommands from disk. Kept separate from
+    /// [`UiIntent`] because the rebuild touches frontend state the overlay
+    /// intent path (`apply_ui_intents`) doesn't own.
+    pub(super) config_reload_requested: bool,
 }
 
 impl Workspace {
@@ -85,6 +90,7 @@ impl Workspace {
             events: Vec::new(),
             ui_intents: Vec::new(),
             jumps: JumpList::default(),
+            config_reload_requested: false,
         };
         ws.open_scratch();
         ws
@@ -204,6 +210,19 @@ impl Workspace {
 
     pub fn drain_ui_intents(&mut self) -> Vec<UiIntent> {
         self.ui_intents.drain(..).collect()
+    }
+
+    /// Request a config reload (re-read config from disk, rebuild keymaps,
+    /// modifier maps, and autocommands). Consumed by the frontend via
+    /// [`Self::take_config_reload`].
+    pub fn request_config_reload(&mut self) {
+        self.config_reload_requested = true;
+    }
+
+    /// Whether a config reload was requested since the last call; clears the
+    /// flag.
+    pub fn take_config_reload(&mut self) -> bool {
+        std::mem::take(&mut self.config_reload_requested)
     }
 
     pub fn notify(&mut self, level: NotifyLevel, text: impl Into<String>) {
