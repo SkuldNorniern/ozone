@@ -212,8 +212,7 @@ fn symbol_select_items(ws: &Workspace) -> Vec<SelectItem> {
         return Vec::new();
     };
     let lang = buffer_language(buf);
-    let text = buf.text();
-    symbols(lang, &text)
+    buf.with_text(|text| symbols(lang, text))
         .into_iter()
         .map(|s| SelectItem {
             label: s.name,

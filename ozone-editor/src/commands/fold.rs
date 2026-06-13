@@ -20,7 +20,7 @@ pub(super) fn register_fold_commands(reg: &mut CommandRegistry) {
             .map(|v| v.cursor.line)
             .unwrap_or(0);
         let lang = buffer_language(buf);
-        let struct_ranges = fold_line_ranges(lang, &buf.text());
+        let struct_ranges = buf.with_text(|text| fold_line_ranges(lang, text));
         let header = if struct_ranges.is_empty() {
             fold::header_for(buf, cursor_line)
         } else {
@@ -45,7 +45,7 @@ pub(super) fn register_fold_commands(reg: &mut CommandRegistry) {
             return;
         };
         let lang = buffer_language(buf);
-        let struct_ranges = fold_line_ranges(lang, &buf.text());
+        let struct_ranges = buf.with_text(|text| fold_line_ranges(lang, text));
         let headers = if struct_ranges.is_empty() {
             fold::all_headers(buf)
         } else {

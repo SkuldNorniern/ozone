@@ -70,37 +70,37 @@ pub fn line_outer(buf: &Buffer, pos: Pos) -> Span {
 /// The innermost bracket pair enclosing `pos` as `(open_offset, close_offset)`.
 fn enclosing_pair(buf: &Buffer, pos: Pos) -> Option<(usize, usize)> {
     let off = buf.pos_to_offset(pos);
-    let text = buf.text();
-    let tb = text.as_bytes();
-
-    let mut stack: Vec<(usize, u8)> = Vec::new();
-    let mut best: Option<(usize, usize)> = None;
-    for (i, &c) in tb.iter().enumerate() {
-        match c {
-            b'(' | b'[' | b'{' => stack.push((i, c)),
-            b')' | b']' | b'}' => {
-                let want = match c {
-                    b')' => b'(',
-                    b']' => b'[',
-                    _ => b'{',
-                };
-                if let Some((o, k)) = stack.last().copied()
-                    && k == want
-                {
-                    stack.pop();
-                    // Enclosing if the cursor sits within [open, close].
-                    if o <= off && off <= i {
-                        match best {
-                            Some((bo, _)) if bo >= o => {}
-                            _ => best = Some((o, i)),
+    buf.with_text(|text| {
+        let tb = text.as_bytes();
+        let mut stack: Vec<(usize, u8)> = Vec::new();
+        let mut best: Option<(usize, usize)> = None;
+        for (i, &c) in tb.iter().enumerate() {
+            match c {
+                b'(' | b'[' | b'{' => stack.push((i, c)),
+                b')' | b']' | b'}' => {
+                    let want = match c {
+                        b')' => b'(',
+                        b']' => b'[',
+                        _ => b'{',
+                    };
+                    if let Some((o, k)) = stack.last().copied()
+                        && k == want
+                    {
+                        stack.pop();
+                        // Enclosing if the cursor sits within [open, close].
+                        if o <= off && off <= i {
+                            match best {
+                                Some((bo, _)) if bo >= o => {}
+                                _ => best = Some((o, i)),
+                            }
                         }
                     }
                 }
+                _ => {}
             }
-            _ => {}
         }
-    }
-    best
+        best
+    })
 }
 
 /// Span between the brackets enclosing `pos`, excluding the brackets.

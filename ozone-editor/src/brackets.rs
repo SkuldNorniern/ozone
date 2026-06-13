@@ -36,42 +36,46 @@ pub fn matching_bracket(buf: &Buffer, cursor: Pos) -> Option<(Pos, Pos)> {
         _ => return None,
     };
 
-    let text = buf.text();
-    let tb = text.as_bytes();
     let start = buf.pos_to_offset(bracket_pos);
-    let mut depth = 0i32;
-
-    if forward {
-        let mut i = start;
-        while i < tb.len() {
-            let c = tb[i];
-            if c == open {
-                depth += 1;
-            } else if c == close {
-                depth -= 1;
-                if depth == 0 {
-                    return Some((bracket_pos, buf.offset_to_pos(i)));
+    // Scan over the borrowed text for the matching bracket's byte offset;
+    // convert to a `Pos` afterwards so we don't re-borrow the text cache
+    // (`offset_to_pos`) while it's still borrowed here.
+    let match_offset = buf.with_text(|text| {
+        let tb = text.as_bytes();
+        let mut depth = 0i32;
+        if forward {
+            let mut i = start;
+            while i < tb.len() {
+                let c = tb[i];
+                if c == open {
+                    depth += 1;
+                } else if c == close {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i);
+                    }
                 }
+                i += 1;
             }
-            i += 1;
-        }
-    } else {
-        let mut i = start as isize;
-        while i >= 0 {
-            let c = tb[i as usize];
-            if c == close {
-                depth += 1;
-            } else if c == open {
-                depth -= 1;
-                if depth == 0 {
-                    return Some((bracket_pos, buf.offset_to_pos(i as usize)));
+        } else {
+            let mut i = start as isize;
+            while i >= 0 {
+                let c = tb[i as usize];
+                if c == close {
+                    depth += 1;
+                } else if c == open {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i as usize);
+                    }
                 }
+                i -= 1;
             }
-            i -= 1;
         }
-    }
+        None
+    });
 
-    None
+    match_offset.map(|i| (bracket_pos, buf.offset_to_pos(i)))
 }
 
 #[cfg(test)]

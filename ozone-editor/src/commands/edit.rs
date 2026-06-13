@@ -257,7 +257,7 @@ pub(super) fn register_edit_commands(reg: &mut CommandRegistry) {
         |ctx| {
             let ranges = {
                 let buf = ctx.workspace.buffers.get(&ctx.buffer_id).unwrap();
-                trailing_whitespace_ranges(&buf.text())
+                buf.with_text(trailing_whitespace_ranges)
             };
             if ranges.is_empty() {
                 return;

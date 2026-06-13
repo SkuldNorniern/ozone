@@ -10,12 +10,11 @@ use taste::{Language, detect_buffer};
 /// still be identified by a shebang. Other virtual buffers are editor surfaces,
 /// not source documents.
 pub fn buffer_language(buffer: &Buffer) -> Option<Language> {
-    let text = buffer.text();
-    let detection = match &buffer.kind {
+    let detection = buffer.with_text(|text| match &buffer.kind {
         BufferKind::File(path) => detect_buffer(Some(path.as_path()), text.as_bytes()),
         BufferKind::Scratch => detect_buffer::<&Path>(None, text.as_bytes()),
         _ => None,
-    };
+    });
     detection.map(|result| result.language)
 }
 

@@ -315,7 +315,7 @@ pub(crate) fn handle_fold_click(
         (scroll + ((relative_y + scroll_y) / line_h).floor() as usize).min(line_count - 1);
 
     let lang = buffer_language(buf);
-    let struct_ranges = fold_line_ranges(lang, &buf.text());
+    let struct_ranges = buf.with_text(|text| fold_line_ranges(lang, text));
     let header = if struct_ranges.is_empty() {
         if fold::is_visual_fold_header(buf, line_idx) {
             Some(line_idx)

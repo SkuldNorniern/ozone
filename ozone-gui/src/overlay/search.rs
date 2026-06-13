@@ -68,7 +68,7 @@ impl SearchState {
 
 /// Recompute matches for the active buffer from the current query.
 pub(crate) fn search_recompute(s: &mut SearchState, ws: &mut Workspace) {
-    let Some((buffer_id, text)) = ws.active_buffer().map(|b| (b.id, b.text())) else {
+    let Some(buffer_id) = ws.active_buffer().map(|b| b.id) else {
         close_search(s, ws);
         s.buffer_id = None;
         s.matches.clear();
@@ -82,7 +82,10 @@ pub(crate) fn search_recompute(s: &mut SearchState, ws: &mut Workspace) {
             .clear_namespace_in(previous, s.namespace);
     }
     s.buffer_id = Some(buffer_id);
-    s.matches = ozone_editor::find_matches(&text, &s.query, s.case_sensitive);
+    s.matches = ws
+        .active_buffer()
+        .map(|b| b.with_text(|text| ozone_editor::find_matches(text, &s.query, s.case_sensitive)))
+        .unwrap_or_default();
     if s.current >= s.matches.len() {
         s.current = 0;
     }

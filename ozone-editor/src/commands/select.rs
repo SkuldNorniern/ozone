@@ -246,7 +246,9 @@ fn compute_expand(ctx: &CommandContext) -> Option<Span> {
     let buf = ctx.workspace.buffers.get(&ctx.buffer_id)?;
     let view = ctx.workspace.views.get(&ctx.view_id)?;
     let lang = buffer_language(buf);
-    let text = buf.text();
+    // Resolve cursor/selection offsets before borrowing the text, and convert
+    // the result back to positions after — `with_text` holds the text cache
+    // borrowed, so `pos_to_offset`/`offset_to_pos` can't run inside it.
     let (sel_start, sel_end) = match view.selection {
         Some(span) => (buf.pos_to_offset(span.start), buf.pos_to_offset(span.end)),
         None => {
@@ -254,7 +256,8 @@ fn compute_expand(ctx: &CommandContext) -> Option<Span> {
             (off, off)
         }
     };
-    let (new_start, new_end) = ozone_syntax::expand_selection(lang, &text, sel_start, sel_end)?;
+    let (new_start, new_end) =
+        buf.with_text(|text| ozone_syntax::expand_selection(lang, text, sel_start, sel_end))?;
     Some(Span {
         start: buf.offset_to_pos(new_start),
         end: buf.offset_to_pos(new_end),

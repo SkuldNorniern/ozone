@@ -75,6 +75,14 @@ impl PieceTable {
         self.materialized().to_string()
     }
 
+    /// Run `f` over the materialized full text **without cloning it**. Prefer
+    /// this over [`Self::text`] for read-only access (syntax scanning, search,
+    /// folds, language detection): the text is borrowed straight from the
+    /// (warm) cache.
+    pub fn with_text<R>(&self, f: impl FnOnce(&str) -> R) -> R {
+        f(&self.materialized())
+    }
+
     pub fn text_eq(&self, other: &str) -> bool {
         &*self.materialized() == other
     }
@@ -285,6 +293,20 @@ mod tests {
         let mut t = PieceTable::new("hello");
         t.insert(5, " world");
         assert_eq!(t.text(), "hello world");
+    }
+
+    #[test]
+    fn with_text_borrows_full_text() {
+        let mut t = PieceTable::new("alpha");
+        t.insert(5, " beta");
+        // Same content as `text()`, and the closure's return value escapes fine.
+        let len = t.with_text(|s| {
+            assert_eq!(s, "alpha beta");
+            s.len()
+        });
+        assert_eq!(len, 10);
+        // Cache stays usable for subsequent reads.
+        assert_eq!(t.text(), "alpha beta");
     }
 
     #[test]

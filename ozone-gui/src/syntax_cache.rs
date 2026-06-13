@@ -29,11 +29,17 @@ impl BufferSyntaxState {
             return;
         }
         self.revision = Some(revision);
-        let text = buf.text();
         let language = buffer_language(buf);
-        self.highlights = scan_buffer(language, &text);
-        self.folds = fold_line_ranges(language, &text);
-        self.features = parse_features(language, &text);
+        let (highlights, folds, features) = buf.with_text(|text| {
+            (
+                scan_buffer(language, text),
+                fold_line_ranges(language, text),
+                parse_features(language, text),
+            )
+        });
+        self.highlights = highlights;
+        self.folds = folds;
+        self.features = features;
         self.language = language;
     }
 }

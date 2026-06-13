@@ -212,6 +212,12 @@ impl Buffer {
         self.table.text()
     }
 
+    /// Run `f` over the buffer's full text without cloning it — the read-only
+    /// counterpart to [`Self::text`], for scanning/search/folds/etc.
+    pub fn with_text<R>(&self, f: impl FnOnce(&str) -> R) -> R {
+        self.table.with_text(f)
+    }
+
     pub fn text_eq(&self, other: &str) -> bool {
         self.table.text_eq(other)
     }
