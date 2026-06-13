@@ -342,6 +342,36 @@ impl Keymap {
         unknown.into_iter().map(str::to_string).collect()
     }
 
+    /// Complete bindings that can never fire because a longer binding in an
+    /// overlapping scope makes their chord a prefix — resolution always waits
+    /// for the longer chord ([`KeymapOutcome::Pending`]), so the shorter
+    /// command is dead. Returns each shadowed chord's label once, sorted.
+    ///
+    /// Two scopes overlap when either is global or they name the same filetype:
+    /// a binding scoped to one filetype does not shadow one in another, since
+    /// they never resolve together.
+    pub fn shadowed_by_longer_chord(&self) -> Vec<String> {
+        fn scopes_overlap(a: &Option<String>, b: &Option<String>) -> bool {
+            a.is_none() || b.is_none() || a == b
+        }
+
+        let mut shadowed: Vec<String> = Vec::new();
+        for short in &self.bindings {
+            let n = short.chord.len();
+            let is_prefix_of_longer = self.bindings.iter().any(|long| {
+                long.chord.len() > n
+                    && long.chord[..n] == short.chord[..]
+                    && scopes_overlap(&short.filetype, &long.filetype)
+            });
+            if is_prefix_of_longer {
+                shadowed.push(chord_label(&short.chord));
+            }
+        }
+        shadowed.sort_unstable();
+        shadowed.dedup();
+        shadowed
+    }
+
     fn applies(binding: &Binding, filetype: Option<&str>) -> bool {
         match &binding.filetype {
             None => true,
@@ -955,6 +985,50 @@ mod tests {
             km.unknown_commands(known),
             vec!["totally.bogus".to_string()]
         );
+    }
+
+    #[test]
+    fn shadowed_by_longer_chord_finds_prefix_commands() {
+        let mut km = Keymap::new();
+        // `ctrl+k` is both a command and the prefix of `ctrl+k ctrl+s`: the
+        // bare `ctrl+k` can never fire.
+        km.bind_default("ctrl+k", "some.command");
+        km.bind_default("ctrl+k ctrl+s", "file.save-all");
+        // `ctrl+s` is a leaf with no longer sibling — fine.
+        km.bind_default("ctrl+s", "file.save");
+        assert_eq!(km.shadowed_by_longer_chord(), vec!["C-K".to_string()]);
+    }
+
+    #[test]
+    fn shadowed_check_respects_filetype_scope() {
+        let mut km = Keymap::new();
+        // A rust-only leaf and a toml-only longer chord never resolve together,
+        // so the leaf is not shadowed.
+        km.add_user_config(&[
+            KeymapConfig {
+                keys: "ctrl+k".to_string(),
+                command: "rust.thing".to_string(),
+                filetype: Some("rust".to_string()),
+                platform: None,
+            },
+            KeymapConfig {
+                keys: "ctrl+k ctrl+s".to_string(),
+                command: "toml.thing".to_string(),
+                filetype: Some("toml".to_string()),
+                platform: None,
+            },
+        ]);
+        assert!(km.shadowed_by_longer_chord().is_empty());
+
+        // But a global longer chord shadows the rust leaf (global applies in
+        // rust buffers too).
+        km.add_user_config(&[KeymapConfig {
+            keys: "ctrl+k ctrl+w".to_string(),
+            command: "global.thing".to_string(),
+            filetype: None,
+            platform: None,
+        }]);
+        assert_eq!(km.shadowed_by_longer_chord(), vec!["C-K".to_string()]);
     }
 
     #[test]

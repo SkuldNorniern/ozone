@@ -117,8 +117,14 @@ pub(crate) fn handle_key(
                 return true;
             }
             KeymapOutcome::NoMatch => {
-                // A failed chord continuation is swallowed; a fresh unmatched key
-                // falls through to text entry below.
+                // Decision: a failed chord continuation is swallowed, not retried
+                // as a fresh key. After a prefix like `C-k`, a stroke that doesn't
+                // continue it (e.g. `C-k C-q` with no such binding) cancels the
+                // chord and produces nothing. Retrying it as a standalone key would
+                // be surprising — the user signalled chord intent, and replaying
+                // the stroke could fire an unrelated command or insert text. This
+                // matches Emacs ("C-k C-q is undefined"). A fresh unmatched key
+                // (no pending prefix) still falls through to text entry below.
                 let had_pending = !pending.is_empty();
                 pending.clear();
                 if had_pending {

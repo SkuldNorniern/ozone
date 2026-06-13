@@ -168,6 +168,9 @@ pub struct OzoneGui {
     pub(crate) keymap: Arc<Keymap>,
     keymap_report: KeymapReport,
     unknown_commands: Vec<String>,
+    /// Complete bindings shadowed by a longer chord sharing their prefix, so
+    /// the shorter command can never fire. Reported at startup.
+    shadowed_chords: Vec<String>,
     /// Warnings produced before the GUI exists (e.g. config read/parse issues
     /// from `Config::load_user_with_warning`), shown as startup toasts so a
     /// windowed release build — which has no console for stderr — still sees them.
@@ -204,6 +207,7 @@ impl OzoneGui {
         let unknown_commands = keymap.unknown_commands(|name| {
             name.starts_with('|') || name.starts_with('!') || reg.contains(name)
         });
+        let shadowed_chords = keymap.shadowed_by_longer_chord();
 
         let modmap = ModifierMap::platform_default().with_overrides(
             config.modifiers.control.as_deref(),
@@ -219,6 +223,7 @@ impl OzoneGui {
             keymap: Arc::new(keymap),
             keymap_report,
             unknown_commands,
+            shadowed_chords,
             startup_warnings: Vec::new(),
             modmap,
         }
@@ -294,6 +299,16 @@ impl OzoneGui {
             startup_notifications.push(
                 NotifyLevel::Warn,
                 format!("Keybindings point to unknown commands:\n{details}"),
+                Some(15_000),
+            );
+        }
+        if !self.shadowed_chords.is_empty() {
+            let details = self.shadowed_chords.join("\n");
+            startup_notifications.push(
+                NotifyLevel::Warn,
+                format!(
+                    "These bindings can never fire — a longer chord shares their prefix:\n{details}"
+                ),
                 Some(15_000),
             );
         }
