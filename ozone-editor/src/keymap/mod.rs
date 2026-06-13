@@ -55,6 +55,57 @@ impl KeymapConflict {
     }
 }
 
+/// A user binding that was dropped while layering config, with the reason.
+/// Surfaced at startup so a typo in `keymap.toml` is visible instead of the
+/// binding vanishing silently.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeymapWarning {
+    /// The chord text could not be parsed into key strokes (unknown key name,
+    /// bare modifier, malformed combo).
+    InvalidChord { keys: String, command: String },
+    /// The `platform` value is not one of `macos` / `windows` / `linux`, so the
+    /// binding was dropped on every platform.
+    UnknownPlatform {
+        platform: String,
+        keys: String,
+        command: String,
+    },
+}
+
+impl KeymapWarning {
+    pub fn message(&self) -> String {
+        match self {
+            KeymapWarning::InvalidChord { keys, command } => {
+                format!("{keys:?} -> {command}: not a valid key chord — binding ignored")
+            }
+            KeymapWarning::UnknownPlatform {
+                platform,
+                keys,
+                command,
+            } => format!(
+                "{keys} -> {command}: unknown platform {platform:?} \
+                 (expected macos / windows / linux) — binding ignored"
+            ),
+        }
+    }
+}
+
+/// Problems found while layering user keymap config onto the defaults.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct KeymapReport {
+    /// Bindings that overwrite an earlier binding in the same scope.
+    pub conflicts: Vec<KeymapConflict>,
+    /// Bindings dropped because they were malformed (bad chord / platform).
+    pub warnings: Vec<KeymapWarning>,
+}
+
+impl KeymapReport {
+    /// No problems found.
+    pub fn is_empty(&self) -> bool {
+        self.conflicts.is_empty() && self.warnings.is_empty()
+    }
+}
+
 /// The result of feeding a stroke to the keymap.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeymapOutcome {
@@ -207,23 +258,46 @@ impl Keymap {
 
     /// Layer user `[[keymap]]` config on top of the defaults.
     ///
-    /// Entries with a `platform` field are silently skipped on non-matching OSes,
-    /// so the same `keymap.toml` works across platforms without editing.
-    pub fn add_user_config(&mut self, configs: &[KeymapConfig]) -> Vec<KeymapConflict> {
-        let mut conflicts = Vec::new();
+    /// Entries whose `platform` names a recognized but non-matching OS are
+    /// silently skipped, so the same `keymap.toml` works across platforms
+    /// without editing. Entries with an *unrecognized* `platform` value or an
+    /// unparseable chord are dropped and reported in the returned
+    /// [`KeymapReport`] rather than vanishing silently.
+    pub fn add_user_config(&mut self, configs: &[KeymapConfig]) -> KeymapReport {
+        let mut report = KeymapReport::default();
         for cfg in configs {
             if let Some(platform) = &cfg.platform {
-                let matches = match platform.trim().to_ascii_lowercase().as_str() {
-                    "macos" => cfg!(target_os = "macos"),
-                    "windows" => cfg!(target_os = "windows"),
-                    "linux" => cfg!(target_os = "linux"),
-                    _ => false,
-                };
-                if !matches {
-                    continue;
+                match platform.trim().to_ascii_lowercase().as_str() {
+                    "macos" => {
+                        if !cfg!(target_os = "macos") {
+                            continue;
+                        }
+                    }
+                    "windows" => {
+                        if !cfg!(target_os = "windows") {
+                            continue;
+                        }
+                    }
+                    "linux" => {
+                        if !cfg!(target_os = "linux") {
+                            continue;
+                        }
+                    }
+                    _ => {
+                        report.warnings.push(KeymapWarning::UnknownPlatform {
+                            platform: platform.clone(),
+                            keys: cfg.keys.clone(),
+                            command: cfg.command.clone(),
+                        });
+                        continue;
+                    }
                 }
             }
             let Some(chord) = parse_chord(&cfg.keys) else {
+                report.warnings.push(KeymapWarning::InvalidChord {
+                    keys: cfg.keys.clone(),
+                    command: cfg.command.clone(),
+                });
                 continue;
             };
             let layer = if cfg.filetype.is_some() {
@@ -234,7 +308,7 @@ impl Keymap {
             if let Some(previous) = self.bindings.iter().rev().find(|binding| {
                 binding.layer == layer && binding.filetype == cfg.filetype && binding.chord == chord
             }) {
-                conflicts.push(KeymapConflict {
+                report.conflicts.push(KeymapConflict {
                     chord: chord_label(&chord),
                     filetype: cfg.filetype.clone(),
                     previous_command: previous.command.clone(),
@@ -248,7 +322,7 @@ impl Keymap {
                 layer,
             });
         }
-        conflicts
+        report
     }
 
     fn applies(binding: &Binding, filetype: Option<&str>) -> bool {
@@ -723,7 +797,7 @@ mod tests {
     #[test]
     fn later_binding_wins_within_the_same_layer() {
         let mut km = Keymap::new();
-        let conflicts = km.add_user_config(&[
+        let report = km.add_user_config(&[
             KeymapConfig {
                 keys: "meta+x".to_string(),
                 command: "command.palette".to_string(),
@@ -744,7 +818,7 @@ mod tests {
             KeymapOutcome::Execute("edit.cut".to_string())
         );
         assert_eq!(
-            conflicts,
+            report.conflicts,
             vec![KeymapConflict {
                 chord: "M-X".to_string(),
                 filetype: None,
@@ -752,12 +826,13 @@ mod tests {
                 command: "edit.cut".to_string(),
             }]
         );
+        assert!(report.warnings.is_empty());
     }
 
     #[test]
     fn global_and_filetype_bindings_are_not_duplicates() {
         let mut km = Keymap::new();
-        let conflicts = km.add_user_config(&[
+        let report = km.add_user_config(&[
             KeymapConfig {
                 keys: "ctrl+s".to_string(),
                 command: "file.save".to_string(),
@@ -772,6 +847,88 @@ mod tests {
             },
         ]);
 
-        assert!(conflicts.is_empty());
+        assert!(report.is_empty());
+    }
+
+    #[test]
+    fn invalid_chord_is_reported_not_silently_dropped() {
+        let mut km = Keymap::new();
+        let report = km.add_user_config(&[
+            KeymapConfig {
+                keys: "ctrl+definitely-not-a-key".to_string(),
+                command: "edit.undo".to_string(),
+                filetype: None,
+                platform: None,
+            },
+            KeymapConfig {
+                keys: "ctrl+s".to_string(),
+                command: "file.save".to_string(),
+                filetype: None,
+                platform: None,
+            },
+        ]);
+
+        // The valid binding still applies; the malformed one is reported.
+        assert_eq!(
+            km.resolve(&[], &s('s').with_control(), None),
+            KeymapOutcome::Execute("file.save".to_string())
+        );
+        assert_eq!(
+            report.warnings,
+            vec![KeymapWarning::InvalidChord {
+                keys: "ctrl+definitely-not-a-key".to_string(),
+                command: "edit.undo".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn unknown_platform_is_reported_not_silently_dropped() {
+        let mut km = Keymap::new();
+        let report = km.add_user_config(&[KeymapConfig {
+            keys: "ctrl+s".to_string(),
+            command: "file.save".to_string(),
+            filetype: None,
+            platform: Some("beos".to_string()),
+        }]);
+
+        // Dropped on every platform (we can't know which OS it meant)…
+        assert_eq!(
+            km.resolve(&[], &s('s').with_control(), None),
+            KeymapOutcome::NoMatch
+        );
+        // …but reported instead of vanishing.
+        assert_eq!(
+            report.warnings,
+            vec![KeymapWarning::UnknownPlatform {
+                platform: "beos".to_string(),
+                keys: "ctrl+s".to_string(),
+                command: "file.save".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn recognized_nonmatching_platform_is_skipped_without_a_warning() {
+        // Pick a recognized OS that is *not* the current one.
+        let other = if cfg!(target_os = "windows") {
+            "linux"
+        } else {
+            "windows"
+        };
+        let mut km = Keymap::new();
+        let report = km.add_user_config(&[KeymapConfig {
+            keys: "ctrl+s".to_string(),
+            command: "file.save".to_string(),
+            filetype: None,
+            platform: Some(other.to_string()),
+        }]);
+
+        assert_eq!(
+            km.resolve(&[], &s('s').with_control(), None),
+            KeymapOutcome::NoMatch
+        );
+        // A deliberate cross-platform entry is not a problem — no warning.
+        assert!(report.is_empty());
     }
 }
