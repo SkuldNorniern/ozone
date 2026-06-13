@@ -124,51 +124,81 @@ fn push_bind(out: &mut Vec<KeymapConfig>, chord: &str, command: &str, filetype: 
     }
 }
 
-pub(super) fn parse_autocmds(table: &toml::Table) -> Vec<AutocmdConfig> {
-    table_array(table, "autocmd")
-        .filter_map(|entry| {
-            Some(AutocmdConfig {
-                event: non_empty_string(entry, "event")?,
-                pattern: non_empty_string(entry, "pattern").unwrap_or_else(|| "*".to_string()),
-                command: non_empty_string(entry, "command")?,
-            })
-        })
-        .collect()
+pub(super) fn parse_autocmds(
+    table: &toml::Table,
+    warnings: &mut Vec<String>,
+) -> Vec<AutocmdConfig> {
+    let mut out = Vec::new();
+    for entry in table_array(table, "autocmd") {
+        let Some(event) = non_empty_string(entry, "event") else {
+            warnings.push("[[autocmd]] entry ignored: missing `event`".to_string());
+            continue;
+        };
+        let Some(command) = non_empty_string(entry, "command") else {
+            warnings.push(format!(
+                "[[autocmd]] entry for event {event:?} ignored: missing `command`"
+            ));
+            continue;
+        };
+        out.push(AutocmdConfig {
+            event,
+            pattern: non_empty_string(entry, "pattern").unwrap_or_else(|| "*".to_string()),
+            command,
+        });
+    }
+    out
 }
 
-pub(super) fn parse_filetypes(table: &toml::Table) -> Vec<FiletypeConfig> {
-    table_array(table, "filetype")
-        .filter_map(|entry| {
-            Some(FiletypeConfig {
-                name: non_empty_string(entry, "name")?,
-                tab_width: as_usize(entry.get("tab_width")).map(|v| v.max(1)),
-                soft_tabs: entry.get("soft_tabs").and_then(|v| v.as_bool()),
-                line_numbers: entry
-                    .get("line_numbers")
-                    .and_then(|v| v.as_str())
-                    .and_then(LineNumbers::parse),
-                word_wrap: entry.get("word_wrap").and_then(|v| v.as_bool()),
-                trim_trailing_whitespace: entry
-                    .get("trim_trailing_whitespace")
-                    .and_then(|v| v.as_bool()),
-                auto_format: entry.get("auto_format").and_then(|v| v.as_bool()),
-            })
-        })
-        .collect()
+pub(super) fn parse_filetypes(
+    table: &toml::Table,
+    warnings: &mut Vec<String>,
+) -> Vec<FiletypeConfig> {
+    let mut out = Vec::new();
+    for entry in table_array(table, "filetype") {
+        let Some(name) = non_empty_string(entry, "name") else {
+            warnings.push("[[filetype]] entry ignored: missing `name`".to_string());
+            continue;
+        };
+        out.push(FiletypeConfig {
+            name,
+            tab_width: as_usize(entry.get("tab_width")).map(|v| v.max(1)),
+            soft_tabs: entry.get("soft_tabs").and_then(|v| v.as_bool()),
+            line_numbers: entry
+                .get("line_numbers")
+                .and_then(|v| v.as_str())
+                .and_then(LineNumbers::parse),
+            word_wrap: entry.get("word_wrap").and_then(|v| v.as_bool()),
+            trim_trailing_whitespace: entry
+                .get("trim_trailing_whitespace")
+                .and_then(|v| v.as_bool()),
+            auto_format: entry.get("auto_format").and_then(|v| v.as_bool()),
+        });
+    }
+    out
 }
 
-pub(super) fn parse_lsps(table: &toml::Table) -> Vec<LspConfig> {
-    table_array(table, "lsp")
-        .filter_map(|entry| {
-            Some(LspConfig {
-                language: non_empty_string(entry, "language")?,
-                server: non_empty_string(entry, "server")?,
-                args: string_array(entry, "args"),
-                lazy: entry.get("lazy").and_then(|v| v.as_bool()).unwrap_or(true),
-                capabilities: parse_lsp_capabilities(entry),
-            })
-        })
-        .collect()
+pub(super) fn parse_lsps(table: &toml::Table, warnings: &mut Vec<String>) -> Vec<LspConfig> {
+    let mut out = Vec::new();
+    for entry in table_array(table, "lsp") {
+        let Some(language) = non_empty_string(entry, "language") else {
+            warnings.push("[[lsp]] entry ignored: missing `language`".to_string());
+            continue;
+        };
+        let Some(server) = non_empty_string(entry, "server") else {
+            warnings.push(format!(
+                "[[lsp]] entry for language {language:?} ignored: missing `server`"
+            ));
+            continue;
+        };
+        out.push(LspConfig {
+            language,
+            server,
+            args: string_array(entry, "args"),
+            lazy: entry.get("lazy").and_then(|v| v.as_bool()).unwrap_or(true),
+            capabilities: parse_lsp_capabilities(entry),
+        });
+    }
+    out
 }
 
 fn parse_lsp_capabilities(entry: &toml::Table) -> LspCapabilities {

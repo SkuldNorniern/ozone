@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 /// Merges one per-section file's parsed table into a [`Config`] (appends its
 /// entries). See [`Config::SECTION_FILES`].
-type SectionMerge = fn(&mut Config, &toml::Table);
+type SectionMerge = fn(&mut Config, &toml::Table, &mut Vec<String>);
 
 /// Global editor settings (mirrors config.toml `[editor]`).
 #[derive(Debug, Clone)]
@@ -202,6 +202,11 @@ pub struct Config {
     pub filetypes: Vec<FiletypeConfig>,
     pub lsps: Vec<LspConfig>,
     pub modifiers: ModifierOverrides,
+    /// Non-fatal problems found while parsing this config (malformed
+    /// `[[autocmd]]` / `[[filetype]]` / `[[lsp]]` entries that were skipped).
+    /// Surfaced by [`Self::load_with_warning`] so a bad entry is visible
+    /// instead of silently vanishing. Not part of the user's configuration.
+    pub parse_warnings: Vec<String>,
 }
 
 impl Config {
@@ -215,6 +220,7 @@ impl Config {
             filetypes: Vec::new(),
             lsps: Vec::new(),
             modifiers: ModifierOverrides::default(),
+            parse_warnings: Vec::new(),
         }
     }
 
@@ -308,11 +314,13 @@ impl Config {
             }
         }
 
+        let mut warnings = Vec::new();
         config.keymaps = parse::parse_keymaps(&table);
-        config.autocmds = parse::parse_autocmds(&table);
-        config.filetypes = parse::parse_filetypes(&table);
-        config.lsps = parse::parse_lsps(&table);
+        config.autocmds = parse::parse_autocmds(&table, &mut warnings);
+        config.filetypes = parse::parse_filetypes(&table, &mut warnings);
+        config.lsps = parse::parse_lsps(&table, &mut warnings);
         config.modifiers = parse::parse_modifiers(&table);
+        config.parse_warnings = warnings;
 
         Ok(config)
     }
@@ -337,12 +345,16 @@ impl Config {
     ///   lsp.toml         # [[lsp]]
     /// ```
     const SECTION_FILES: &'static [(&'static str, SectionMerge)] = &[
-        ("keymap.toml", |c, t| c.keymaps = parse::parse_keymaps(t)),
-        ("autocmd.toml", |c, t| c.autocmds = parse::parse_autocmds(t)),
-        ("filetype.toml", |c, t| {
-            c.filetypes = parse::parse_filetypes(t)
+        ("keymap.toml", |c, t, _w| {
+            c.keymaps = parse::parse_keymaps(t)
         }),
-        ("lsp.toml", |c, t| c.lsps = parse::parse_lsps(t)),
+        ("autocmd.toml", |c, t, w| {
+            c.autocmds = parse::parse_autocmds(t, w)
+        }),
+        ("filetype.toml", |c, t, w| {
+            c.filetypes = parse::parse_filetypes(t, w)
+        }),
+        ("lsp.toml", |c, t, w| c.lsps = parse::parse_lsps(t, w)),
     ];
 
     /// Default content for each section file, written on first run so the
@@ -377,6 +389,12 @@ impl Config {
             }
         };
 
+        // Surface malformed-entry warnings from config.toml itself; section
+        // files report their own (prefixed) warnings inside merge_section_files.
+        for w in std::mem::take(&mut config.parse_warnings) {
+            warnings.push(format!("{}: {w}", path.display()));
+        }
+
         config.merge_section_files(path.parent(), &mut warnings);
 
         // Bindings are config-driven with no hardcoded fallback layer: a config
@@ -408,7 +426,15 @@ impl Config {
             }
             match std::fs::read_to_string(&p) {
                 Ok(text) => match text.parse::<toml::Table>() {
-                    Ok(table) => merge(self, &table),
+                    Ok(table) => {
+                        let before = warnings.len();
+                        merge(self, &table, warnings);
+                        // Prefix any malformed-entry warnings with the file they
+                        // came from, so the message points at the right place.
+                        for w in &mut warnings[before..] {
+                            *w = format!("{}: {w}", p.display());
+                        }
+                    }
                     Err(e) => warnings.push(format!("could not parse {}: {e}", p.display())),
                 },
                 Err(e) => warnings.push(format!("could not read {}: {e}", p.display())),
@@ -672,6 +698,65 @@ mod tests {
         assert!(c.lsps[0].capabilities.completion);
         assert!(c.lsps[0].capabilities.diagnostics);
         assert!(!c.lsps[0].capabilities.semantic_tokens);
+    }
+
+    #[test]
+    fn malformed_list_entries_are_reported_not_silently_dropped() {
+        let c = Config::parse_str(
+            r#"
+            [[autocmd]]
+            pattern = "rust"
+            command = "lsp.format"   # missing event
+
+            [[autocmd]]
+            event = "buffer.saved"
+            command = "file.reload"  # valid
+
+            [[filetype]]
+            tab_width = 2            # missing name
+
+            [[lsp]]
+            language = "rust"        # missing server
+        "#,
+        );
+
+        // Valid entries still parse.
+        assert_eq!(c.autocmds.len(), 1);
+        assert_eq!(c.autocmds[0].event, "buffer.saved");
+        assert!(c.filetypes.is_empty());
+        assert!(c.lsps.is_empty());
+
+        // Each dropped entry is reported, naming the missing field.
+        let joined = c.parse_warnings.join("\n");
+        assert!(
+            c.parse_warnings.len() == 3,
+            "expected 3 warnings, got {:?}",
+            c.parse_warnings
+        );
+        assert!(joined.contains("[[autocmd]]") && joined.contains("`event`"));
+        assert!(joined.contains("[[filetype]]") && joined.contains("`name`"));
+        assert!(joined.contains("[[lsp]]") && joined.contains("`server`"));
+    }
+
+    #[test]
+    fn load_surfaces_malformed_entry_warnings() {
+        let dir =
+            std::env::temp_dir().join(format!("ozone-config-badentry-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "[keymap]\n\"ctrl+s\" = \"file.save\"\n\n[[lsp]]\nlanguage = \"rust\"\n",
+        )
+        .unwrap();
+
+        let (_c, warning) = Config::load_with_warning(&path);
+        let warning = warning.expect("expected a malformed-entry warning");
+        assert!(warning.contains("[[lsp]]") && warning.contains("`server`"));
+        assert!(warning.contains("config.toml"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
