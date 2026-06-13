@@ -252,6 +252,13 @@ impl Buffer {
         self.table.lines_slice(start, end)
     }
 
+    /// The text of lines `start..end` as one owned string (newline-joined), for
+    /// rendering: split it on `'\n'` to borrow each line as `&str`, allocating
+    /// once for the visible range instead of once per line.
+    pub fn lines_range_text(&self, start: usize, end: usize) -> String {
+        self.table.lines_range_text(start, end)
+    }
+
     /// Length of a line in bytes (excludes the newline).
     pub fn line_len(&self, line: usize) -> usize {
         self.table.line_len(line).unwrap_or(0)

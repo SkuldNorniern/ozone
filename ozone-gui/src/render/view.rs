@@ -166,16 +166,16 @@ pub(super) fn draw_view(
     };
 
     let visible_line_end = (scroll + visible + 1).min(line_count);
-    let visible_texts = buf.lines_slice(scroll, visible_line_end);
+    // One allocation for the whole visible range; `visible_texts` borrows each
+    // line as `&str` from it, instead of a `String` per visible line per frame.
+    let visible_region = buf.lines_range_text(scroll, visible_line_end);
+    let visible_texts: Vec<&str> = visible_region.split('\n').collect();
 
     let mut visual_i = 0usize;
     let mut line_idx = scroll;
     while visual_i < visible && line_idx < line_count {
         let line_offset = line_idx - scroll;
-        let full_line_text = visible_texts
-            .get(line_offset)
-            .map(String::as_str)
-            .unwrap_or_default();
+        let full_line_text = visible_texts.get(line_offset).copied().unwrap_or_default();
         let wrap_segments = if word_wrap {
             wrap_line_segments(full_line_text, text_cols)
         } else {

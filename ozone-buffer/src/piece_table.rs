@@ -125,6 +125,31 @@ impl PieceTable {
         out
     }
 
+    /// The text of lines `start..end` as one owned string (newline-joined, no
+    /// trailing newline). For rendering: the caller splits it into borrowed
+    /// `&str` lines, so a frame allocates **once** for the whole visible range
+    /// instead of once per line like [`Self::lines_slice`]. Splitting the
+    /// result on `'\n'` yields exactly `end - start` parts.
+    pub fn lines_range_text(&self, start: usize, end: usize) -> String {
+        if start >= end {
+            return String::new();
+        }
+        let text = self.materialized();
+        let mut out = String::new();
+        for (i, line) in text.split('\n').enumerate() {
+            if i >= end {
+                break;
+            }
+            if i >= start {
+                if i > start {
+                    out.push('\n');
+                }
+                out.push_str(line);
+            }
+        }
+        out
+    }
+
     /// Convert (line, col) to byte offset. Clamps to total length.
     pub fn pos_to_offset(&self, line: usize, col: usize) -> usize {
         let text = self.materialized();
@@ -293,6 +318,23 @@ mod tests {
         let mut t = PieceTable::new("hello");
         t.insert(5, " world");
         assert_eq!(t.text(), "hello world");
+    }
+
+    #[test]
+    fn lines_range_text_splits_into_expected_lines() {
+        let t = PieceTable::new("a\nbb\nccc\ndddd\n");
+        // Lines: ["a","bb","ccc","dddd",""] (trailing newline → empty last line).
+        let region = t.lines_range_text(1, 4);
+        let lines: Vec<&str> = region.split('\n').collect();
+        assert_eq!(lines, vec!["bb", "ccc", "dddd"]);
+        // Splitting yields exactly end - start parts, matching lines_slice.
+        assert_eq!(lines.len(), 3);
+        assert_eq!(
+            t.lines_slice(1, 4),
+            vec!["bb".to_string(), "ccc".to_string(), "dddd".to_string()]
+        );
+        // Empty range.
+        assert_eq!(t.lines_range_text(2, 2), "");
     }
 
     #[test]
