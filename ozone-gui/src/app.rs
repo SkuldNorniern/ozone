@@ -162,6 +162,7 @@ pub struct OzoneGui {
     pub(crate) autocmds: Arc<AutocommandRegistry>,
     pub(crate) keymap: Arc<Keymap>,
     keymap_report: KeymapReport,
+    unknown_commands: Vec<String>,
     pub(crate) modmap: ModifierMap,
 }
 
@@ -188,6 +189,12 @@ impl OzoneGui {
         // it — there is no built-in default layer underneath.
         let mut keymap = Keymap::new();
         let keymap_report = keymap.add_user_config(&config.keymaps);
+        // A binding target is valid if it's a registered command or a shell
+        // sigil (`|cmd` filter / `!cmd` run-on-file), which `actions` dispatches
+        // without the registry. Anything else is a typo that binds a dead key.
+        let unknown_commands = keymap.unknown_commands(|name| {
+            name.starts_with('|') || name.starts_with('!') || reg.contains(name)
+        });
 
         let modmap = ModifierMap::platform_default().with_overrides(
             config.modifiers.control.as_deref(),
@@ -202,6 +209,7 @@ impl OzoneGui {
             autocmds: Arc::new(autocmds),
             keymap: Arc::new(keymap),
             keymap_report,
+            unknown_commands,
             modmap,
         }
     }
@@ -256,6 +264,14 @@ impl OzoneGui {
             startup_notifications.push(
                 NotifyLevel::Warn,
                 format!("Some keybindings were ignored:\n{details}"),
+                Some(15_000),
+            );
+        }
+        if !self.unknown_commands.is_empty() {
+            let details = self.unknown_commands.join("\n");
+            startup_notifications.push(
+                NotifyLevel::Warn,
+                format!("Keybindings point to unknown commands:\n{details}"),
                 Some(15_000),
             );
         }

@@ -104,6 +104,11 @@ impl CommandRegistry {
         self.commands.keys().map(String::as_str)
     }
 
+    /// Whether a command with this id is registered.
+    pub fn contains(&self, name: &str) -> bool {
+        self.commands.contains_key(name)
+    }
+
     pub fn description(&self, name: &str) -> Option<&str> {
         self.commands.get(name).map(|(_, d)| d.as_str())
     }

@@ -325,6 +325,23 @@ impl Keymap {
         report
     }
 
+    /// Distinct bound command ids for which `is_known` returns `false`, sorted
+    /// and de-duplicated. Used to warn about bindings that point at a command
+    /// the registry doesn't have. `is_known` is supplied by the frontend so the
+    /// keymap stays agnostic of the command registry and of shell sigils
+    /// (`|cmd` / `!cmd`) — both are "known" binding targets.
+    pub fn unknown_commands(&self, is_known: impl Fn(&str) -> bool) -> Vec<String> {
+        let mut unknown: Vec<&str> = self
+            .bindings
+            .iter()
+            .map(|b| b.command.as_str())
+            .filter(|c| !is_known(c))
+            .collect();
+        unknown.sort_unstable();
+        unknown.dedup();
+        unknown.into_iter().map(str::to_string).collect()
+    }
+
     fn applies(binding: &Binding, filetype: Option<&str>) -> bool {
         match &binding.filetype {
             None => true,
@@ -905,6 +922,38 @@ mod tests {
                 keys: "ctrl+s".to_string(),
                 command: "file.save".to_string(),
             }]
+        );
+    }
+
+    #[test]
+    fn unknown_commands_lists_bindings_to_missing_commands() {
+        let mut km = Keymap::new();
+        km.add_user_config(&[
+            KeymapConfig {
+                keys: "ctrl+s".to_string(),
+                command: "file.save".to_string(),
+                filetype: None,
+                platform: None,
+            },
+            KeymapConfig {
+                keys: "ctrl+q".to_string(),
+                command: "totally.bogus".to_string(),
+                filetype: None,
+                platform: None,
+            },
+            KeymapConfig {
+                keys: "ctrl+r".to_string(),
+                command: "|rustfmt".to_string(),
+                filetype: None,
+                platform: None,
+            },
+        ]);
+        // `file.save` is "known", `|rustfmt` is a sigil the closure accepts;
+        // only the bogus id is reported.
+        let known = |name: &str| name == "file.save" || name.starts_with('|');
+        assert_eq!(
+            km.unknown_commands(known),
+            vec!["totally.bogus".to_string()]
         );
     }
 
