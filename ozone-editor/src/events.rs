@@ -81,13 +81,15 @@ impl EditorEvent {
         }
     }
 
-    pub fn match_text(&self) -> Option<String> {
+    /// Borrowed text autocommand patterns match against, without cloning the
+    /// event's owned path/filetype/server string.
+    pub fn match_text(&self) -> Option<&str> {
         match self {
             Self::BufferOpened { path, .. }
             | Self::BufferPreSave { path, .. }
-            | Self::BufferSaved { path, .. } => Some(path.to_string_lossy().into_owned()),
-            Self::BufferFiletype { filetype, .. } => Some(filetype.clone()),
-            Self::LspAttached { server, .. } => Some(server.clone()),
+            | Self::BufferSaved { path, .. } => path.to_str(),
+            Self::BufferFiletype { filetype, .. } => Some(filetype.as_str()),
+            Self::LspAttached { server, .. } => Some(server.as_str()),
             _ => None,
         }
     }

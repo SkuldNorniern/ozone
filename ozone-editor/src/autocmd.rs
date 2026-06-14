@@ -45,7 +45,8 @@ impl AutocommandRegistry {
 
     pub fn matching_commands(&self, event: &EditorEvent) -> Vec<&str> {
         let kind = event.kind();
-        let match_text = event.match_text();
+        // Normalize once per event rather than once per candidate entry.
+        let match_text = event.match_text().map(str::to_ascii_lowercase);
         self.entries
             .iter()
             .filter(|entry| entry.event == kind)
@@ -80,7 +81,6 @@ fn pattern_matches(pattern: &str, text: Option<&str>) -> bool {
     let Some(text) = text else {
         return false;
     };
-    let text = text.to_ascii_lowercase();
 
     if let Some(ext) = pattern.strip_prefix("*.") {
         return text.ends_with(&format!(".{ext}"));
