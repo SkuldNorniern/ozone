@@ -132,12 +132,9 @@ pub(super) fn draw_view(
     } else {
         buf.pos_to_offset(Pos::new(visible_end_line, 0))
     };
-    let decorations: Vec<Decoration> = ws
-        .decorations()
-        .in_range_for_view(buffer_id, view_id, visible_start, visible_end)
-        .into_iter()
-        .cloned()
-        .collect();
+    let decorations: Vec<&Decoration> =
+        ws.decorations()
+            .in_range_for_view(buffer_id, view_id, visible_start, visible_end);
 
     if gutter_w > 0.0 {
         ctx.draw_rect(
@@ -233,6 +230,7 @@ pub(super) fn draw_view(
                         decoration.start < segment_abs_end && decoration.end > segment_abs_start
                     }
                 })
+                .copied()
                 .collect();
 
             if is_cursor && is_active_pane {
