@@ -103,7 +103,7 @@ pub(crate) fn handle_key(
     // Resolve through the layered keymap (handles chords via `pending`).
     if let Some(stroke) = keystroke_from(key, mods, modmap) {
         let filetype = active_filetype_name(ws);
-        match keymap.resolve(pending, &stroke, filetype.as_deref()) {
+        match keymap.resolve(pending, &stroke, filetype) {
             KeymapOutcome::Execute(cmd) => {
                 pending.clear();
                 // Everything is a command: run it, then perform any frontend
@@ -233,7 +233,7 @@ pub(crate) fn active_terminal(ws: &Workspace) -> Option<BufferId> {
 }
 
 /// Filetype token for the active buffer (for filetype-scoped keymaps).
-pub(crate) fn active_filetype_name(ws: &Workspace) -> Option<String> {
+pub(crate) fn active_filetype_name(ws: &Workspace) -> Option<&'static str> {
     let lang = buffer_language(ws.active_buffer()?);
     Some(filetype_config_name(lang))
 }
@@ -255,8 +255,8 @@ pub(crate) fn apply_filetype_config(ws: &mut Workspace, id: BufferId, fc: &Filet
     }
 }
 
-pub(crate) fn filetype_config_name(lang: Option<Language>) -> String {
-    lang.map(|l| l.name()).unwrap_or("plain").to_string()
+pub(crate) fn filetype_config_name(lang: Option<Language>) -> &'static str {
+    lang.map(|l| l.name()).unwrap_or("plain")
 }
 
 /// Perform any [`UiIntent`]s a command queued (open the palette, a picker, or

@@ -75,7 +75,7 @@ fn apply_pending_filetypes(state: &mut AppState) {
         return;
     }
     let mut ws = lock(state.workspace.as_ref());
-    let pending: Vec<(BufferId, String)> = ws
+    let pending: Vec<(BufferId, &'static str)> = ws
         .buffers
         .iter()
         .filter(|(id, _)| !state.ft_applied.contains(id))
@@ -108,12 +108,7 @@ fn compute_which_key(state: &AppState) -> WhichKeyView {
     let ft = active_filetype_name(&ws);
 
     if !state.chord_pending.is_empty() {
-        let entries = which_key_entries(
-            &state.keymap,
-            &state.chord_pending,
-            ft.as_deref(),
-            &state.commands,
-        );
+        let entries = which_key_entries(&state.keymap, &state.chord_pending, ft, &state.commands);
         if entries.is_empty() {
             return None;
         }
@@ -134,7 +129,7 @@ fn compute_which_key(state: &AppState) -> WhichKeyView {
                 control,
                 meta,
                 super_,
-                ft.as_deref(),
+                ft,
                 &state.commands,
             );
             if !entries.is_empty() {
