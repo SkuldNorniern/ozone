@@ -72,6 +72,38 @@ pub(crate) fn pane_rect(tree: &PaneTree, rect: Rect, target: ViewId) -> Option<R
     }
 }
 
+/// Flatten a pane tree into leaf view rects and split-divider rects, walking
+/// only an immutable `&PaneTree` borrow. Callers can drop this borrow before
+/// taking `&mut Workspace` to render each view, instead of cloning the tree.
+pub(crate) fn pane_layout(tree: &PaneTree, rect: Rect) -> (Vec<(ViewId, Rect)>, Vec<Rect>) {
+    let mut leaves = Vec::new();
+    let mut dividers = Vec::new();
+    collect_pane_layout(tree, rect, &mut leaves, &mut dividers);
+    (leaves, dividers)
+}
+
+fn collect_pane_layout(
+    tree: &PaneTree,
+    rect: Rect,
+    leaves: &mut Vec<(ViewId, Rect)>,
+    dividers: &mut Vec<Rect>,
+) {
+    match tree {
+        PaneTree::Leaf { view_id } => leaves.push((*view_id, rect)),
+        PaneTree::Split {
+            axis,
+            ratio,
+            first,
+            second,
+        } => {
+            let (first_rect, second_rect, divider) = split_rect(rect, *axis, *ratio);
+            collect_pane_layout(first, first_rect, leaves, dividers);
+            collect_pane_layout(second, second_rect, leaves, dividers);
+            dividers.push(divider);
+        }
+    }
+}
+
 /// Split `rect` by `axis`/`ratio` into `(first, second, divider)` rects.
 pub(crate) fn split_rect(rect: Rect, axis: SplitAxis, ratio: f32) -> (Rect, Rect, Rect) {
     let ratio = ratio.clamp(0.1, 0.9);

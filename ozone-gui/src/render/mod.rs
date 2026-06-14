@@ -1,11 +1,11 @@
 use aurea::AureaResult;
-use aurea::render::{DrawingContext, Font, Rect};
+use aurea::render::{DrawingContext, Rect};
 
 use ozone_config::Config;
-use ozone_editor::{PaneTree, Workspace};
+use ozone_editor::Workspace;
 
 use crate::input::ActiveMods;
-use crate::layout::{STATUS_H, split_rect};
+use crate::layout::{STATUS_H, pane_layout};
 use crate::lsp::LspStatus;
 use crate::overlay::search::SearchState;
 use crate::statusbar::draw_status_bar;
@@ -70,21 +70,26 @@ pub(crate) fn draw_editor(
     };
 
     if let Some(panes) = &ws.panes {
-        let panes = panes.clone();
-        draw_pane_tree(
-            ctx,
-            ws,
-            config,
-            &panes,
-            editor_rect,
-            &font,
-            metrics,
-            welcome_bindings,
-            term_cells,
-            images,
-            syntax_cache,
-            cursor_visible,
-        )?;
+        let (leaves, dividers) = pane_layout(panes, editor_rect);
+        for (view_id, rect) in leaves {
+            draw_view(
+                ctx,
+                ws,
+                config,
+                view_id,
+                rect,
+                &font,
+                metrics,
+                welcome_bindings,
+                term_cells,
+                images,
+                syntax_cache,
+                cursor_visible,
+            )?;
+        }
+        for divider in dividers {
+            ctx.draw_rect(divider, &solid(palette().border))?;
+        }
     } else if let Some(view_id) = ws.active_view().map(|view| view.id) {
         draw_view(
             ctx,
@@ -109,75 +114,4 @@ pub(crate) fn draw_editor(
 
     draw_status_bar(ctx, width, height, &font, ws, mods, lsp_status)?;
     Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn draw_pane_tree(
-    ctx: &mut dyn DrawingContext,
-    ws: &mut Workspace,
-    config: &Config,
-    tree: &PaneTree,
-    rect: Rect,
-    font: &Font,
-    metrics: TextMetrics,
-    welcome_bindings: &[(String, String)],
-    term_cells: &TermCells,
-    images: &ImageCache,
-    syntax_cache: &mut SyntaxCache,
-    cursor_visible: bool,
-) -> AureaResult<()> {
-    match tree {
-        PaneTree::Leaf { view_id } => draw_view(
-            ctx,
-            ws,
-            config,
-            *view_id,
-            rect,
-            font,
-            metrics,
-            welcome_bindings,
-            term_cells,
-            images,
-            syntax_cache,
-            cursor_visible,
-        ),
-        PaneTree::Split {
-            axis,
-            ratio,
-            first,
-            second,
-        } => {
-            let (first_rect, second_rect, divider) = split_rect(rect, *axis, *ratio);
-            draw_pane_tree(
-                ctx,
-                ws,
-                config,
-                first,
-                first_rect,
-                font,
-                metrics,
-                welcome_bindings,
-                term_cells,
-                images,
-                syntax_cache,
-                cursor_visible,
-            )?;
-            draw_pane_tree(
-                ctx,
-                ws,
-                config,
-                second,
-                second_rect,
-                font,
-                metrics,
-                welcome_bindings,
-                term_cells,
-                images,
-                syntax_cache,
-                cursor_visible,
-            )?;
-            ctx.draw_rect(divider, &solid(palette().border))?;
-            Ok(())
-        }
-    }
 }
