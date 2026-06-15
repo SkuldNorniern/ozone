@@ -42,3 +42,9 @@ aurea-ffi        = { git = "https://github.com/SkuldNorniern/aurea" }
 aurea-foundation = { git = "https://github.com/SkuldNorniern/aurea" }
 aurea-render     = { git = "https://github.com/SkuldNorniern/aurea" }
 aurea-runtime    = { git = "https://github.com/SkuldNorniern/aurea" }
+# ZenGPU crates are referenced by aurea-render's `zengpu` feature by crates.io
+# version but aren't published yet — resolve them from the ZenGPU repo so a
+# `--features zengpu` build works. (Patches apply graph-wide, incl. inside aurea.)
+zengpu           = { git = "https://github.com/SkuldNorniern/ZenGPU" }
+zengpu-hal       = { git = "https://github.com/SkuldNorniern/ZenGPU" }
+zengpu-vulkan    = { git = "https://github.com/SkuldNorniern/ZenGPU" }
