@@ -3,6 +3,13 @@ name = "ozone-gui"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+# GPU rendering via aurea's ZenGPU/Vulkan backend. Opt-in (pulls in ash/Vulkan);
+# off by default so normal builds stay CPU-only. With this feature the runtime
+# `hardware_acceleration` toggle (config / --gpu / OZONE_GPU) can select the GPU.
+zengpu = ["aurea/zengpu"]
+
 [dependencies]
 ozone-editor = { workspace = true }
 ozone-buffer = { workspace = true }

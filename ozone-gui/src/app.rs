@@ -338,11 +338,36 @@ impl OzoneGui {
                 Some(15_000),
             );
         }
+        // Resolve the rendering backend from the (already CLI/env-resolved)
+        // hardware-acceleration preference. GPU is opt-in and only reachable in a
+        // build with the `zengpu` feature; otherwise fall back to the CPU
+        // rasterizer and say why, so the toggle never silently does nothing.
+        let backend = if self.config.ui.hardware_acceleration {
+            #[cfg(feature = "zengpu")]
+            {
+                RendererBackend::ZenGpu
+            }
+            #[cfg(not(feature = "zengpu"))]
+            {
+                startup_notifications.push(
+                    NotifyLevel::Warn,
+                    "Hardware acceleration is enabled, but this build has no GPU \
+                     support (compiled without the `zengpu` feature) — using the \
+                     CPU renderer."
+                        .to_string(),
+                    Some(15_000),
+                );
+                RendererBackend::Cpu
+            }
+        } else {
+            RendererBackend::Cpu
+        };
+
         let notifications: Arc<Mutex<Notifications>> = Arc::new(Mutex::new(startup_notifications));
         let which_key: Arc<Mutex<WhichKeyView>> = Arc::new(Mutex::new(None));
         let images: Arc<Mutex<ImageCache>> = Arc::new(Mutex::new(ImageCache::new()));
 
-        let raw_canvas = Canvas::new(W, H, RendererBackend::Cpu)?;
+        let raw_canvas = Canvas::new(W, H, backend)?;
         let workspace_for_draw = self.workspace.clone();
         let config_for_draw = self.config.clone();
         let commands_for_draw = self.commands.clone();
