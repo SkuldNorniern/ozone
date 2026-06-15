@@ -379,6 +379,7 @@ impl OzoneGui {
                 ActiveMods::default(),
                 true,
                 LspStatus::Idle,
+                None,
                 &mut scratch_char_w,
             )?;
             if let Some(p) = pal.as_ref() {
@@ -432,6 +433,7 @@ impl OzoneGui {
                     ActiveMods::default(),
                     true,
                     LspStatus::Idle,
+                    None,
                     &mut scratch_char_w,
                 )
             })?;
@@ -632,6 +634,12 @@ impl OzoneGui {
                 }
             }
 
+            // Keep redrawing while a workspace search is in flight so the
+            // progress bar updates each frame.
+            if state.workspace_search.is_some() {
+                state.needs_redraw = true;
+            }
+
             if state.needs_redraw {
                 let pal = lock(state.palette.as_ref());
                 let srch = lock(state.search.as_ref());
@@ -645,6 +653,10 @@ impl OzoneGui {
                 let active_mods = ActiveMods::from_physical(state.live_mods, &state.modmap);
                 let frame_wk = lock(state.which_key.as_ref()).clone();
                 let welcome_bindings = welcome_keymap_rows(&state.keymap, &state.commands);
+                let search_progress = state
+                    .workspace_search
+                    .as_ref()
+                    .map(|job| (job.files_scanned, job.total_files));
                 canvas.draw(|ctx| {
                     draw_editor(
                         ctx,
@@ -658,6 +670,7 @@ impl OzoneGui {
                         active_mods,
                         state.cursor_visible,
                         state.lsp.status(),
+                        search_progress,
                         &mut state.measured_char_w,
                     )?;
                     if let Some(p) = pal.as_ref() {

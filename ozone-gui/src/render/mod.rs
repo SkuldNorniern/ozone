@@ -39,6 +39,7 @@ pub(crate) fn draw_editor(
     mods: ActiveMods,
     cursor_visible: bool,
     lsp_status: LspStatus,
+    search_progress: Option<(usize, usize)>,
     char_w_out: &mut f32,
 ) -> AureaResult<()> {
     let width = ctx.width() as f32;
@@ -112,6 +113,15 @@ pub(crate) fn draw_editor(
         draw_search_bar(ctx, s, &font, width)?;
     }
 
-    draw_status_bar(ctx, width, height, &font, ws, mods, lsp_status)?;
+    draw_status_bar(
+        ctx,
+        width,
+        height,
+        &font,
+        ws,
+        mods,
+        lsp_status,
+        search_progress,
+    )?;
     Ok(())
 }

@@ -197,17 +197,20 @@ fn run(cmd_line: &str, cwd: Option<&std::path::Path>, input: Option<String>) -> 
 }
 
 /// Background workspace-wide literal search job. Spawns a thread that runs
-/// `search_workspace` and sends results + periodic file counts back via mpsc.
+/// `search_workspace_with_progress` and sends total file count, per-file
+/// progress, and final results back via mpsc so the UI can show a live bar.
 pub(crate) struct WorkspaceSearchJob {
     pub(crate) query: String,
     /// Id of the "Searching…" notification so the poller can dismiss it.
     pub(crate) notif_id: u64,
     rx: Receiver<WorkspaceSearchMsg>,
-    /// Last file count received from the background thread, for progress display.
     pub(crate) files_scanned: usize,
+    /// Total files to scan; 0 until the thread sends `TotalFiles`.
+    pub(crate) total_files: usize,
 }
 
 enum WorkspaceSearchMsg {
+    TotalFiles(usize),
     Progress(usize),
     Done(Vec<WorkspaceMatch>),
 }
@@ -216,6 +219,7 @@ impl WorkspaceSearchJob {
     pub(crate) fn spawn(base: PathBuf, query: String, notif_id: u64) -> Self {
         let (tx, rx) = channel();
         let q = query.clone();
+        let total_tx = tx.clone();
         let progress_tx = tx.clone();
         std::thread::spawn(move || {
             let matches = search_workspace_with_progress(
@@ -223,9 +227,10 @@ impl WorkspaceSearchJob {
                 &q,
                 MAX_SEARCH_FILES,
                 MAX_SEARCH_RESULTS,
+                move |total| {
+                    let _ = total_tx.send(WorkspaceSearchMsg::TotalFiles(total));
+                },
                 |n| {
-                    // Send a progress update roughly every 100 files without
-                    // flooding the channel; ignore send errors (poller dropped).
                     if n % 100 == 0 {
                         let _ = progress_tx.send(WorkspaceSearchMsg::Progress(n));
                     }
@@ -238,6 +243,7 @@ impl WorkspaceSearchJob {
             notif_id,
             rx,
             files_scanned: 0,
+            total_files: 0,
         }
     }
 
@@ -245,6 +251,7 @@ impl WorkspaceSearchJob {
     pub(crate) fn poll(&mut self) -> Option<Vec<WorkspaceMatch>> {
         loop {
             match self.rx.try_recv() {
+                Ok(WorkspaceSearchMsg::TotalFiles(n)) => self.total_files = n,
                 Ok(WorkspaceSearchMsg::Progress(n)) => {
                     self.files_scanned = n;
                 }

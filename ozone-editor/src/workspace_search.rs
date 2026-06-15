@@ -53,38 +53,42 @@ pub fn search_workspace(
     file_cap: usize,
     result_cap: usize,
 ) -> Vec<WorkspaceMatch> {
-    search_workspace_inner(base, query, file_cap, result_cap, None)
+    if query.is_empty() || result_cap == 0 {
+        return Vec::new();
+    }
+    let files = collect_workspace_files(base, file_cap);
+    search_files(&files, base, query, result_cap, &|_| {})
 }
 
-/// Like [`search_workspace`] but calls `on_progress(files_scanned)` after
-/// each file so callers can report progress without re-scanning.
+/// Like [`search_workspace`] but calls `on_total(file_count)` once the file
+/// list is known, then `on_progress(files_scanned)` after each file, so
+/// callers can show a determinate progress bar.
 pub fn search_workspace_with_progress(
     base: &Path,
     query: &str,
     file_cap: usize,
     result_cap: usize,
+    on_total: impl FnOnce(usize),
     on_progress: impl Fn(usize),
-) -> Vec<WorkspaceMatch> {
-    search_workspace_inner(base, query, file_cap, result_cap, Some(&on_progress))
-}
-
-fn search_workspace_inner(
-    base: &Path,
-    query: &str,
-    file_cap: usize,
-    result_cap: usize,
-    on_progress: Option<&dyn Fn(usize)>,
 ) -> Vec<WorkspaceMatch> {
     if query.is_empty() || result_cap == 0 {
         return Vec::new();
     }
+    let files = collect_workspace_files(base, file_cap);
+    on_total(files.len());
+    search_files(&files, base, query, result_cap, &on_progress)
+}
 
+fn search_files(
+    files: &[String],
+    base: &Path,
+    query: &str,
+    result_cap: usize,
+    on_progress: &dyn Fn(usize),
+) -> Vec<WorkspaceMatch> {
     let mut results = Vec::new();
-    for (idx, relative) in collect_workspace_files(base, file_cap)
-        .into_iter()
-        .enumerate()
-    {
-        let Ok(bytes) = fs::read(base.join(&relative)) else {
+    for (idx, relative) in files.iter().enumerate() {
+        let Ok(bytes) = fs::read(base.join(relative)) else {
             continue;
         };
         if looks_like_binary(&bytes) {
@@ -96,7 +100,7 @@ fn search_workspace_inner(
         for (line, content) in text.lines().enumerate() {
             for column in find_matches(content, query, false) {
                 results.push(WorkspaceMatch {
-                    path: PathBuf::from(&relative),
+                    path: PathBuf::from(relative),
                     line,
                     column,
                     preview: content.trim().to_string(),
@@ -106,9 +110,7 @@ fn search_workspace_inner(
                 }
             }
         }
-        if let Some(cb) = on_progress {
-            cb(idx + 1);
-        }
+        on_progress(idx + 1);
     }
     results
 }

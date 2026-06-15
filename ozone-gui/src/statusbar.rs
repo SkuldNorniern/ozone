@@ -12,6 +12,7 @@ use crate::layout::{STATUS_H, baseline_in_rect};
 use crate::lsp::LspStatus;
 use crate::theme::{palette, solid, stroke};
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_status_bar(
     ctx: &mut dyn DrawingContext,
     width: f32,
@@ -20,6 +21,7 @@ pub(crate) fn draw_status_bar(
     ws: &Workspace,
     mods: ActiveMods,
     lsp_status: LspStatus,
+    search_progress: Option<(usize, usize)>,
 ) -> AureaResult<()> {
     let bar_top = height - STATUS_H;
     ctx.draw_rect(
@@ -27,6 +29,28 @@ pub(crate) fn draw_status_bar(
         &solid(palette().statusbar_bg),
     )?;
     ctx.draw_line(0.0, bar_top, width, bar_top, &stroke(palette().border, 1.0))?;
+
+    // Progress bar: a 3 px accent strip at the top of the status bar while a
+    // workspace search is running. Filled portion = scanned / total.
+    if let Some((scanned, total)) = search_progress {
+        let frac = if total > 0 {
+            (scanned as f32 / total as f32).min(1.0)
+        } else {
+            0.0
+        };
+        let filled = width * frac;
+        // Full-width dim track so the bar is visible even at 0 %.
+        ctx.draw_rect(
+            Rect::new(0.0, bar_top, width, 3.0),
+            &solid(palette().statusbar_dim),
+        )?;
+        if filled > 0.0 {
+            ctx.draw_rect(
+                Rect::new(0.0, bar_top, filled, 3.0),
+                &solid(palette().picker_prompt),
+            )?;
+        }
+    }
 
     let (mode, file_name, cursor_info, dirty, pane_info) =
         if let (Some(view), Some(buf)) = (ws.active_view(), ws.active_buffer()) {
