@@ -5,6 +5,16 @@ use ozone_editor::Workspace;
 use ozone_gui::OzoneGui;
 use std::path::PathBuf;
 
+/// Parse a boolean-ish CLI/env value: `1/true/on/yes` → true, `0/false/off/no`
+/// → false, anything else → `None` (ignored, so a typo doesn't flip the toggle).
+fn parse_bool(s: &str) -> Option<bool> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "on" | "yes" => Some(true),
+        "0" | "false" | "off" | "no" => Some(false),
+        _ => None,
+    }
+}
+
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
 
@@ -23,7 +33,22 @@ fn main() {
 
     // Load user config (~/.config/ozone/config.toml or %APPDATA%\ozone\config.toml),
     // falling back to defaults when absent or malformed.
-    let (config, config_warning) = Config::load_user_with_warning();
+    let (mut config, config_warning) = Config::load_user_with_warning();
+
+    // Hardware-acceleration override, precedence: CLI flag > OZONE_GPU env >
+    // config `[ui] hardware_acceleration`. GPU still only engages in a build with
+    // the `zengpu` feature; otherwise the GUI falls back to CPU and says so.
+    if let Some(v) = std::env::var("OZONE_GPU").ok().and_then(|v| parse_bool(&v)) {
+        config.ui.hardware_acceleration = v;
+    }
+    if let Some(pos) = args.iter().position(|a| a == "--gpu") {
+        args.remove(pos);
+        config.ui.hardware_acceleration = true;
+    }
+    if let Some(pos) = args.iter().position(|a| a == "--no-gpu") {
+        args.remove(pos);
+        config.ui.hardware_acceleration = false;
+    }
     let mut startup_warnings: Vec<String> = Vec::new();
     if let Some(warning) = config_warning {
         // Keep the stderr line for console launches, but also carry it into the
@@ -38,8 +63,12 @@ fn main() {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "built-in defaults".to_string());
         eprintln!(
-            "ozone: config={} font=\"{}\" size={} mouse={}",
-            source, config.editor.font, config.editor.font_size, config.ui.mouse
+            "ozone: config={} font=\"{}\" size={} mouse={} gpu={}",
+            source,
+            config.editor.font,
+            config.editor.font_size,
+            config.ui.mouse,
+            config.ui.hardware_acceleration
         );
     }
 

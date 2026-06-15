@@ -31,6 +31,13 @@ ozone-config = { path = "ozone-config" }
 ozone-term   = { path = "ozone-term" }
 ozone-lsp    = { path = "ozone-lsp" }
 
+[features]
+default = []
+# Build a GPU-capable binary (aurea ZenGPU/Vulkan). Opt-in; off by default so a
+# plain `cargo build` stays CPU-only. The runtime `hardware_acceleration` toggle
+# (config / --gpu / OZONE_GPU) only reaches the GPU in a build with this feature.
+zengpu = ["ozone-gui/zengpu"]
+
 [dependencies]
 ozone-editor = { workspace = true }
 ozone-gui    = { workspace = true }
