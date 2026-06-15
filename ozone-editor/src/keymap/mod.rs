@@ -154,8 +154,8 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("ctrl+-", "view.jump-back"),
     ("ctrl+=", "view.jump-forward"),
     // Panes
-    ("ctrl+\\", "pane.split-right"),
-    ("ctrl+shift+down", "pane.split-down"),
+    ("ctrl+w right", "pane.split-right"),
+    ("ctrl+w down", "pane.split-down"),
     ("ctrl+shift+w", "pane.close"),
     ("ctrl+meta+right", "pane.focus-right"),
     ("ctrl+meta+left", "pane.focus-left"),

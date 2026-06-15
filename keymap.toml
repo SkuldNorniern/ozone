@@ -97,11 +97,11 @@ command = "view.jump-forward"
 
 # ── Panes ──────────────────────────────────────────────────────────────────--
 [[keymap]]
-keys = "ctrl+\\"
+keys = "ctrl+w right"
 command = "pane.split-right"
 
 [[keymap]]
-keys = "ctrl+shift+down"
+keys = "ctrl+w down"
 command = "pane.split-down"
 
 [[keymap]]
