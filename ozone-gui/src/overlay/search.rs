@@ -188,8 +188,8 @@ pub(crate) fn search_replace_current(s: &mut SearchState, ws: &mut Workspace) {
     if qbytes == 0 {
         return;
     }
-    let repl = s.replace.clone().unwrap_or_default();
-    replace_at(ws, off, qbytes, &repl);
+    let repl = s.replace.as_deref().unwrap_or("");
+    replace_at(ws, off, qbytes, repl);
     search_recompute(s, ws);
     if s.current >= s.matches.len() {
         s.current = 0;
@@ -203,10 +203,9 @@ pub(crate) fn search_replace_all(s: &mut SearchState, ws: &mut Workspace) {
     if qbytes == 0 || s.matches.is_empty() {
         return;
     }
-    let repl = s.replace.clone().unwrap_or_default();
-    let offsets = s.matches.clone();
-    for &off in offsets.iter().rev() {
-        replace_at(ws, off, qbytes, &repl);
+    let repl = s.replace.as_deref().unwrap_or("");
+    for &off in s.matches.iter().rev() {
+        replace_at(ws, off, qbytes, repl);
     }
     search_recompute(s, ws);
     s.current = 0;
