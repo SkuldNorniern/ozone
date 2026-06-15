@@ -156,7 +156,7 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     // Panes
     ("ctrl+w right", "pane.split-right"),
     ("ctrl+w down", "pane.split-down"),
-    ("ctrl+shift+w", "pane.close"),
+    ("ctrl+w c", "pane.close"),
     ("ctrl+meta+right", "pane.focus-right"),
     ("ctrl+meta+left", "pane.focus-left"),
     ("ctrl+meta+down", "pane.focus-down"),

@@ -105,7 +105,7 @@ keys = "ctrl+w down"
 command = "pane.split-down"
 
 [[keymap]]
-keys = "ctrl+shift+w"
+keys = "ctrl+w c"
 command = "pane.close"
 
 [[keymap]]
