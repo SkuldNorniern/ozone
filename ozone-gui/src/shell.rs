@@ -350,8 +350,11 @@ impl FileTreeJob {
     }
 }
 
-/// Background native folder-picker dialog. Spawns a thread so the blocking OS
-/// dialog doesn't freeze the UI thread.
+/// Native folder-picker dialog.
+///
+/// macOS requires the dialog to be created on the process main thread because
+/// Aurea pumps AppKit manually instead of entering `NSApplication::run`.
+/// Other platforms keep the blocking dialog on a worker thread.
 pub(crate) struct FolderPickerJob {
     rx: Receiver<Option<PathBuf>>,
 }
@@ -359,6 +362,11 @@ pub(crate) struct FolderPickerJob {
 impl FolderPickerJob {
     pub(crate) fn spawn() -> Self {
         let (tx, rx) = channel();
+        #[cfg(target_os = "macos")]
+        {
+            let _ = tx.send(rfd::FileDialog::new().pick_folder());
+        }
+        #[cfg(not(target_os = "macos"))]
         std::thread::spawn(move || {
             let _ = tx.send(rfd::FileDialog::new().pick_folder());
         });
@@ -376,8 +384,8 @@ impl FolderPickerJob {
     }
 }
 
-/// Background native file-picker dialog. Spawns a thread so the blocking OS
-/// dialog doesn't freeze the UI thread.
+/// Native file-picker dialog. See [`FolderPickerJob`] for the macOS threading
+/// constraint.
 pub(crate) struct FileOpenJob {
     rx: Receiver<Option<PathBuf>>,
 }
@@ -385,6 +393,11 @@ pub(crate) struct FileOpenJob {
 impl FileOpenJob {
     pub(crate) fn spawn() -> Self {
         let (tx, rx) = channel();
+        #[cfg(target_os = "macos")]
+        {
+            let _ = tx.send(rfd::FileDialog::new().pick_file());
+        }
+        #[cfg(not(target_os = "macos"))]
         std::thread::spawn(move || {
             let _ = tx.send(rfd::FileDialog::new().pick_file());
         });

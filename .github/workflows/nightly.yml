@@ -75,7 +75,11 @@ jobs:
             cp "$BINARY" Ozone.app/Contents/MacOS/ozone
             cp packaging/macos/Info.plist Ozone.app/Contents/
             cp packaging/macos/ozone.icns Ozone.app/Contents/Resources/
-            zip -r "${ARCHIVE}.zip" Ozone.app
+            chmod +x Ozone.app/Contents/MacOS/ozone
+            plutil -lint Ozone.app/Contents/Info.plist
+            codesign --force --deep --sign - Ozone.app
+            codesign --verify --deep --strict --verbose=2 Ozone.app
+            ditto -c -k --sequesterRsrc --keepParent Ozone.app "${ARCHIVE}.zip"
             sha256sum "${ARCHIVE}.zip" > "${ARCHIVE}.zip.sha256"
           else
             mkdir -p dist
