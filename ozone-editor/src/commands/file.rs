@@ -67,6 +67,13 @@ pub(super) fn register_file_commands(reg: &mut CommandRegistry) {
         },
     );
     reg.register(
+        "file.open-file",
+        "Open a file via the native OS file picker",
+        |ctx| {
+            ctx.workspace.request_ui(UiIntent::OpenFilePicker);
+        },
+    );
+    reg.register(
         "buffer.picker",
         "Switch to an open buffer (fuzzy picker)",
         |ctx| {

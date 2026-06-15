@@ -613,6 +613,31 @@ impl OzoneGui {
                 state.needs_redraw = true;
             }
 
+            // --- File picker (native dialog) poll: when the native dialog
+            // closes, open the selected file as a buffer. ---
+            if let Some(selection) = state.file_open_job.as_mut().and_then(|job| job.poll()) {
+                state.file_open_job = None;
+                if let Some(path) = selection {
+                    let mut ws = lock(state.workspace.as_ref());
+                    match ws.open_file(path) {
+                        Ok(_) => dispatch_autocmds(
+                            &mut ws,
+                            &state.commands,
+                            &state.autocmds,
+                            &mut state.shell_jobs,
+                        ),
+                        Err(e) => {
+                            lock(state.notifications.as_ref()).push(
+                                NotifyLevel::Error,
+                                format!("Cannot open file: {e}"),
+                                None,
+                            );
+                        }
+                    };
+                }
+                state.needs_redraw = true;
+            }
+
             // Idle-chord timeout: a prefix left pending too long is cancelled so
             // half-typed chords can't trap input. The clock restarts whenever the
             // prefix grows (its length changes), tracked via `chord_pending_seen`.

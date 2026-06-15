@@ -27,7 +27,9 @@ use crate::overlay::picker::{
 };
 use crate::overlay::search::{SearchState, search_recompute, search_select_from_cursor};
 use crate::overlay::whichkey::WhichKeyEntry;
-use crate::shell::{FilePickerJob, FileTreeJob, FolderPickerJob, ShellJobs, WorkspaceSearchJob};
+use crate::shell::{
+    FileOpenJob, FilePickerJob, FileTreeJob, FolderPickerJob, ShellJobs, WorkspaceSearchJob,
+};
 
 /// The mutable overlay state the run loop threads into key routing + intent
 /// handling, bundled so it travels as one argument instead of four. Built
@@ -41,6 +43,7 @@ pub(crate) struct Overlays<'a> {
     pub file_picker_job: &'a mut Option<FilePickerJob>,
     pub file_tree_job: &'a mut Option<FileTreeJob>,
     pub folder_picker: &'a mut Option<FolderPickerJob>,
+    pub file_open_job: &'a mut Option<FileOpenJob>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -361,6 +364,9 @@ pub(crate) fn apply_ui_intents(
             }
             UiIntent::OpenFolderPicker => {
                 *ov.folder_picker = Some(FolderPickerJob::spawn());
+            }
+            UiIntent::OpenFilePicker => {
+                *ov.file_open_job = Some(FileOpenJob::spawn());
             }
             UiIntent::FileTree { collapsed } => {
                 let Ok(base) = std::env::current_dir() else {

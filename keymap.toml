@@ -28,7 +28,7 @@ command = "file.picker"
 
 [[keymap]]
 keys = "meta+o"
-command = "file.picker"
+command = "file.open-file"
 
 [[keymap]]
 keys = "meta+shift+o"
@@ -55,7 +55,7 @@ keys = "ctrl+shift+tab"
 command = "buffer.previous"
 
 [[keymap]]
-keys = "ctrl+x b"
+keys = "meta+b"
 command = "buffer.picker"
 
 [[keymap]]

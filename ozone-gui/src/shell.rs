@@ -352,6 +352,32 @@ impl FolderPickerJob {
     }
 }
 
+/// Background native file-picker dialog. Spawns a thread so the blocking OS
+/// dialog doesn't freeze the UI thread.
+pub(crate) struct FileOpenJob {
+    rx: Receiver<Option<PathBuf>>,
+}
+
+impl FileOpenJob {
+    pub(crate) fn spawn() -> Self {
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(rfd::FileDialog::new().pick_file());
+        });
+        Self { rx }
+    }
+
+    /// Non-blocking poll. Returns `Some(selection)` once the dialog closes
+    /// (`None` inside means the user cancelled).
+    pub(crate) fn poll(&mut self) -> Option<Option<PathBuf>> {
+        match self.rx.try_recv() {
+            Ok(selection) => Some(selection),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => Some(None),
+        }
+    }
+}
+
 /// Build the user's shell invocation for `cmd_line`: `%COMSPEC% /C` on
 /// Windows, `$SHELL -c` elsewhere (falling back to `cmd` / `sh`).
 fn shell_command(cmd_line: &str) -> Command {

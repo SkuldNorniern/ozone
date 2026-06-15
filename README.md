@@ -135,7 +135,9 @@ window title also carries the dirty marker for file buffers.
 | `Ctrl+D` | Duplicate the line or selected lines |
 | `Meta+Up` / `Meta+Down` | Move the line or selected lines |
 | `Ctrl+P` | Open workspace file picker |
-| `Ctrl+X B` | Open buffer picker |
+| `Meta+O` | Open a file via the native OS file picker |
+| `Meta+Shift+O` | Open a folder as the workspace via the native OS folder picker |
+| `Meta+B` | Open buffer picker |
 | `Ctrl+Shift+O` | Go to symbol (current buffer) |
 | `Meta+X` or `Ctrl+Shift+P` | Open command palette |
 | `Ctrl+Shift+E` | Open file tree |
