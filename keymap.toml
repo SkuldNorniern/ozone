@@ -96,13 +96,12 @@ keys = "ctrl+="
 command = "view.jump-forward"
 
 # ── Panes ──────────────────────────────────────────────────────────────────--
-# ctrl+meta+arrow focuses a pane in that direction; adding shift splits one.
 [[keymap]]
-keys = "ctrl+meta+shift+right"
+keys = "ctrl+\\"
 command = "pane.split-right"
 
 [[keymap]]
-keys = "ctrl+meta+shift+down"
+keys = "ctrl+shift+down"
 command = "pane.split-down"
 
 [[keymap]]

@@ -11,6 +11,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::time::{Duration, Instant};
 
 use ozone_buffer::BufferId;
 use ozone_editor::{
@@ -202,6 +203,11 @@ fn run(cmd_line: &str, cwd: Option<&std::path::Path>, input: Option<String>) -> 
 /// Background workspace-wide literal search job. Spawns a thread that runs
 /// `search_workspace_with_progress` and sends total file count, per-file
 /// progress, and final results back via mpsc so the UI can show a live bar.
+/// Minimum time the progress bar stays on screen, even when the search
+/// finishes within a single frame (so it's never invisible on small
+/// workspaces).
+const MIN_VISIBLE: Duration = Duration::from_millis(200);
+
 pub(crate) struct WorkspaceSearchJob {
     pub(crate) query: String,
     /// Id of the "Searching…" notification so the poller can dismiss it.
@@ -210,6 +216,10 @@ pub(crate) struct WorkspaceSearchJob {
     pub(crate) files_scanned: usize,
     /// Total files to scan; 0 until the thread sends `TotalFiles`.
     pub(crate) total_files: usize,
+    spawned_at: Instant,
+    /// Results received from the thread, held back until `MIN_VISIBLE` has
+    /// elapsed so the progress bar gets a chance to render.
+    done: Option<Vec<WorkspaceMatch>>,
 }
 
 enum WorkspaceSearchMsg {
@@ -247,10 +257,13 @@ impl WorkspaceSearchJob {
             rx,
             files_scanned: 0,
             total_files: 0,
+            spawned_at: Instant::now(),
+            done: None,
         }
     }
 
-    /// Non-blocking poll. Returns `Some(matches)` when the search is done.
+    /// Non-blocking poll. Returns `Some(matches)` once the search is done
+    /// *and* the bar has been visible for at least `MIN_VISIBLE`.
     pub(crate) fn poll(&mut self) -> Option<Vec<WorkspaceMatch>> {
         loop {
             match self.rx.try_recv() {
@@ -258,10 +271,21 @@ impl WorkspaceSearchJob {
                 Ok(WorkspaceSearchMsg::Progress(n)) => {
                     self.files_scanned = n;
                 }
-                Ok(WorkspaceSearchMsg::Done(matches)) => return Some(matches),
-                Err(TryRecvError::Empty) => return None,
-                Err(TryRecvError::Disconnected) => return Some(Vec::new()),
+                Ok(WorkspaceSearchMsg::Done(matches)) => {
+                    self.files_scanned = self.total_files;
+                    self.done = Some(matches);
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    self.done.get_or_insert_with(Vec::new);
+                    break;
+                }
             }
+        }
+        if self.done.is_some() && self.spawned_at.elapsed() >= MIN_VISIBLE {
+            self.done.take()
+        } else {
+            None
         }
     }
 }

@@ -149,9 +149,9 @@ window title also carries the dirty marker for file buffers.
 | `Ctrl+K Ctrl+L` | Toggle fold at cursor |
 | `Ctrl+K Ctrl+J` / `Ctrl+K Ctrl+0` | Fold all / open all |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous buffer |
+| `Ctrl+\` / `Ctrl+Shift+Down` | Split pane right / down |
 | `Ctrl+Shift+W` | Close active pane |
 | `Ctrl+Meta+Arrow` | Focus pane in that direction |
-| `Ctrl+Meta+Shift+Right` / `Ctrl+Meta+Shift+Down` | Split pane right / down |
 | `Ctrl+-` / `Ctrl+=` | Jump back / forward |
 | Mouse wheel | Scroll |
 
