@@ -135,6 +135,8 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("ctrl+z", "edit.undo"),
     ("ctrl+y", "edit.redo"),
     ("ctrl+p", "file.picker"),
+    ("meta+o", "file.picker"),
+    ("meta+shift+o", "file.open-folder"),
     ("ctrl+shift+e", "file.tree"),
     ("meta+x", "command.palette"),
     ("ctrl+shift+p", "command.palette"),

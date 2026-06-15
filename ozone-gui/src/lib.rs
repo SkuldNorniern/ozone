@@ -42,10 +42,3 @@ mod theme;
 pub(crate) use syntax_cache::SyntaxCache;
 
 pub use app::OzoneGui;
-
-/// Show a native OS folder-picker dialog and return the selected folder,
-/// or `None` if the user cancelled. Blocks until the dialog closes.
-/// Call this from the main thread before the editor window opens.
-pub fn pick_workspace_folder() -> Option<std::path::PathBuf> {
-    rfd::FileDialog::new().pick_folder()
-}

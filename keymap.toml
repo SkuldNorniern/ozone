@@ -27,6 +27,14 @@ keys = "ctrl+p"
 command = "file.picker"
 
 [[keymap]]
+keys = "meta+o"
+command = "file.picker"
+
+[[keymap]]
+keys = "meta+shift+o"
+command = "file.open-folder"
+
+[[keymap]]
 keys = "ctrl+shift+e"
 command = "file.tree"
 

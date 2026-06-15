@@ -58,15 +58,6 @@ fn main() {
         } else if let Err(e) = workspace.open_file(path) {
             eprintln!("ozone: cannot open file: {e}");
         }
-    } else {
-        // No path given: ask for a workspace folder via the native OS picker,
-        // like other GUI editors do on a bare launch. Cancelling just opens
-        // the editor in the current directory with an empty buffer.
-        if let Some(folder) = ozone_gui::pick_workspace_folder()
-            && let Err(e) = std::env::set_current_dir(&folder)
-        {
-            eprintln!("ozone: cannot open directory: {e}");
-        }
     }
 
     let gui = OzoneGui::with_config(workspace, config).with_startup_warnings(startup_warnings);
