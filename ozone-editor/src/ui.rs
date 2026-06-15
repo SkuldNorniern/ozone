@@ -72,6 +72,10 @@ pub enum UiIntent {
     /// The frontend reads the clipboard and re-dispatches the command with the
     /// text as its argument.
     Paste,
+    /// Run a workspace-wide literal search in the background. The frontend
+    /// spawns the search thread, shows progress while it runs, and populates a
+    /// References buffer when it finishes.
+    WorkspaceSearch { query: String },
 }
 
 /// One row of a [`UiIntent::Select`] list. Choosing it runs `command` with

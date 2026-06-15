@@ -38,4 +38,4 @@ pub use search::find_matches;
 pub use ui::{NotifyLevel, SelectItem, UiIntent};
 pub use view::{View, ViewId};
 pub use workspace::{IndentConfig, Workspace};
-pub use workspace_search::{WorkspaceMatch, search_workspace};
+pub use workspace_search::{WorkspaceMatch, search_workspace, search_workspace_with_progress};

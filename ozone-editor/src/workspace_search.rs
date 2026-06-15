@@ -46,19 +46,51 @@ impl WorkspaceMatch {
 }
 
 /// Search UTF-8 files below `base`, returning at most `result_cap` matches.
+/// Skips binary files (any null byte in the first 8 KiB).
 pub fn search_workspace(
     base: &Path,
     query: &str,
     file_cap: usize,
     result_cap: usize,
 ) -> Vec<WorkspaceMatch> {
+    search_workspace_inner(base, query, file_cap, result_cap, None)
+}
+
+/// Like [`search_workspace`] but calls `on_progress(files_scanned)` after
+/// each file so callers can report progress without re-scanning.
+pub fn search_workspace_with_progress(
+    base: &Path,
+    query: &str,
+    file_cap: usize,
+    result_cap: usize,
+    on_progress: impl Fn(usize),
+) -> Vec<WorkspaceMatch> {
+    search_workspace_inner(base, query, file_cap, result_cap, Some(&on_progress))
+}
+
+fn search_workspace_inner(
+    base: &Path,
+    query: &str,
+    file_cap: usize,
+    result_cap: usize,
+    on_progress: Option<&dyn Fn(usize)>,
+) -> Vec<WorkspaceMatch> {
     if query.is_empty() || result_cap == 0 {
         return Vec::new();
     }
 
     let mut results = Vec::new();
-    for relative in collect_workspace_files(base, file_cap) {
-        let Ok(text) = fs::read_to_string(base.join(&relative)) else {
+    for (idx, relative) in collect_workspace_files(base, file_cap)
+        .into_iter()
+        .enumerate()
+    {
+        let Ok(bytes) = fs::read(base.join(&relative)) else {
+            continue;
+        };
+        if looks_like_binary(&bytes) {
+            continue;
+        }
+        let Ok(text) = std::str::from_utf8(&bytes) else {
             continue;
         };
         for (line, content) in text.lines().enumerate() {
@@ -74,8 +106,16 @@ pub fn search_workspace(
                 }
             }
         }
+        if let Some(cb) = on_progress {
+            cb(idx + 1);
+        }
     }
     results
+}
+
+/// Returns `true` if `bytes` looks like a binary file (null byte in first 8 KiB).
+fn looks_like_binary(bytes: &[u8]) -> bool {
+    bytes.iter().take(8192).any(|&b| b == 0)
 }
 
 #[cfg(test)]

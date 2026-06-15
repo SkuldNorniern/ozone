@@ -539,6 +539,32 @@ impl OzoneGui {
                 }
             }
 
+            // --- Workspace search poll: when the background search thread
+            // finishes, open a References buffer with the results and dismiss
+            // the "Searching…" notification. ---
+            if let Some(matches) = state.workspace_search.as_mut().and_then(|job| job.poll()) {
+                let job = state.workspace_search.take().unwrap();
+                lock(state.notifications.as_ref()).dismiss(job.notif_id);
+                let count = matches.len();
+                let query = job.query;
+                let mut content = format!("Workspace search: {query}\n{count} match(es)\n\n");
+                for hit in &matches {
+                    content.push_str(&hit.display());
+                    content.push('\n');
+                }
+                let mut ws = lock(state.workspace.as_ref());
+                ws.push_jump();
+                ws.open_virtual_buffer(BufferKind::References, content);
+                drop(ws);
+                let msg = if count == 0 {
+                    format!("No matches for '{query}'")
+                } else {
+                    format!("Found {count} match(es) for '{query}'")
+                };
+                lock(state.notifications.as_ref()).push(NotifyLevel::Info, msg, None);
+                state.needs_redraw = true;
+            }
+
             // Idle-chord timeout: a prefix left pending too long is cancelled so
             // half-typed chords can't trap input. The clock restarts whenever the
             // prefix grows (its length changes), tracked via `chord_pending_seen`.

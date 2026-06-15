@@ -28,7 +28,7 @@ use crate::overlay::picker::{
 };
 use crate::overlay::search::{SearchState, search_recompute, search_select_from_cursor};
 use crate::overlay::whichkey::WhichKeyEntry;
-use crate::shell::ShellJobs;
+use crate::shell::{ShellJobs, WorkspaceSearchJob};
 
 /// The mutable overlay state the run loop threads into key routing + intent
 /// handling, bundled so it travels as one argument instead of four. Built
@@ -38,6 +38,7 @@ pub(crate) struct Overlays<'a> {
     pub search: &'a mut Option<SearchState>,
     pub minibuffer: &'a mut Option<Minibuffer>,
     pub notifications: &'a mut Notifications,
+    pub workspace_search: &'a mut Option<WorkspaceSearchJob>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -330,6 +331,21 @@ pub(crate) fn apply_ui_intents(
                     ctx = ctx.with_arg(Some(text));
                     reg.execute("edit.paste", &mut ctx);
                 }
+            }
+            UiIntent::WorkspaceSearch { query } => {
+                let Ok(base) = std::env::current_dir() else {
+                    ws.notify(
+                        ozone_editor::NotifyLevel::Error,
+                        "Cannot determine workspace directory",
+                    );
+                    continue;
+                };
+                let notif_id = ov.notifications.push(
+                    ozone_editor::NotifyLevel::Info,
+                    format!("Searching for '{query}'…"),
+                    Some(u64::MAX),
+                );
+                *ov.workspace_search = Some(WorkspaceSearchJob::spawn(base, query, notif_id));
             }
         }
     }

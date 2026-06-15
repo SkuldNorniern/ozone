@@ -7,11 +7,15 @@
 //! notifications.
 
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use ozone_buffer::BufferId;
-use ozone_editor::{NotifyLevel, Workspace};
+use ozone_editor::{
+    NotifyLevel, Workspace, WorkspaceMatch,
+    workspace_search::{MAX_SEARCH_FILES, MAX_SEARCH_RESULTS, search_workspace_with_progress},
+};
 
 /// What to do with a job's output once it finishes.
 enum JobKind {
@@ -189,6 +193,66 @@ fn run(cmd_line: &str, cwd: Option<&std::path::Path>, input: Option<String>) -> 
             stdout: String::new(),
             stderr: format!("failed ({e})"),
         },
+    }
+}
+
+/// Background workspace-wide literal search job. Spawns a thread that runs
+/// `search_workspace` and sends results + periodic file counts back via mpsc.
+pub(crate) struct WorkspaceSearchJob {
+    pub(crate) query: String,
+    /// Id of the "Searching…" notification so the poller can dismiss it.
+    pub(crate) notif_id: u64,
+    rx: Receiver<WorkspaceSearchMsg>,
+    /// Last file count received from the background thread, for progress display.
+    pub(crate) files_scanned: usize,
+}
+
+enum WorkspaceSearchMsg {
+    Progress(usize),
+    Done(Vec<WorkspaceMatch>),
+}
+
+impl WorkspaceSearchJob {
+    pub(crate) fn spawn(base: PathBuf, query: String, notif_id: u64) -> Self {
+        let (tx, rx) = channel();
+        let q = query.clone();
+        let progress_tx = tx.clone();
+        std::thread::spawn(move || {
+            let matches = search_workspace_with_progress(
+                &base,
+                &q,
+                MAX_SEARCH_FILES,
+                MAX_SEARCH_RESULTS,
+                |n| {
+                    // Send a progress update roughly every 100 files without
+                    // flooding the channel; ignore send errors (poller dropped).
+                    if n % 100 == 0 {
+                        let _ = progress_tx.send(WorkspaceSearchMsg::Progress(n));
+                    }
+                },
+            );
+            let _ = tx.send(WorkspaceSearchMsg::Done(matches));
+        });
+        Self {
+            query,
+            notif_id,
+            rx,
+            files_scanned: 0,
+        }
+    }
+
+    /// Non-blocking poll. Returns `Some(matches)` when the search is done.
+    pub(crate) fn poll(&mut self) -> Option<Vec<WorkspaceMatch>> {
+        loop {
+            match self.rx.try_recv() {
+                Ok(WorkspaceSearchMsg::Progress(n)) => {
+                    self.files_scanned = n;
+                }
+                Ok(WorkspaceSearchMsg::Done(matches)) => return Some(matches),
+                Err(TryRecvError::Empty) => return None,
+                Err(TryRecvError::Disconnected) => return Some(Vec::new()),
+            }
+        }
     }
 }
 

@@ -99,6 +99,12 @@ impl Notifications {
         id
     }
 
+    /// Remove a notification by id (e.g. a "searching…" toast posted with an
+    /// indefinite TTL that should vanish once the background job finishes).
+    pub(crate) fn dismiss(&mut self, id: u64) {
+        self.items.retain(|n| n.id != id);
+    }
+
     /// Drop expired notifications. Returns whether the list changed (so the run
     /// loop knows to repaint).
     pub(crate) fn tick(&mut self) -> bool {
