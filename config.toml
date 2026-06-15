@@ -37,3 +37,5 @@ name = "brewery-stout"        # bundled name, or a path to a custom .toml
 [ui]
 mouse = true                  # click to place cursor / drag-select; off = keyboard-only
 indent_guides = true          # draw vertical lines at each indent level
+hardware_acceleration = false # GPU (ZenGPU/Vulkan) rendering; needs a build with the
+                              # `zengpu` feature. Override: --gpu/--no-gpu, OZONE_GPU=1

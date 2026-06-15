@@ -178,6 +178,11 @@ pub struct UiConfig {
     pub mouse: bool,
     /// Draw vertical lines at each indentation level in text buffers.
     pub indent_guides: bool,
+    /// Use the GPU rendering backend (aurea's ZenGPU/Vulkan path) instead of the
+    /// CPU rasterizer. Off by default — GPU is opt-in. Only takes effect when the
+    /// binary is built with the `zengpu` feature; otherwise the CPU backend is
+    /// used regardless. Overridden by `--gpu`/`--no-gpu` and `OZONE_GPU`.
+    pub hardware_acceleration: bool,
 }
 
 impl Default for UiConfig {
@@ -185,6 +190,7 @@ impl Default for UiConfig {
         Self {
             mouse: false,
             indent_guides: true,
+            hardware_acceleration: false,
         }
     }
 }
@@ -311,6 +317,12 @@ impl Config {
             }
             if let Some(v) = ui.get("indent_guides").and_then(|v| v.as_bool()) {
                 config.ui.indent_guides = v;
+            }
+            if let Some(v) = ui
+                .get("hardware_acceleration")
+                .and_then(|v| v.as_bool())
+            {
+                config.ui.hardware_acceleration = v;
             }
         }
 
@@ -579,6 +591,7 @@ mod tests {
 
             [ui]
             mouse = true
+            hardware_acceleration = true
         "#,
         );
         assert_eq!(c.editor.font, "JetBrains Mono");
@@ -591,6 +604,14 @@ mod tests {
         assert_eq!(c.editor.jump_list_size, 42);
         assert_eq!(c.theme, "gruvbox");
         assert!(c.ui.mouse);
+        assert!(c.ui.hardware_acceleration);
+    }
+
+    #[test]
+    fn hardware_acceleration_defaults_off() {
+        let c = Config::parse_str("[ui]\nmouse = true\n");
+        assert!(c.ui.mouse);
+        assert!(!c.ui.hardware_acceleration, "GPU is opt-in");
     }
 
     #[test]
