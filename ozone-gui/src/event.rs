@@ -25,7 +25,7 @@ use crate::overlay::notify::Notifications;
 use crate::overlay::picker::{PickerState, handle_palette_key};
 use crate::overlay::search::{SearchState, handle_search_key, search_input_text, search_jump};
 use crate::overlay::whichkey::WhichKeyView;
-use crate::shell::{ShellJobs, WorkspaceSearchJob};
+use crate::shell::{FilePickerJob, FileTreeJob, FolderPickerJob, ShellJobs, WorkspaceSearchJob};
 use crate::statusbar::buffer_dot_at;
 use crate::terminals::Terminals;
 use crate::{ImageCache, OzoneGui, SyntaxCache, lock};
@@ -78,6 +78,12 @@ pub(crate) struct AppState {
     pub(crate) shell_jobs: ShellJobs,
     /// In-flight background workspace search, if one is running.
     pub(crate) workspace_search: Option<WorkspaceSearchJob>,
+    /// In-flight background file-picker scan, if one is running.
+    pub(crate) file_picker_job: Option<FilePickerJob>,
+    /// In-flight background file-tree build, if one is running.
+    pub(crate) file_tree_job: Option<FileTreeJob>,
+    /// In-flight native folder-picker dialog, if one is open.
+    pub(crate) folder_picker: Option<FolderPickerJob>,
     pub(crate) syntax_cache: SyntaxCache,
     pub(crate) cursor_visible: bool,
     pub(crate) last_cursor_blink: Instant,
@@ -144,6 +150,9 @@ impl AppState {
             lsp: Lsp::new(),
             shell_jobs: ShellJobs::new(),
             workspace_search: None,
+            file_picker_job: None,
+            file_tree_job: None,
+            folder_picker: None,
             syntax_cache: SyntaxCache::new(),
             cursor_visible: true,
             last_cursor_blink: Instant::now(),
@@ -319,6 +328,9 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                         minibuffer: &mut minibuffer,
                         notifications: &mut notifications,
                         workspace_search: &mut state.workspace_search,
+                        file_picker_job: &mut state.file_picker_job,
+                        file_tree_job: &mut state.file_tree_job,
+                        folder_picker: &mut state.folder_picker,
                     },
                     &state.buffer_mru,
                     &mut state.lsp,
@@ -346,6 +358,9 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                         minibuffer: &mut minibuffer,
                         notifications: &mut notifications,
                         workspace_search: &mut state.workspace_search,
+                        file_picker_job: &mut state.file_picker_job,
+                        file_tree_job: &mut state.file_tree_job,
+                        folder_picker: &mut state.folder_picker,
                     },
                     &state.buffer_mru,
                     &mut state.lsp,
@@ -386,6 +401,9 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                         minibuffer: &mut minibuffer,
                         notifications: &mut notifications,
                         workspace_search: &mut state.workspace_search,
+                        file_picker_job: &mut state.file_picker_job,
+                        file_tree_job: &mut state.file_tree_job,
+                        folder_picker: &mut state.folder_picker,
                     },
                     &state.buffer_mru,
                     &mut state.lsp,

@@ -185,11 +185,7 @@ fn is_ignored_name(name: &str) -> bool {
     matches!(name, "target" | "node_modules" | ".git" | ".hg" | ".svn") || name.starts_with('.')
 }
 
-pub(super) fn workspace_tree_buffer(
-    base: &Path,
-    collapsed: &HashSet<String>,
-    cap: usize,
-) -> String {
+pub fn workspace_tree_buffer(base: &Path, collapsed: &HashSet<String>, cap: usize) -> String {
     let root_name = base
         .file_name()
         .and_then(|n| n.to_str())

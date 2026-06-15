@@ -77,6 +77,21 @@ impl PickerState {
         }
     }
 
+    /// Whether this picker is the workspace file picker (`find file:` prompt).
+    /// Used to target a late-arriving [`FilePickerJob`](crate::shell::FilePickerJob)
+    /// result at the right picker, in case the user switched pickers while it
+    /// was still scanning.
+    pub(crate) fn is_file_picker(&self) -> bool {
+        self.prompt == "find file:"
+    }
+
+    /// Replace the full item set (e.g. once a background scan finishes),
+    /// re-applying the current query to the new items.
+    pub(crate) fn replace_items(&mut self, all: Vec<PickerItem>) {
+        self.all = all;
+        self.refilter();
+    }
+
     pub(crate) fn push(&mut self, c: char) {
         self.query.push(c);
         self.refilter();
@@ -135,22 +150,6 @@ pub(crate) fn command_picker_items(reg: &CommandRegistry) -> Vec<PickerItem> {
         .collect();
     v.sort_by(|a, b| a.display.cmp(&b.display));
     v
-}
-
-/// Workspace files as picker items (relative paths, opened on commit).
-pub(crate) fn file_picker_items() -> Vec<PickerItem> {
-    let Ok(base) = std::env::current_dir() else {
-        return Vec::new();
-    };
-    ozone_editor::commands::collect_workspace_files(&base, 5000)
-        .into_iter()
-        .map(|rel| PickerItem {
-            haystack: rel.to_lowercase(),
-            display: rel.clone(),
-            detail: String::new(),
-            action: PickerAction::OpenFile(base.join(&rel)),
-        })
-        .collect()
 }
 
 /// Open buffers as picker items, in most-recently-used order (`mru` lists the
@@ -269,8 +268,10 @@ pub(crate) fn handle_palette_key(
                 },
                 Some(PickerAction::ApplyTheme(name)) => {
                     if activate(&name) {
-                        // Persist the choice so it survives a restart.
-                        persist_theme_name(&name);
+                        // Persist the choice so it survives a restart. Done on a
+                        // background thread: this reads + rewrites the user
+                        // config file and must not block the UI thread.
+                        std::thread::spawn(move || persist_theme_name(&name));
                     }
                 }
                 Some(PickerAction::OpenFile(path)) => {

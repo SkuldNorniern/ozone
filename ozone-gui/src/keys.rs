@@ -23,12 +23,11 @@ use crate::lsp::Lsp;
 use crate::overlay::minibuffer::Minibuffer;
 use crate::overlay::notify::Notifications;
 use crate::overlay::picker::{
-    PickerState, buffer_picker_items, command_picker_items, file_picker_items, select_picker_items,
-    theme_picker_items,
+    PickerState, buffer_picker_items, command_picker_items, select_picker_items, theme_picker_items,
 };
 use crate::overlay::search::{SearchState, search_recompute, search_select_from_cursor};
 use crate::overlay::whichkey::WhichKeyEntry;
-use crate::shell::{ShellJobs, WorkspaceSearchJob};
+use crate::shell::{FilePickerJob, FileTreeJob, FolderPickerJob, ShellJobs, WorkspaceSearchJob};
 
 /// The mutable overlay state the run loop threads into key routing + intent
 /// handling, bundled so it travels as one argument instead of four. Built
@@ -39,6 +38,9 @@ pub(crate) struct Overlays<'a> {
     pub minibuffer: &'a mut Option<Minibuffer>,
     pub notifications: &'a mut Notifications,
     pub workspace_search: &'a mut Option<WorkspaceSearchJob>,
+    pub file_picker_job: &'a mut Option<FilePickerJob>,
+    pub file_tree_job: &'a mut Option<FileTreeJob>,
+    pub folder_picker: &'a mut Option<FolderPickerJob>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -279,7 +281,17 @@ pub(crate) fn apply_ui_intents(
                 *ov.palette = Some(PickerState::new("M-x", command_picker_items(reg)));
             }
             UiIntent::FilePicker => {
-                *ov.palette = Some(PickerState::new("find file:", file_picker_items()));
+                let Ok(base) = std::env::current_dir() else {
+                    ws.notify(
+                        ozone_editor::NotifyLevel::Error,
+                        "Cannot determine workspace directory",
+                    );
+                    continue;
+                };
+                // Open immediately with no items; the background scan fills
+                // them in once it finishes (see FilePickerJob poll in app.rs).
+                *ov.palette = Some(PickerState::new("find file:", Vec::new()));
+                *ov.file_picker_job = Some(FilePickerJob::spawn(base));
             }
             UiIntent::BufferPicker => {
                 let items = buffer_picker_items(ws, mru);
@@ -346,6 +358,19 @@ pub(crate) fn apply_ui_intents(
                     Some(u64::MAX),
                 );
                 *ov.workspace_search = Some(WorkspaceSearchJob::spawn(base, query, notif_id));
+            }
+            UiIntent::OpenFolderPicker => {
+                *ov.folder_picker = Some(FolderPickerJob::spawn());
+            }
+            UiIntent::FileTree { collapsed } => {
+                let Ok(base) = std::env::current_dir() else {
+                    ws.notify(
+                        ozone_editor::NotifyLevel::Error,
+                        "Cannot determine workspace directory",
+                    );
+                    continue;
+                };
+                *ov.file_tree_job = Some(FileTreeJob::spawn(base, collapsed));
             }
         }
     }

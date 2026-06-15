@@ -6,6 +6,7 @@
 //! (replace buffer text / reload from disk), and surfaces stdout/stderr via
 //! notifications.
 
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -16,6 +17,8 @@ use ozone_editor::{
     NotifyLevel, Workspace, WorkspaceMatch,
     workspace_search::{MAX_SEARCH_FILES, MAX_SEARCH_RESULTS, search_workspace_with_progress},
 };
+
+use crate::overlay::picker::{PickerAction, PickerItem};
 
 /// What to do with a job's output once it finishes.
 enum JobKind {
@@ -259,6 +262,92 @@ impl WorkspaceSearchJob {
                 Err(TryRecvError::Empty) => return None,
                 Err(TryRecvError::Disconnected) => return Some(Vec::new()),
             }
+        }
+    }
+}
+
+/// Background file-picker scan. Spawns a thread that walks the workspace and
+/// builds picker items, so opening the file picker never blocks the UI thread.
+pub(crate) struct FilePickerJob {
+    rx: Receiver<Vec<PickerItem>>,
+}
+
+impl FilePickerJob {
+    pub(crate) fn spawn(base: PathBuf) -> Self {
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let items = ozone_editor::commands::collect_workspace_files(&base, 5000)
+                .into_iter()
+                .map(|rel| PickerItem {
+                    haystack: rel.to_lowercase(),
+                    display: rel.clone(),
+                    detail: String::new(),
+                    action: PickerAction::OpenFile(base.join(&rel)),
+                })
+                .collect();
+            let _ = tx.send(items);
+        });
+        Self { rx }
+    }
+
+    /// Non-blocking poll. Returns `Some(items)` when the scan is done.
+    pub(crate) fn poll(&mut self) -> Option<Vec<PickerItem>> {
+        match self.rx.try_recv() {
+            Ok(items) => Some(items),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => Some(Vec::new()),
+        }
+    }
+}
+
+/// Background file-tree build. Spawns a thread that walks the workspace and
+/// renders the tree text, so opening/refreshing the tree never blocks the UI.
+pub(crate) struct FileTreeJob {
+    rx: Receiver<String>,
+}
+
+impl FileTreeJob {
+    pub(crate) fn spawn(base: PathBuf, collapsed: HashSet<String>) -> Self {
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let content = ozone_editor::commands::workspace_tree_buffer(&base, &collapsed, 10_000);
+            let _ = tx.send(content);
+        });
+        Self { rx }
+    }
+
+    /// Non-blocking poll. Returns `Some(content)` when the build is done.
+    pub(crate) fn poll(&mut self) -> Option<String> {
+        match self.rx.try_recv() {
+            Ok(content) => Some(content),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => Some(String::new()),
+        }
+    }
+}
+
+/// Background native folder-picker dialog. Spawns a thread so the blocking OS
+/// dialog doesn't freeze the UI thread.
+pub(crate) struct FolderPickerJob {
+    rx: Receiver<Option<PathBuf>>,
+}
+
+impl FolderPickerJob {
+    pub(crate) fn spawn() -> Self {
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(rfd::FileDialog::new().pick_folder());
+        });
+        Self { rx }
+    }
+
+    /// Non-blocking poll. Returns `Some(selection)` once the dialog closes
+    /// (`None` inside means the user cancelled).
+    pub(crate) fn poll(&mut self) -> Option<Option<PathBuf>> {
+        match self.rx.try_recv() {
+            Ok(selection) => Some(selection),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => Some(None),
         }
     }
 }

@@ -567,6 +567,52 @@ impl OzoneGui {
                 state.needs_redraw = true;
             }
 
+            // --- File picker poll: fill in the picker's items once the
+            // background workspace scan finishes. Only applies them if the
+            // file picker is still the open overlay (the user may have closed
+            // it or opened something else in the meantime). ---
+            if let Some(items) = state.file_picker_job.as_mut().and_then(|job| job.poll()) {
+                state.file_picker_job = None;
+                let mut palette = lock(state.palette.as_ref());
+                if let Some(picker) = palette.as_mut()
+                    && picker.is_file_picker()
+                {
+                    picker.replace_items(items);
+                }
+                state.needs_redraw = true;
+            }
+
+            // --- File tree poll: open/refresh the FileTree buffer once the
+            // background build finishes. ---
+            if let Some(content) = state.file_tree_job.as_mut().and_then(|job| job.poll()) {
+                state.file_tree_job = None;
+                let mut ws = lock(state.workspace.as_ref());
+                ws.open_virtual_buffer(BufferKind::FileTree, content);
+                state.needs_redraw = true;
+            }
+
+            // --- Folder picker poll: when the native dialog closes, switch the
+            // workspace's working directory to the selected folder (file
+            // picker/tree/search all resolve relative to it). ---
+            if let Some(selection) = state.folder_picker.as_mut().and_then(|job| job.poll()) {
+                state.folder_picker = None;
+                if let Some(folder) = selection {
+                    match std::env::set_current_dir(&folder) {
+                        Ok(()) => lock(state.notifications.as_ref()).push(
+                            NotifyLevel::Info,
+                            format!("Workspace: {}", folder.display()),
+                            None,
+                        ),
+                        Err(e) => lock(state.notifications.as_ref()).push(
+                            NotifyLevel::Error,
+                            format!("Cannot open directory: {e}"),
+                            None,
+                        ),
+                    };
+                }
+                state.needs_redraw = true;
+            }
+
             // Idle-chord timeout: a prefix left pending too long is cancelled so
             // half-typed chords can't trap input. The clock restarts whenever the
             // prefix grows (its length changes), tracked via `chord_pending_seen`.

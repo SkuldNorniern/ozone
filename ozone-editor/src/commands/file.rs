@@ -56,15 +56,16 @@ pub(super) fn register_file_commands(reg: &mut CommandRegistry) {
         ctx.workspace.request_ui(UiIntent::FilePicker);
     });
     reg.register("file.tree", "Open the workspace file tree", |ctx| {
-        let Ok(base) = env::current_dir() else {
-            ctx.workspace
-                .notify(NotifyLevel::Error, "Cannot determine workspace directory");
-            return;
-        };
-        let content = workspace_tree_buffer(&base, &ctx.workspace.tree_collapsed, 10_000);
-        ctx.workspace
-            .open_virtual_buffer(BufferKind::FileTree, content);
+        let collapsed = ctx.workspace.tree_collapsed.clone();
+        ctx.workspace.request_ui(UiIntent::FileTree { collapsed });
     });
+    reg.register(
+        "file.open-folder",
+        "Open a folder as the workspace via the native OS folder picker",
+        |ctx| {
+            ctx.workspace.request_ui(UiIntent::OpenFolderPicker);
+        },
+    );
     reg.register(
         "buffer.picker",
         "Switch to an open buffer (fuzzy picker)",

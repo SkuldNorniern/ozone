@@ -76,6 +76,15 @@ pub enum UiIntent {
     /// spawns the search thread, shows progress while it runs, and populates a
     /// References buffer when it finishes.
     WorkspaceSearch { query: String },
+    /// Open a native OS folder-picker dialog. When a folder is selected the
+    /// editor changes its working directory, as if that folder had been passed
+    /// on the CLI. Cancelled → no change.
+    OpenFolderPicker,
+    /// Build the workspace file tree in the background and open it as a
+    /// FileTree buffer. The collapsed-directory set is captured at command time.
+    FileTree {
+        collapsed: std::collections::HashSet<String>,
+    },
 }
 
 /// One row of a [`UiIntent::Select`] list. Choosing it runs `command` with
