@@ -318,10 +318,7 @@ impl Config {
             if let Some(v) = ui.get("indent_guides").and_then(|v| v.as_bool()) {
                 config.ui.indent_guides = v;
             }
-            if let Some(v) = ui
-                .get("hardware_acceleration")
-                .and_then(|v| v.as_bool())
-            {
+            if let Some(v) = ui.get("hardware_acceleration").and_then(|v| v.as_bool()) {
                 config.ui.hardware_acceleration = v;
             }
         }

@@ -88,25 +88,22 @@ fn search_files(
 ) -> Vec<WorkspaceMatch> {
     let mut results = Vec::new();
     for (idx, relative) in files.iter().enumerate() {
-        let Ok(bytes) = fs::read(base.join(relative)) else {
-            continue;
-        };
-        if looks_like_binary(&bytes) {
-            continue;
-        }
-        let Ok(text) = std::str::from_utf8(&bytes) else {
-            continue;
-        };
-        for (line, content) in text.lines().enumerate() {
-            for column in find_matches(content, query, false) {
-                results.push(WorkspaceMatch {
-                    path: PathBuf::from(relative),
-                    line,
-                    column,
-                    preview: content.trim().to_string(),
-                });
-                if results.len() >= result_cap {
-                    return results;
+        if let Ok(bytes) = fs::read(base.join(relative))
+            && !looks_like_binary(&bytes)
+            && let Ok(text) = std::str::from_utf8(&bytes)
+        {
+            for (line, content) in text.lines().enumerate() {
+                for column in find_matches(content, query, false) {
+                    results.push(WorkspaceMatch {
+                        path: PathBuf::from(relative),
+                        line,
+                        column,
+                        preview: content.trim().to_string(),
+                    });
+                    if results.len() >= result_cap {
+                        on_progress(idx + 1);
+                        return results;
+                    }
                 }
             }
         }
@@ -122,6 +119,7 @@ fn looks_like_binary(bytes: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::env;
     use std::fs;
     use std::process;
@@ -171,6 +169,28 @@ mod tests {
         fs::write(base.join("many.txt"), "x x x x x").unwrap();
 
         assert_eq!(search_workspace(&base, "x", 100, 3).len(), 3);
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn reports_progress_for_skipped_files() {
+        let base =
+            env::temp_dir().join(format!("ozone_workspace_search_progress_{}", process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        fs::write(base.join("binary.bin"), b"needle\0").unwrap();
+        fs::write(base.join("text.txt"), "needle").unwrap();
+
+        let files = vec!["binary.bin".to_string(), "text.txt".to_string()];
+        let progress = RefCell::new(Vec::new());
+        let hits = search_files(&files, &base, "needle", 100, &|scanned| {
+            progress.borrow_mut().push(scanned);
+        });
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].path, PathBuf::from("text.txt"));
+        assert_eq!(*progress.borrow(), vec![1, 2]);
 
         let _ = fs::remove_dir_all(&base);
     }
