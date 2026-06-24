@@ -76,8 +76,9 @@ jobs:
             plutil -lint Ozone.app/Contents/Info.plist
             codesign --force --deep --sign - Ozone.app
             codesign --verify --deep --strict --verbose=2 Ozone.app
-            ditto -c -k --sequesterRsrc --keepParent Ozone.app "${ARCHIVE}.zip"
-            sha256sum "${ARCHIVE}.zip" > "${ARCHIVE}.zip.sha256"
+            hdiutil create -volname "Ozone" -srcfolder Ozone.app \
+              -ov -format UDZO "${ARCHIVE}.dmg"
+            sha256sum "${ARCHIVE}.dmg" > "${ARCHIVE}.dmg.sha256"
           else
             mkdir -p dist
             cp "$BINARY" dist/ozone
@@ -96,6 +97,8 @@ jobs:
             *.tar.gz.sha256
             *.zip
             *.zip.sha256
+            *.dmg
+            *.dmg.sha256
           if-no-files-found: error
 
   release:
@@ -163,6 +166,7 @@ jobs:
           files: |
             artifacts/*.tar.gz
             artifacts/*.zip
+            artifacts/*.dmg
             checksums.sha256
 
       - name: Update release notes with changelog and downloads table
