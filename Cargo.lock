@@ -233,7 +233,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "aurea"
 version = "0.0.2"
-source = "git+https://github.com/SkuldNorniern/aurea#fd74ea527e90bdfe62b65e758b3d0a87d3c8f1f4"
+source = "git+https://github.com/SkuldNorniern/aurea#fdc5a1d9fd98552fde59b0e35eb2be53343c1cec"
 dependencies = [
  "aurea-animation",
  "aurea-ffi",
@@ -253,12 +253,12 @@ dependencies = [
 [[package]]
 name = "aurea-animation"
 version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/aurea#fd74ea527e90bdfe62b65e758b3d0a87d3c8f1f4"
+source = "git+https://github.com/SkuldNorniern/aurea#fdc5a1d9fd98552fde59b0e35eb2be53343c1cec"
 
 [[package]]
 name = "aurea-ffi"
 version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/aurea#fd74ea527e90bdfe62b65e758b3d0a87d3c8f1f4"
+source = "git+https://github.com/SkuldNorniern/aurea#fdc5a1d9fd98552fde59b0e35eb2be53343c1cec"
 dependencies = [
  "cc",
  "pkg-config",
@@ -267,12 +267,12 @@ dependencies = [
 [[package]]
 name = "aurea-foundation"
 version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/aurea#fd74ea527e90bdfe62b65e758b3d0a87d3c8f1f4"
+source = "git+https://github.com/SkuldNorniern/aurea#fdc5a1d9fd98552fde59b0e35eb2be53343c1cec"
 
 [[package]]
 name = "aurea-render"
 version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/aurea#fd74ea527e90bdfe62b65e758b3d0a87d3c8f1f4"
+source = "git+https://github.com/SkuldNorniern/aurea#fdc5a1d9fd98552fde59b0e35eb2be53343c1cec"
 dependencies = [
  "aurea-foundation",
  "dwrote",
@@ -288,7 +288,7 @@ dependencies = [
 [[package]]
 name = "aurea-runtime"
 version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/aurea#fd74ea527e90bdfe62b65e758b3d0a87d3c8f1f4"
+source = "git+https://github.com/SkuldNorniern/aurea#fdc5a1d9fd98552fde59b0e35eb2be53343c1cec"
 dependencies = [
  "aurea-foundation",
  "log",
@@ -536,7 +536,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1651,7 +1651,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2007,7 +2007,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2189,7 +2189,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset 0.9.1",
  "tempfile",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2412,7 +2412,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
