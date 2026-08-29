@@ -23,7 +23,6 @@ pub(crate) fn editor_font(config: &Config) -> Font {
 
 mod actions;
 mod app;
-mod canvas;
 mod components;
 mod event;
 mod input;

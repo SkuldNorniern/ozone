@@ -11,7 +11,7 @@ use ozone_editor::{
 };
 
 use crate::actions::dispatch_autocmds;
-use crate::canvas::{SendableCanvas, SharedCanvas};
+use aurea::render::SharedCanvas;
 use crate::event::{AppState, EventResult, handle_window_event};
 use crate::input::ActiveMods;
 use crate::keys::{
@@ -435,11 +435,11 @@ impl OzoneGui {
             Ok(())
         })?;
 
-        let canvas_arc = Arc::new(Mutex::new(SendableCanvas(raw_canvas)));
-        window.set_content(SharedCanvas(canvas_arc.clone()))?;
+        let canvas_arc = SharedCanvas::new(raw_canvas);
+        window.set_content(canvas_arc.clone())?;
 
         {
-            let mut canvas = lock(canvas_arc.as_ref());
+            let mut canvas = canvas_arc.get();
             let mut ws = lock(self.workspace.as_ref());
             let config = self.config.clone();
             let welcome_bindings = welcome_keymap_rows(&self.keymap, &self.commands);
@@ -743,7 +743,7 @@ impl OzoneGui {
                 let comp = lock(state.completion.as_ref());
                 let notes = lock(state.notifications.as_ref());
                 let mut ws = lock(state.workspace.as_ref());
-                let mut canvas = lock(state.canvas.as_ref());
+                let mut canvas = state.canvas.get();
                 let imgs = lock(state.images.as_ref());
                 let config = state.config.clone();
                 let active_mods = ActiveMods::from_physical(state.live_mods, &state.modmap);

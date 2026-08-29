@@ -8,7 +8,7 @@ use ozone_buffer::{BufferId, BufferKind};
 use ozone_editor::{KeyStroke, Workspace};
 
 use crate::actions::{apply_auto_save, dispatch_autocmds, handle_minibuffer_key, insert_text_raw};
-use crate::canvas::SendableCanvas;
+use aurea::render::SharedCanvas;
 use crate::input::{
     ActiveMods, corrected_mods, keycode_to_char, merge_live_mods, terminal_key_bytes,
 };
@@ -53,7 +53,7 @@ pub(crate) struct AppState {
     /// Which-key view-model shared with the canvas draw callback (the frame the
     /// scheduler actually presents).
     pub(crate) which_key: Arc<Mutex<WhichKeyView>>,
-    pub(crate) canvas: Arc<Mutex<SendableCanvas>>,
+    pub(crate) canvas: SharedCanvas,
     pub(crate) last_title: String,
     pub(crate) chord_pending: Vec<KeyStroke>,
     /// When the current `chord_pending` prefix was last extended, for the
@@ -118,7 +118,7 @@ impl AppState {
         notifications: Arc<Mutex<Notifications>>,
         completion: Arc<Mutex<Option<CompletionState>>>,
         which_key: Arc<Mutex<WhichKeyView>>,
-        canvas: Arc<Mutex<SendableCanvas>>,
+        canvas: SharedCanvas,
         images: Arc<Mutex<ImageCache>>,
         window_width: u32,
         window_height: u32,
@@ -547,7 +547,7 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                         state.cursor_activity = true;
                     }
                 } else {
-                    let canvas = lock(state.canvas.as_ref());
+                    let canvas = state.canvas.get();
                     let _ = canvas.handle_hover(x, y);
                 }
             }
@@ -566,7 +566,7 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                 state.needs_redraw = true;
             }
             {
-                let canvas = lock(state.canvas.as_ref());
+                let canvas = state.canvas.get();
                 let _ = canvas.handle_click(x, y);
             }
             let overlays_open = lock(state.palette.as_ref()).is_some()
@@ -576,7 +576,7 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
                 // Use canvas dimensions (same source as rendering) so that dot
                 // centers in hit-testing match their drawn positions exactly.
                 let (width, height) = {
-                    let cv = lock(state.canvas.as_ref());
+                    let cv = state.canvas.get();
                     (cv.width() as f32, cv.height() as f32)
                 };
                 let mut workspace = lock(state.workspace.as_ref());
