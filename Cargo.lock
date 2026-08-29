@@ -233,32 +233,32 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "aurea"
 version = "0.0.2"
-source = "git+https://github.com/SkuldNorniern/aurea#a7011ed94bb5cca7e9e178432bbbd79e3b0fd6dc"
+source = "git+https://github.com/SkuldNorniern/aurea#21244c646d2cce0aa168a2cbc646158e4eafac5b"
 dependencies = [
  "aurea-animation",
  "aurea-ffi",
  "aurea-foundation",
  "aurea-render",
  "aurea-runtime",
+ "inline-spirv",
  "jni",
  "libc",
  "log",
  "raw-window-handle",
+ "zen-window-handle",
+ "zengpu",
  "zengpu-hal",
 ]
 
 [[package]]
 name = "aurea-animation"
 version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/aurea#a7011ed94bb5cca7e9e178432bbbd79e3b0fd6dc"
-dependencies = [
- "aurea-foundation",
-]
+source = "git+https://github.com/SkuldNorniern/aurea#21244c646d2cce0aa168a2cbc646158e4eafac5b"
 
 [[package]]
 name = "aurea-ffi"
 version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/aurea#a7011ed94bb5cca7e9e178432bbbd79e3b0fd6dc"
+source = "git+https://github.com/SkuldNorniern/aurea#21244c646d2cce0aa168a2cbc646158e4eafac5b"
 dependencies = [
  "cc",
  "pkg-config",
@@ -267,18 +267,19 @@ dependencies = [
 [[package]]
 name = "aurea-foundation"
 version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/aurea#a7011ed94bb5cca7e9e178432bbbd79e3b0fd6dc"
+source = "git+https://github.com/SkuldNorniern/aurea#21244c646d2cce0aa168a2cbc646158e4eafac5b"
 
 [[package]]
 name = "aurea-render"
 version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/aurea#a7011ed94bb5cca7e9e178432bbbd79e3b0fd6dc"
+source = "git+https://github.com/SkuldNorniern/aurea#21244c646d2cce0aa168a2cbc646158e4eafac5b"
 dependencies = [
  "aurea-foundation",
  "dwrote",
  "fontdb",
  "fontdue",
  "inline-spirv",
+ "log",
  "winapi",
  "zengpu-hal",
  "zengpu-vulkan",
@@ -287,10 +288,9 @@ dependencies = [
 [[package]]
 name = "aurea-runtime"
 version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/aurea#a7011ed94bb5cca7e9e178432bbbd79e3b0fd6dc"
+source = "git+https://github.com/SkuldNorniern/aurea#21244c646d2cce0aa168a2cbc646158e4eafac5b"
 dependencies = [
  "aurea-foundation",
- "aurea-render",
  "log",
 ]
 
@@ -536,7 +536,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1651,7 +1651,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2007,7 +2007,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2189,7 +2189,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset 0.9.1",
  "tempfile",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2412,7 +2412,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2804,25 +2804,55 @@ dependencies = [
 [[package]]
 name = "zen-window-handle"
 version = "0.1.0"
-source = "git+https://github.com/SkuldNorniern/ZenGPU#786afbf2d06887224410ee43446f13768e455fb1"
+source = "git+https://github.com/SkuldNorniern/ZenGPU?rev=191f772a6084785d273b4d46141e15f1f6666664#191f772a6084785d273b4d46141e15f1f6666664"
+
+[[package]]
+name = "zengpu"
+version = "0.0.1"
+source = "git+https://github.com/SkuldNorniern/ZenGPU?rev=191f772a6084785d273b4d46141e15f1f6666664#191f772a6084785d273b4d46141e15f1f6666664"
+dependencies = [
+ "log",
+ "zengpu-compute",
+ "zengpu-hal",
+ "zengpu-spirv",
+ "zengpu-vulkan",
+]
+
+[[package]]
+name = "zengpu-compute"
+version = "0.0.1"
+source = "git+https://github.com/SkuldNorniern/ZenGPU?rev=191f772a6084785d273b4d46141e15f1f6666664#191f772a6084785d273b4d46141e15f1f6666664"
+dependencies = [
+ "zengpu-hal",
+ "zengpu-spirv",
+]
 
 [[package]]
 name = "zengpu-hal"
 version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/ZenGPU#786afbf2d06887224410ee43446f13768e455fb1"
+source = "git+https://github.com/SkuldNorniern/ZenGPU?rev=191f772a6084785d273b4d46141e15f1f6666664#191f772a6084785d273b4d46141e15f1f6666664"
 dependencies = [
  "zen-window-handle",
 ]
 
 [[package]]
+name = "zengpu-spirv"
+version = "0.0.1"
+source = "git+https://github.com/SkuldNorniern/ZenGPU?rev=191f772a6084785d273b4d46141e15f1f6666664#191f772a6084785d273b4d46141e15f1f6666664"
+dependencies = [
+ "zengpu-hal",
+ "zengpu-zsl",
+]
+
+[[package]]
 name = "zengpu-spv"
 version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/ZenGPU#786afbf2d06887224410ee43446f13768e455fb1"
+source = "git+https://github.com/SkuldNorniern/ZenGPU?rev=191f772a6084785d273b4d46141e15f1f6666664#191f772a6084785d273b4d46141e15f1f6666664"
 
 [[package]]
 name = "zengpu-vulkan"
 version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/ZenGPU#786afbf2d06887224410ee43446f13768e455fb1"
+source = "git+https://github.com/SkuldNorniern/ZenGPU?rev=191f772a6084785d273b4d46141e15f1f6666664#191f772a6084785d273b4d46141e15f1f6666664"
 dependencies = [
  "ash",
  "log",
@@ -2830,6 +2860,11 @@ dependencies = [
  "zengpu-hal",
  "zengpu-spv",
 ]
+
+[[package]]
+name = "zengpu-zsl"
+version = "0.0.1"
+source = "git+https://github.com/SkuldNorniern/ZenGPU?rev=191f772a6084785d273b4d46141e15f1f6666664#191f772a6084785d273b4d46141e15f1f6666664"
 
 [[package]]
 name = "zerocopy"
@@ -2963,5 +2998,15 @@ dependencies = [
 
 [[patch.unused]]
 name = "zengpu"
+version = "0.0.1"
+source = "git+https://github.com/SkuldNorniern/ZenGPU#786afbf2d06887224410ee43446f13768e455fb1"
+
+[[patch.unused]]
+name = "zengpu-hal"
+version = "0.0.1"
+source = "git+https://github.com/SkuldNorniern/ZenGPU#786afbf2d06887224410ee43446f13768e455fb1"
+
+[[patch.unused]]
+name = "zengpu-vulkan"
 version = "0.0.1"
 source = "git+https://github.com/SkuldNorniern/ZenGPU#786afbf2d06887224410ee43446f13768e455fb1"
