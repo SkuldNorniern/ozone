@@ -232,8 +232,8 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "aurea"
-version = "0.0.2"
-source = "git+https://github.com/SkuldNorniern/aurea#fdc5a1d9fd98552fde59b0e35eb2be53343c1cec"
+version = "0.1.0"
+source = "git+https://github.com/SkuldNorniern/aurea#809cf09b83cfe9d83d87fe6e32be94259d357999"
 dependencies = [
  "aurea-animation",
  "aurea-ffi",
@@ -252,13 +252,13 @@ dependencies = [
 
 [[package]]
 name = "aurea-animation"
-version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/aurea#fdc5a1d9fd98552fde59b0e35eb2be53343c1cec"
+version = "0.1.0"
+source = "git+https://github.com/SkuldNorniern/aurea#809cf09b83cfe9d83d87fe6e32be94259d357999"
 
 [[package]]
 name = "aurea-ffi"
-version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/aurea#fdc5a1d9fd98552fde59b0e35eb2be53343c1cec"
+version = "0.1.0"
+source = "git+https://github.com/SkuldNorniern/aurea#809cf09b83cfe9d83d87fe6e32be94259d357999"
 dependencies = [
  "cc",
  "pkg-config",
@@ -266,13 +266,13 @@ dependencies = [
 
 [[package]]
 name = "aurea-foundation"
-version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/aurea#fdc5a1d9fd98552fde59b0e35eb2be53343c1cec"
+version = "0.1.0"
+source = "git+https://github.com/SkuldNorniern/aurea#809cf09b83cfe9d83d87fe6e32be94259d357999"
 
 [[package]]
 name = "aurea-render"
-version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/aurea#fdc5a1d9fd98552fde59b0e35eb2be53343c1cec"
+version = "0.1.0"
+source = "git+https://github.com/SkuldNorniern/aurea#809cf09b83cfe9d83d87fe6e32be94259d357999"
 dependencies = [
  "aurea-foundation",
  "dwrote",
@@ -287,8 +287,8 @@ dependencies = [
 
 [[package]]
 name = "aurea-runtime"
-version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/aurea#fdc5a1d9fd98552fde59b0e35eb2be53343c1cec"
+version = "0.1.0"
+source = "git+https://github.com/SkuldNorniern/aurea#809cf09b83cfe9d83d87fe6e32be94259d357999"
 dependencies = [
  "aurea-foundation",
  "log",
@@ -536,7 +536,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1651,7 +1651,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2007,7 +2007,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2412,7 +2412,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2804,12 +2804,12 @@ dependencies = [
 [[package]]
 name = "zen-window-handle"
 version = "0.1.0"
-source = "git+https://github.com/SkuldNorniern/ZenGPU?rev=191f772a6084785d273b4d46141e15f1f6666664#191f772a6084785d273b4d46141e15f1f6666664"
+source = "git+https://github.com/SkuldNorniern/ZenGPU?rev=9fa4fe70e661e046939acd1ef4f9af213415eeed#9fa4fe70e661e046939acd1ef4f9af213415eeed"
 
 [[package]]
 name = "zengpu"
 version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/ZenGPU?rev=191f772a6084785d273b4d46141e15f1f6666664#191f772a6084785d273b4d46141e15f1f6666664"
+source = "git+https://github.com/SkuldNorniern/ZenGPU?rev=9fa4fe70e661e046939acd1ef4f9af213415eeed#9fa4fe70e661e046939acd1ef4f9af213415eeed"
 dependencies = [
  "log",
  "zengpu-compute",
@@ -2821,7 +2821,7 @@ dependencies = [
 [[package]]
 name = "zengpu-compute"
 version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/ZenGPU?rev=191f772a6084785d273b4d46141e15f1f6666664#191f772a6084785d273b4d46141e15f1f6666664"
+source = "git+https://github.com/SkuldNorniern/ZenGPU?rev=9fa4fe70e661e046939acd1ef4f9af213415eeed#9fa4fe70e661e046939acd1ef4f9af213415eeed"
 dependencies = [
  "zengpu-hal",
  "zengpu-spirv",
@@ -2830,7 +2830,7 @@ dependencies = [
 [[package]]
 name = "zengpu-hal"
 version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/ZenGPU?rev=191f772a6084785d273b4d46141e15f1f6666664#191f772a6084785d273b4d46141e15f1f6666664"
+source = "git+https://github.com/SkuldNorniern/ZenGPU?rev=9fa4fe70e661e046939acd1ef4f9af213415eeed#9fa4fe70e661e046939acd1ef4f9af213415eeed"
 dependencies = [
  "zen-window-handle",
 ]
@@ -2838,7 +2838,7 @@ dependencies = [
 [[package]]
 name = "zengpu-spirv"
 version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/ZenGPU?rev=191f772a6084785d273b4d46141e15f1f6666664#191f772a6084785d273b4d46141e15f1f6666664"
+source = "git+https://github.com/SkuldNorniern/ZenGPU?rev=9fa4fe70e661e046939acd1ef4f9af213415eeed#9fa4fe70e661e046939acd1ef4f9af213415eeed"
 dependencies = [
  "zengpu-hal",
  "zengpu-zsl",
@@ -2847,12 +2847,12 @@ dependencies = [
 [[package]]
 name = "zengpu-spv"
 version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/ZenGPU?rev=191f772a6084785d273b4d46141e15f1f6666664#191f772a6084785d273b4d46141e15f1f6666664"
+source = "git+https://github.com/SkuldNorniern/ZenGPU?rev=9fa4fe70e661e046939acd1ef4f9af213415eeed#9fa4fe70e661e046939acd1ef4f9af213415eeed"
 
 [[package]]
 name = "zengpu-vulkan"
 version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/ZenGPU?rev=191f772a6084785d273b4d46141e15f1f6666664#191f772a6084785d273b4d46141e15f1f6666664"
+source = "git+https://github.com/SkuldNorniern/ZenGPU?rev=9fa4fe70e661e046939acd1ef4f9af213415eeed#9fa4fe70e661e046939acd1ef4f9af213415eeed"
 dependencies = [
  "ash",
  "log",
@@ -2864,7 +2864,7 @@ dependencies = [
 [[package]]
 name = "zengpu-zsl"
 version = "0.0.1"
-source = "git+https://github.com/SkuldNorniern/ZenGPU?rev=191f772a6084785d273b4d46141e15f1f6666664#191f772a6084785d273b4d46141e15f1f6666664"
+source = "git+https://github.com/SkuldNorniern/ZenGPU?rev=9fa4fe70e661e046939acd1ef4f9af213415eeed#9fa4fe70e661e046939acd1ef4f9af213415eeed"
 
 [[package]]
 name = "zerocopy"

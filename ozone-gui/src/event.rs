@@ -510,7 +510,7 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
             }
         }
 
-        WindowEvent::MouseMove { x, y } => {
+        WindowEvent::MouseMove { x, y, .. } => {
             let (x, y) = (*x as f32, *y as f32);
             state.mouse.moved(x, y);
             if state.config.ui.mouse {
