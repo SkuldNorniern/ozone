@@ -1,0 +1,22 @@
+# the Windows setup: `kago build` builds ozone and writes it to dist/.
+package dev.eira.ozone
+  name Ozone
+  version from cargo
+  publisher Eira
+  description Small command-driven text editor
+  homepage https://github.com/SkuldNorniern/ozone
+  scope choose
+
+license LICENSE
+
+build cargo build --release
+
+app ozone
+  windows target/release/ozone.exe
+  icon windows packaging/windows/ozone.ico
+
+shortcut
+path optional "Add ozone to PATH"
+
+component desktop "Desktop shortcut" off
+  shortcut desktop
