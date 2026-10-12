@@ -479,8 +479,10 @@ impl OzoneGui {
         );
         let blink_interval = std::time::Duration::from_millis(530);
 
+        // How long a frame waits for input before the jobs are polled again;
+        // input ends the wait at once.
+        let tick = std::time::Duration::from_millis(8);
         loop {
-            unsafe { aurea::ffi::ng_platform_poll_events() };
 
             {
                 let ws = lock(state.workspace.as_ref());
@@ -493,7 +495,7 @@ impl OzoneGui {
                 state.buffer_mru.retain(|id| ws.buffers.contains_key(id));
             }
 
-            let events = window.poll_events();
+            let events = window.wait_events(Some(tick));
             let has_text_input = events.iter().any(|event| {
                 matches!(event, aurea::WindowEvent::TextInput { text } if text.chars().any(|c| !c.is_control()))
             });
@@ -796,8 +798,6 @@ impl OzoneGui {
                 canvas.invalidate_all();
             }
 
-            window.process_frames()?;
-            std::thread::sleep(std::time::Duration::from_millis(8));
         }
 
         Ok(())
