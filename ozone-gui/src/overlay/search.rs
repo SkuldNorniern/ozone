@@ -7,13 +7,14 @@
 //! `find_matches` (literal, no regex).
 
 use aurea::AureaResult;
-use aurea::render::{DrawingContext, Font, Point};
+use aurea::render::{DrawingContext, Font, Rect};
 use ozone_buffer::BufferId;
 use ozone_editor::{DecorationKind, EditorEvent, HlRole, NamespaceId, Workspace};
 
-use crate::components::{draw_panel, top_right_rect};
-use crate::layout::baseline_in_rect;
-use crate::theme::{palette, solid};
+use aurea::ui::{Align, Component, Label, PromptLine};
+
+use crate::components::{draw_panel, top_right_rect, with_ui};
+use crate::theme::palette;
 
 pub(crate) struct SearchState {
     pub(crate) query: String,
@@ -307,10 +308,6 @@ pub(crate) fn draw_search_bar(
     width: f32,
 ) -> AureaResult<()> {
     let line_h = (font.size * 1.7).max(18.0);
-    let m = ctx.measure_text("M", font).ok();
-    let ascent = m.as_ref().map(|x| x.ascent).unwrap_or(font.size * 0.8);
-    let descent = m.as_ref().map(|x| x.descent).unwrap_or(font.size * 0.2);
-
     let count = if s.matches.is_empty() {
         if s.query.is_empty() {
             String::new()
@@ -342,67 +339,75 @@ pub(crate) fn draw_search_bar(
 
     let pad = 10.0;
     let rows = if s.replace.is_some() { 3.0 } else { 1.0 };
-    let bw = (content_w + pad * 2.0 + 16.0).min(width - 24.0);
+    let bw = (content_w + pad * 2.0 + 16.0).min((width - 24.0).max(0.0));
     let bh = line_h * rows + 6.0;
     let panel = top_right_rect(width, bw, bh, 11.0);
     let (bx, by) = (panel.x, panel.y);
     draw_panel(ctx, panel, 8.0)?;
 
-    // Find line.
-    let bl = baseline_in_rect(by + 3.0, line_h, ascent, descent);
-    let prompt_w = measure(ctx, "find: ");
-    let find_label_color = if s.focus_replace {
-        palette().picker_detail
-    } else {
-        palette().picker_prompt
-    };
-    ctx.draw_text_with_font(
-        "find: ",
-        Point::new(bx + pad, bl),
-        font,
-        &solid(find_label_color),
-    )?;
-    let rest = format!("{}{}", s.query, count);
-    ctx.draw_text_with_font(
-        &rest,
-        Point::new(bx + pad + prompt_w, bl),
-        font,
-        &solid(palette().picker_fg),
-    )?;
-
-    // Replace line + hint.
-    if let Some(replace_text) = replace_text {
-        let bl2 = baseline_in_rect(by + 3.0 + line_h, line_h, ascent, descent);
-        let rprompt_w = measure(ctx, "replace: ");
-        let repl_label_color = if s.focus_replace {
-            palette().picker_prompt
-        } else {
-            palette().picker_detail
-        };
-        ctx.draw_text_with_font(
-            "replace: ",
-            Point::new(bx + pad, bl2),
-            font,
-            &solid(repl_label_color),
-        )?;
-        let rval = s.replace.clone().unwrap_or_default();
-        let _ = replace_text;
-        ctx.draw_text_with_font(
-            &rval,
-            Point::new(bx + pad + rprompt_w, bl2),
-            font,
-            &solid(palette().picker_fg),
-        )?;
-
-        let bl3 = baseline_in_rect(by + 3.0 + line_h * 2.0, line_h, ascent, descent);
-        ctx.draw_text_with_font(
-            "Tab switch · Enter one · ^Enter all",
-            Point::new(bx + pad, bl3),
-            font,
-            &solid(palette().picker_detail),
-        )?;
-    }
-    Ok(())
+    with_ui(ctx, |ui| {
+        let p = palette();
+        let query_rect = Rect::new(bx + pad, by + 3.0, (bw - pad * 2.0).max(0.0), line_h);
+        let count_width = ui.text_width(&count, font).min(query_rect.width);
+        let input_rect = Rect::new(
+            query_rect.x,
+            query_rect.y,
+            (query_rect.width - count_width).max(0.0),
+            line_h,
+        );
+        PromptLine::new(
+            "find:",
+            &s.query,
+            p.picker_fg,
+            if s.focus_replace {
+                p.picker_detail
+            } else {
+                p.picker_prompt
+            },
+        )
+        .font(font)
+        .caret(!s.focus_replace)
+        .paint(ui, input_rect)?;
+        ui.clipped(query_rect, |ui| {
+            Label::new(&count, p.picker_detail)
+                .font(font)
+                .align(Align::End)
+                .paint(ui, query_rect)
+        })?;
+        if let Some(replacement) = &s.replace {
+            let replace_rect = Rect::new(
+                query_rect.x,
+                query_rect.y + line_h,
+                query_rect.width,
+                line_h,
+            );
+            PromptLine::new(
+                "replace:",
+                replacement,
+                p.picker_fg,
+                if s.focus_replace {
+                    p.picker_prompt
+                } else {
+                    p.picker_detail
+                },
+            )
+            .font(font)
+            .caret(s.focus_replace)
+            .paint(ui, replace_rect)?;
+            let hint_rect = Rect::new(
+                query_rect.x,
+                query_rect.y + line_h * 2.0,
+                query_rect.width,
+                line_h,
+            );
+            ui.clipped(hint_rect, |ui| {
+                Label::new("Tab switch ? Enter one ? ^Enter all", p.picker_detail)
+                    .font(font)
+                    .paint(ui, hint_rect)
+            })?;
+        }
+        Ok(())
+    })
 }
 
 #[cfg(test)]

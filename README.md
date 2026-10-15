@@ -66,6 +66,9 @@ next to Ozone before building:
 git clone https://github.com/SkuldNorniern/aurea ../aurea
 ```
 
+The picker, completion list, minibuffer, search bar, panels and badges use
+Aurea's canvas components. Ozone owns their commands, modal input and placement.
+
 ```sh
 cargo build --release
 ```
