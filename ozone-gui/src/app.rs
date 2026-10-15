@@ -483,7 +483,6 @@ impl OzoneGui {
         // input ends the wait at once.
         let tick = std::time::Duration::from_millis(8);
         loop {
-
             {
                 let ws = lock(state.workspace.as_ref());
                 if let Some(active) = ws.active_view().map(|v| v.buffer_id)
@@ -610,11 +609,16 @@ impl OzoneGui {
 
             // --- File tree poll: open/refresh the FileTree buffer once the
             // background build finishes. ---
-            if let Some(content) = state.file_tree_job.as_mut().and_then(|job| job.poll()) {
-                state.file_tree_job = None;
+            if let Some(content) = state.file_tree_job.as_mut().and_then(|job| job.poll())
+                && let Some(job) = state.file_tree_job.take()
+            {
                 let mut ws = lock(state.workspace.as_ref());
-                ws.show_file_tree(content);
-                state.needs_redraw = true;
+                if std::env::current_dir().ok().as_ref() == Some(&job.base)
+                    && (job.target.is_none() || job.target == ws.file_tree_view())
+                {
+                    ws.show_file_tree(content);
+                    state.needs_redraw = true;
+                }
             }
 
             // --- Folder picker poll: when the native dialog closes, switch the
@@ -624,16 +628,32 @@ impl OzoneGui {
                 state.folder_picker = None;
                 if let Some(folder) = selection {
                     match std::env::set_current_dir(&folder) {
-                        Ok(()) => lock(state.notifications.as_ref()).push(
-                            NotifyLevel::Info,
-                            format!("Workspace: {}", folder.display()),
-                            None,
-                        ),
-                        Err(e) => lock(state.notifications.as_ref()).push(
-                            NotifyLevel::Error,
-                            format!("Cannot open directory: {e}"),
-                            None,
-                        ),
+                        Ok(()) => {
+                            lock(state.notifications.as_ref()).push(
+                                NotifyLevel::Info,
+                                format!("Workspace: {}", folder.display()),
+                                None,
+                            );
+                            let mut ws = lock(state.workspace.as_ref());
+                            ws.tree_collapsed.clear();
+                            if ws.file_tree_view().is_some() {
+                                let name = folder
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("workspace");
+                                ws.show_file_tree(format!("▸ {name}/\nLoading files…\n"));
+                                ws.request_ui(ozone_editor::UiIntent::FileTree {
+                                    collapsed: Default::default(),
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            lock(state.notifications.as_ref()).push(
+                                NotifyLevel::Error,
+                                format!("Cannot open directory: {e}"),
+                                None,
+                            );
+                        }
                     };
                 }
                 state.needs_redraw = true;
@@ -797,7 +817,6 @@ impl OzoneGui {
                 })?;
                 canvas.invalidate_all();
             }
-
         }
 
         Ok(())

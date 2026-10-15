@@ -377,7 +377,14 @@ pub(crate) fn apply_ui_intents(
                     );
                     continue;
                 };
-                *ov.file_tree_job = Some(FileTreeJob::spawn(base, collapsed));
+                if ws.file_tree_view().is_none() {
+                    let name = base
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("workspace");
+                    ws.show_file_tree(format!("▸ {name}/\nLoading files…\n"));
+                }
+                *ov.file_tree_job = Some(FileTreeJob::spawn(base, collapsed, ws.file_tree_view()));
             }
         }
     }

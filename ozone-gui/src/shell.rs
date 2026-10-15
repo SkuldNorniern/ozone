@@ -327,17 +327,25 @@ impl FilePickerJob {
 /// Background file-tree build. Spawns a thread that walks the workspace and
 /// renders the tree text, so opening/refreshing the tree never blocks the UI.
 pub(crate) struct FileTreeJob {
+    pub(crate) base: PathBuf,
+    pub(crate) target: Option<ozone_editor::ViewId>,
     rx: Receiver<String>,
 }
 
 impl FileTreeJob {
-    pub(crate) fn spawn(base: PathBuf, collapsed: HashSet<String>) -> Self {
+    pub(crate) fn spawn(
+        base: PathBuf,
+        collapsed: HashSet<String>,
+        target: Option<ozone_editor::ViewId>,
+    ) -> Self {
         let (tx, rx) = channel();
+        let scan_base = base.clone();
         std::thread::spawn(move || {
-            let content = ozone_editor::commands::workspace_tree_buffer(&base, &collapsed, 10_000);
+            let content =
+                ozone_editor::commands::workspace_tree_buffer(&scan_base, &collapsed, 10_000);
             let _ = tx.send(content);
         });
-        Self { rx }
+        Self { base, target, rx }
     }
 
     /// Non-blocking poll. Returns `Some(content)` when the build is done.
