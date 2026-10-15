@@ -509,6 +509,8 @@ impl OzoneGui {
                 break;
             }
 
+            state.flush_widget_actions();
+
             // `config.reload` requested a rebuild of keymaps/modifiers/autocmds.
             if lock(state.workspace.as_ref()).take_config_reload() {
                 state.reload_config();

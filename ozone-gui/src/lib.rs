@@ -37,6 +37,7 @@ mod statusbar;
 mod syntax_cache;
 mod terminals;
 mod theme;
+mod tree;
 
 pub(crate) use syntax_cache::SyntaxCache;
 

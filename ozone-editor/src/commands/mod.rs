@@ -255,7 +255,7 @@ fn collect_workspace_tree_rows(
         let is_collapsed = collapsed.contains(&rel);
         let indicator = if is_collapsed { "▸ " } else { "▾ " };
         // Hidden dir path ends with '/' to distinguish from file rows in tree_row_dir_path.
-        out.push(format!("{prefix}{connector}{indicator}{name}/  {rel}/"));
+        out.push(format!("{prefix}{connector}{indicator}{name}/\t{rel}/"));
         if !is_collapsed {
             let child_prefix = format!("{}{}", prefix, if idx == total { "    " } else { "│   " });
             collect_workspace_tree_rows(base, &rel, &child_prefix, collapsed, cap, out);
@@ -272,8 +272,8 @@ fn collect_workspace_tree_rows(
         } else {
             "├── "
         };
-        // Hidden path appended after double-space; parsed by tree_row_path.
-        out.push(format!("{prefix}{connector}{name}  {rel}"));
+        // Separate hidden metadata with a tab so repeated spaces in names survive.
+        out.push(format!("{prefix}{connector}{name}\t{rel}"));
     }
 }
 
@@ -570,8 +570,8 @@ mod tests {
         let dir_name = base.file_name().unwrap().to_str().unwrap();
         assert!(tree.contains(&format!("▸ {dir_name}/")));
         assert!(tree.contains("src/"));
-        assert!(tree.contains("main.rs  src/main.rs"));
-        assert!(tree.contains("Cargo.toml  Cargo.toml"));
+        assert!(tree.contains("main.rs\tsrc/main.rs"));
+        assert!(tree.contains("Cargo.toml\tCargo.toml"));
 
         let _ = fs::remove_dir_all(&base);
     }

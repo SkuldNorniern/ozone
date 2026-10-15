@@ -1,11 +1,10 @@
 use aurea::AureaResult;
-use aurea::render::{Color, DrawingContext, Font, Path, PathCommand, Point, Rect};
+use aurea::render::{DrawingContext, Font, Path, PathCommand, Point, Rect};
 
 use ozone_buffer::{Buffer, BufferId, BufferKind, Pos};
 use ozone_config::{Config, CursorStyle, LineNumbers};
 use ozone_editor::{Decoration, DecorationKind, HlRole, ViewId, VirtualPos, Workspace, fold};
 use ozone_syntax::TokenKind;
-use taste::detect_path;
 
 use super::TextMetrics;
 use super::decorations::{
@@ -43,6 +42,13 @@ pub(super) fn draw_view(
     let Some(line_count) = ws.buffers.get(&buffer_id).map(|buf| buf.line_count()) else {
         return Ok(());
     };
+
+    if matches!(
+        ws.buffers.get(&buffer_id).map(|b| &b.kind),
+        Some(BufferKind::FileTree)
+    ) {
+        return crate::tree::draw(ctx, ws, view_id, rect, font, config);
+    }
 
     let is_active_pane = ws.active_view_id == Some(view_id);
 
@@ -434,17 +440,6 @@ pub(super) fn draw_view(
                         metrics.char_w,
                         font,
                     )?;
-                } else if matches!(buf.kind, BufferKind::FileTree) {
-                    draw_tree_line(
-                        ctx,
-                        line_text,
-                        text_x,
-                        line_top,
-                        line_h,
-                        baseline,
-                        metrics.char_w,
-                        font,
-                    )?;
                 } else if spans.is_empty() || lang.is_none() {
                     ctx.draw_text_with_font(
                         line_text,
@@ -749,156 +744,6 @@ fn draw_cursor(
     Ok(())
 }
 
-/// Render a [`BufferKind::FileTree`] line: guide lines, icons, file-type colors.
-#[allow(clippy::too_many_arguments)]
-fn draw_tree_line(
-    ctx: &mut dyn DrawingContext,
-    line: &str,
-    text_x: f32,
-    line_top: f32,
-    line_h: f32,
-    baseline: f32,
-    char_w: f32,
-    font: &Font,
-) -> AureaResult<()> {
-    let p = palette();
-
-    // Header row "▸ root/" — accent, no icon.
-    if line.starts_with('▸') {
-        return ctx.draw_text_with_font(
-            line,
-            Point::new(text_x, baseline),
-            font,
-            &solid(p.picker_prompt),
-        );
-    }
-
-    // Strip hidden path suffix from file/dir rows ("  path" or "  path/" at end).
-    let display = line
-        .rsplit_once("  ")
-        .map(|(before, _)| before)
-        .unwrap_or(line);
-
-    // Find the connector "── " that marks where the entry name begins.
-    let Some(conn_pos) = display.find("── ") else {
-        // No connector (empty line, etc.) — plain draw.
-        return ctx.draw_text_with_font(
-            display,
-            Point::new(text_x, baseline),
-            font,
-            &solid(token_color(TokenKind::Default)),
-        );
-    };
-    let conn_end = conn_pos + "── ".len(); // 7 bytes: U+2500×2 + space
-    let guide_part = &display[..conn_pos]; // everything before ├/└
-    let connector = &display[conn_pos..conn_end]; // "├── " or "└── "
-    let name = &display[conn_end..]; // "▾ src/" or "main.rs" etc.
-
-    // Indentation guides: "│   " units → vertical line; "    " units → skip.
-    let mut gx = text_x;
-    let mut guide_chars = guide_part.chars();
-    while let Some(ch) = guide_chars.next() {
-        if ch == '│' {
-            let cx = gx + char_w * 0.5;
-            ctx.draw_line(cx, line_top, cx, line_top + line_h, &stroke(p.border, 1.0))?;
-            // Skip the three trailing spaces of this "│   " unit.
-            for _ in 0..3 {
-                guide_chars.next();
-            }
-            gx += char_w * 4.0;
-        } else {
-            gx += char_w;
-        }
-    }
-
-    // --- Connector text (dim) -----------------------------------------------
-    let connector_x = text_x + guide_part.chars().count() as f32 * char_w;
-    ctx.draw_text_with_font(
-        connector,
-        Point::new(connector_x, baseline),
-        font,
-        &solid(p.statusbar_dim),
-    )?;
-
-    // --- Icon + name ---------------------------------------------------------
-    let is_dir = name.ends_with('/');
-    // Strip the expand/collapse indicator ("▾ " / "▸ ") from the visible name
-    // to get the bare entry name for extension detection.
-    let bare_name = name
-        .strip_prefix("▾ ")
-        .or_else(|| name.strip_prefix("▸ "))
-        .unwrap_or(name);
-
-    let icon_x = connector_x + connector.chars().count() as f32 * char_w;
-    let icon_h = line_h * 0.52;
-    let icon_w = char_w * 0.82;
-    let icon_y = line_top + (line_h - icon_h) / 2.0;
-
-    if is_dir {
-        // Folder icon: raised tab + body, filled in accent color.
-        let tab_w = icon_w * 0.42;
-        let tab_h = icon_h * 0.24;
-        ctx.draw_rect(
-            Rect::new(icon_x, icon_y, tab_w, tab_h + 1.0),
-            &solid(p.picker_prompt),
-        )?;
-        ctx.draw_rect(
-            Rect::new(icon_x, icon_y + tab_h, icon_w, icon_h - tab_h),
-            &solid(p.picker_prompt),
-        )?;
-    } else {
-        // File icon: page outline with a small folded top-right corner.
-        let corner = (icon_w * 0.28).max(2.0);
-        let col = file_type_color(bare_name, p.statusbar_dim);
-        // Body: left+bottom+partial-top (omit folded corner area).
-        ctx.draw_rect(
-            Rect::new(icon_x, icon_y, icon_w - corner, icon_h),
-            &solid(col),
-        )?;
-        ctx.draw_rect(
-            Rect::new(
-                icon_x + icon_w - corner,
-                icon_y + corner,
-                corner,
-                icon_h - corner,
-            ),
-            &solid(col),
-        )?;
-        // Fold triangle (two lines forming the crease).
-        ctx.draw_line(
-            icon_x + icon_w - corner,
-            icon_y,
-            icon_x + icon_w - corner,
-            icon_y + corner,
-            &stroke(p.background, 1.0),
-        )?;
-        ctx.draw_line(
-            icon_x + icon_w - corner,
-            icon_y + corner,
-            icon_x + icon_w,
-            icon_y + corner,
-            &stroke(p.background, 1.0),
-        )?;
-    }
-
-    let text_after_icon = icon_x + icon_w + char_w * 0.35;
-
-    // Name text: keep the expand/collapse indicator if present, then entry name.
-    let name_color = if is_dir {
-        p.picker_prompt
-    } else {
-        token_color(TokenKind::Default)
-    };
-    ctx.draw_text_with_font(
-        name,
-        Point::new(text_after_icon, baseline),
-        font,
-        &solid(name_color),
-    )?;
-
-    Ok(())
-}
-
 /// Count leading indentation columns in `text`, expanding tabs to `tab_w`.
 /// Returns the total column count of leading whitespace. Blank lines return 0.
 fn leading_indent_cols(text: &str, tab_w: usize) -> usize {
@@ -912,24 +757,4 @@ fn leading_indent_cols(text: &str, tab_w: usize) -> usize {
     }
     // Blank or all-whitespace lines contribute no guide levels.
     if text.trim().is_empty() { 0 } else { col }
-}
-
-/// Uses Taste's language metadata for file icon colors; `dim` is the fallback.
-fn file_type_color(name: &str, dim: Color) -> Color {
-    detect_path(name)
-        .and_then(|detection| detection.language.color())
-        .map(|color| Color::rgb(color.r, color.g, color.b))
-        .unwrap_or(dim)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn file_type_color_uses_taste_metadata_and_fallback() {
-        let dim = Color::rgb(1, 2, 3);
-        assert_eq!(file_type_color("main.rs", dim), Color::rgb(222, 165, 132));
-        assert_eq!(file_type_color("unknown.nope", dim), dim);
-    }
 }

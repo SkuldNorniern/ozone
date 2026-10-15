@@ -102,6 +102,21 @@ pub(crate) fn handle_key(
                 run_cmd("pane.close", ws, reg, autocmds, shell_jobs);
                 return true;
             }
+            Left | Right if in_tree => {
+                run_cmd(
+                    if key == Right {
+                        "tree.expand-selection"
+                    } else {
+                        "tree.collapse-selection"
+                    },
+                    ws,
+                    reg,
+                    autocmds,
+                    shell_jobs,
+                );
+                apply_ui_intents(ws, reg, ov, mru, lsp);
+                return true;
+            }
             Backspace | Delete | Tab => return true,
             _ => {}
         }

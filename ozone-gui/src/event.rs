@@ -7,7 +7,9 @@ use aurea::{MouseButton, WindowEvent};
 use ozone_buffer::{BufferId, BufferKind};
 use ozone_editor::{KeyStroke, Workspace};
 
-use crate::actions::{apply_auto_save, dispatch_autocmds, handle_minibuffer_key, insert_text_raw};
+use crate::actions::{
+    apply_auto_save, dispatch_autocmds, handle_minibuffer_key, insert_text_raw, run_cmd,
+};
 use crate::input::{
     ActiveMods, corrected_mods, keycode_to_char, merge_live_mods, terminal_key_bytes,
 };
@@ -170,6 +172,51 @@ impl AppState {
         }
     }
 
+    /// Canvas widgets enqueue command activations; process them outside drawing
+    /// and drain UI requests even when no keyboard event follows the click.
+    pub(crate) fn flush_widget_actions(&mut self) {
+        let mut workspace = lock(self.workspace.as_ref());
+        for (view, line) in crate::tree::take_activations() {
+            if workspace.file_tree_view() != Some(view) {
+                continue;
+            }
+            workspace.active_view_id = Some(view);
+            if let Some(view) = workspace.views.get_mut(&view) {
+                view.cursor = ozone_buffer::Pos::new(line, 0);
+            }
+            run_cmd(
+                "tree.open-selection",
+                &mut workspace,
+                &self.commands,
+                &self.autocmds,
+                &mut self.shell_jobs,
+            );
+            self.needs_redraw = true;
+        }
+        let mut palette = lock(self.palette.as_ref());
+        let mut search = lock(self.search.as_ref());
+        let mut minibuffer = lock(self.minibuffer.as_ref());
+        let mut notifications = lock(self.notifications.as_ref());
+        self.needs_redraw |= apply_ui_intents(
+            &mut workspace,
+            &self.commands,
+            &mut Overlays {
+                palette: &mut palette,
+                search: &mut search,
+                minibuffer: &mut minibuffer,
+                notifications: &mut notifications,
+                workspace_search: &mut self.workspace_search,
+                file_picker_job: &mut self.file_picker_job,
+                file_tree_job: &mut self.file_tree_job,
+                folder_picker: &mut self.folder_picker,
+                file_open_job: &mut self.file_open_job,
+            },
+            &self.buffer_mru,
+            &mut self.lsp,
+        );
+        self.needs_redraw |= workspace.file_tree_view().is_some() && crate::tree::wants_frame();
+    }
+
     pub(crate) fn begin_event_batch(&mut self, has_text_input: bool) {
         self.needs_redraw = false;
         self.cursor_activity = false;
@@ -187,6 +234,40 @@ impl AppState {
 }
 
 pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> EventResult {
+    let overlays_open = lock(state.palette.as_ref()).is_some()
+        || lock(state.search.as_ref()).is_some()
+        || lock(state.minibuffer.as_ref()).is_some()
+        || lock(state.completion.as_ref()).is_some();
+    let mouse_event = matches!(
+        event,
+        WindowEvent::MouseMove { .. }
+            | WindowEvent::MouseButton { .. }
+            | WindowEvent::MouseWheel { .. }
+    );
+    let editor_drag =
+        state.mouse.selection_drag().is_some() || state.mouse.scrollbar_drag().is_some();
+    let modified_key = matches!(event, WindowEvent::KeyInput { .. })
+        && (state.live_mods.ctrl
+            || state.live_mods.alt
+            || state.live_mods.meta
+            || !state.chord_pending.is_empty());
+    if !overlays_open && !modified_key && (!mouse_event || (state.config.ui.mouse && !editor_drag))
+    {
+        if let WindowEvent::MouseMove { x, y, .. } = event {
+            state.mouse.moved(*x as f32, *y as f32);
+        }
+        let input = crate::tree::handle_event(
+            event,
+            &mut lock(state.workspace.as_ref()),
+            state.canvas.width() as f32,
+            state.canvas.height() as f32,
+        );
+        state.needs_redraw |= input.redraw;
+        if input.consumed {
+            state.cursor_activity = true;
+            return EventResult::Continue;
+        }
+    }
     match event {
         WindowEvent::CloseRequested => return EventResult::Close,
 

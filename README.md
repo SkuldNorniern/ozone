@@ -149,7 +149,7 @@ window title also carries the dirty marker for file buffers.
 | `Meta+B` | Open buffer picker |
 | `Ctrl+Shift+O` | Go to symbol (current buffer) |
 | `Meta+X` or `Ctrl+Shift+P` | Open command palette |
-| `Ctrl+Shift+E` | Open file tree |
+| `Ctrl+Shift+E` | Show/focus file explorer; close when focused |
 | `Meta+F` | Search current buffer |
 | `Meta+H` | Search and replace current buffer |
 | `Ctrl+Shift+F` | Search workspace |
@@ -163,6 +163,14 @@ window title also carries the dirty marker for file buffers.
 | `Ctrl+Meta+Arrow` | Focus pane in that direction |
 | `Ctrl+-` / `Ctrl+=` | Jump back / forward |
 | Mouse wheel | Scroll |
+
+The file explorer stays on the left while files open in the last focused editor
+pane. Click a chevron to expand or collapse a folder; click a name to select it,
+and double-click or press Enter to open it. Up/Down, Home/End and Page Up/Down
+navigate the list. Right expands a folder or enters its first child; Left
+collapses it or selects its parent. Escape closes the explorer. The Refresh
+button (or `tree.refresh` command) rescans files in the background while keeping
+selection and editor focus.
 
 These bindings aren't hardcoded — they're written into `keymap.toml` on first
 launch and the running keymap is built entirely from config. Edit a command to
