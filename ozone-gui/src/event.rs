@@ -560,6 +560,7 @@ pub(crate) fn handle_window_event(event: &WindowEvent, state: &mut AppState) -> 
             x,
             y,
             click_count,
+            ..
         } if state.config.ui.mouse => {
             let (x, y) = (*x as f32, *y as f32);
             if lock(state.completion.as_ref()).take().is_some() {

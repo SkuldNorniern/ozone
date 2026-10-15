@@ -30,6 +30,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check out shared Aurea UI
+        run: git clone --depth 1 https://github.com/SkuldNorniern/aurea ../aurea
+
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
         with:

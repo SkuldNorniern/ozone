@@ -350,6 +350,7 @@ pub(super) fn draw_view(
                                     PathCommand::LineTo(Point::new(cx - r, cy + r)),
                                     PathCommand::Close,
                                 ],
+                                ..Path::default()
                             }
                         } else {
                             // down-pointing: tip at bottom
@@ -360,6 +361,7 @@ pub(super) fn draw_view(
                                     PathCommand::LineTo(Point::new(cx, cy + r)),
                                     PathCommand::Close,
                                 ],
+                                ..Path::default()
                             }
                         };
                         ctx.draw_path(&tri, &solid(color))?;

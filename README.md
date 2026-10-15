@@ -57,8 +57,14 @@ configuration surfaces are stable enough to expose cleanly.
 
 ## Build
 
-Ozone is a Cargo workspace. All dependencies, including the
-[Aurea](https://crates.io/crates/aurea) GUI toolkit, are pulled from crates.io.
+Ozone is a Cargo workspace. Its shared canvas UI comes from the sibling
+[Aurea](https://github.com/SkuldNorniern/aurea) checkout, so changes to shared
+components can be developed and checked in both projects together. Clone it
+next to Ozone before building:
+
+```sh
+git clone https://github.com/SkuldNorniern/aurea ../aurea
+```
 
 ```sh
 cargo build --release

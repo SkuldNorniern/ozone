@@ -17,7 +17,8 @@ exclude = ["aurea", "taste", "oxygen", "sylven"]
 resolver = "2"
 
 [workspace.dependencies]
-aurea       = { git = "https://github.com/SkuldNorniern/aurea" }
+# Shared UI components are developed alongside Ozone in the sibling checkout.
+aurea       = { path = "../aurea", version = "0.1.0" }
 toml        = "0.9"
 taste       = { git = "https://github.com/standize/taste.git", branch = "dev" }
 sylven         = { git = "https://github.com/SkuldNorniern/sylven.git", branch = "main" }
@@ -42,11 +43,3 @@ zengpu = ["ozone-gui/zengpu"]
 ozone-editor = { workspace = true }
 ozone-gui    = { workspace = true }
 ozone-config = { workspace = true }
-
-[patch.crates-io]
-# ZenGPU crates are referenced by aurea-render's `zengpu` feature by crates.io
-# version but aren't published yet — resolve them from the ZenGPU repo so a
-# `--features zengpu` build works. (Patches apply graph-wide, incl. inside aurea.)
-zengpu           = { git = "https://github.com/SkuldNorniern/ZenGPU" }
-zengpu-hal       = { git = "https://github.com/SkuldNorniern/ZenGPU" }
-zengpu-vulkan    = { git = "https://github.com/SkuldNorniern/ZenGPU" }
