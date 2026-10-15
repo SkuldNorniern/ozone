@@ -3,7 +3,8 @@
 //! `PickerAction` performed on commit (run a command, or open a file).
 
 use aurea::AureaResult;
-use aurea::render::{DrawingContext, Point, Rect};
+use aurea::render::{DrawingContext, Rect};
+use aurea::ui::{Component, Label};
 use ozone_buffer::{BufferId, BufferKind};
 use ozone_config::Config;
 use ozone_editor::{AutocommandRegistry, CommandRegistry, Workspace};
@@ -11,11 +12,11 @@ use ozone_editor::{AutocommandRegistry, CommandRegistry, Workspace};
 use crate::actions::{dispatch_autocmds, run_cmd, run_cmd_with_arg};
 use crate::components::{
     ListRow, centered_rect, draw_field, draw_list, draw_panel, draw_scrim, fill_round_rect, style,
+    with_ui,
 };
 use crate::editor_font;
-use crate::layout::baseline_in_rect;
 use crate::shell::ShellJobs;
-use crate::theme::{activate, available_themes, persist_theme_name, solid};
+use crate::theme::{activate, available_themes, persist_theme_name};
 
 /// What committing a picker item does.
 #[derive(Clone)]
@@ -315,10 +316,6 @@ pub(crate) fn draw_palette(
     let pad = 14.0;
     let radius = 10.0;
 
-    let m = ctx.measure_text("M", &font).ok();
-    let ascent = m.as_ref().map(|x| x.ascent).unwrap_or(font.size * 0.8);
-    let descent = m.as_ref().map(|x| x.descent).unwrap_or(font.size * 0.2);
-
     // Dim the editor behind the panel.
     draw_scrim(ctx, w, h)?;
 
@@ -337,7 +334,7 @@ pub(crate) fn draw_palette(
         .copied()
         .collect();
 
-    let pw = (w * 0.6).clamp(380.0, 760.0);
+    let pw = (w * 0.6).clamp(380.0, 760.0).min((w - 28.0).max(0.0));
     let header_h = line_h + pad * 2.0;
     let body_rows = shown.len().max(1); // reserve a row for "no matches"
     let ph = header_h + body_rows as f32 * line_h + pad;
@@ -357,18 +354,22 @@ pub(crate) fn draw_palette(
         input_rect.width - 16.0,
         input_rect.height,
     );
-    draw_field(ctx, in_text, &p.prompt, &p.query, &font, ascent, descent)?;
+    draw_field(ctx, in_text, &p.prompt, &p.query, &font)?;
 
     // Result list.
     let list_top = py + header_h;
     if shown.is_empty() {
-        let bl = baseline_in_rect(list_top, line_h, ascent, descent);
-        ctx.draw_text_with_font(
-            "no matches",
-            Point::new(px + pad + 8.0, bl),
-            &font,
-            &solid(s.dim),
-        )?;
+        let rect = Rect::new(
+            px + pad + 8.0,
+            list_top,
+            (pw - pad * 2.0 - 16.0).max(0.0),
+            line_h,
+        );
+        with_ui(ctx, |ui| {
+            ui.clipped(rect, |ui| {
+                Label::new("no matches", s.dim).font(&font).paint(ui, rect)
+            })
+        })?;
         return Ok(());
     }
     let rows: Vec<ListRow> = shown
@@ -379,9 +380,7 @@ pub(crate) fn draw_palette(
         })
         .collect();
     let sel = p.selected.checked_sub(start);
-    draw_list(
-        ctx, px, list_top, pw, line_h, pad, &rows, sel, &font, ascent, descent,
-    )?;
+    draw_list(ctx, px, list_top, pw, line_h, pad, &rows, sel, &font)?;
     Ok(())
 }
 
@@ -433,5 +432,40 @@ mod tests {
         p.backspace();
         p.backspace();
         assert_eq!(p.filtered.len(), 4);
+    }
+
+    #[test]
+    fn picker_paints_scrolled_results_and_long_input_in_narrow_windows() {
+        use aurea::render::{CpuRasterizer, Renderer};
+
+        for width in [64, 320, 1280] {
+            let mut raster = CpuRasterizer::new(width, 600);
+            let mut p = PickerState::new(
+                "find file:",
+                (0..30)
+                    .map(|i| PickerItem {
+                        display: format!("파일-{i}.rs"),
+                        detail: "a/very/long/path/".repeat(20),
+                        haystack: format!("file-{i}"),
+                        action: PickerAction::RunCommand("file.save".into()),
+                    })
+                    .collect(),
+            );
+            p.move_sel(20);
+            {
+                let mut ctx = raster.begin_frame().expect("frame");
+                draw_palette(&mut *ctx, &p, &Config::default()).expect("scrolled picker");
+            }
+            raster.end_frame().expect("end");
+            assert_eq!(p.selected, 20, "painting leaves selection with the editor");
+            p.query = "긴 검색어🙂".repeat(100);
+            p.refilter();
+            {
+                let mut ctx = raster.begin_frame().expect("frame");
+                draw_palette(&mut *ctx, &p, &Config::default()).expect("empty picker");
+            }
+            raster.end_frame().expect("end");
+            assert!(p.filtered.is_empty());
+        }
     }
 }

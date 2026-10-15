@@ -36,9 +36,6 @@ pub(crate) fn draw_minibuffer(
     status_h: f32,
 ) -> AureaResult<()> {
     let line_h = (font.size * 1.7).max(18.0);
-    let m = ctx.measure_text("M", font).ok();
-    let ascent = m.as_ref().map(|x| x.ascent).unwrap_or(font.size * 0.8);
-    let descent = m.as_ref().map(|x| x.descent).unwrap_or(font.size * 0.2);
 
     let pad = 10.0;
     let bh = line_h + 8.0;
@@ -48,6 +45,6 @@ pub(crate) fn draw_minibuffer(
     draw_panel(ctx, panel, 8.0)?;
 
     let text_rect = Rect::new(panel.x + pad, by + 4.0, panel.width - 2.0 * pad, line_h);
-    draw_field(ctx, text_rect, &mb.prompt, &mb.input, font, ascent, descent)?;
+    draw_field(ctx, text_rect, &mb.prompt, &mb.input, font)?;
     Ok(())
 }

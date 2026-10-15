@@ -172,9 +172,6 @@ pub(crate) fn draw_completion(
     let pad = 10.0;
     let radius = 8.0;
 
-    let m = ctx.measure_text("M", &font).ok();
-    let ascent = m.as_ref().map(|x| x.ascent).unwrap_or(font.size * 0.8);
-    let descent = m.as_ref().map(|x| x.descent).unwrap_or(font.size * 0.2);
     let measure = |ctx: &mut dyn DrawingContext, t: &str| {
         ctx.measure_text(t, &font)
             .map(|x| x.advance)
@@ -199,7 +196,9 @@ pub(crate) fn draw_completion(
     });
 
     let margin = 12.0;
-    let pw = (content_w + pad * 2.0 + 16.0).clamp(160.0, w - margin * 2.0);
+    let pw = (content_w + pad * 2.0 + 16.0)
+        .max(160.0)
+        .min((w - margin * 2.0).max(0.0));
     let ph = shown.len() as f32 * line_h + pad;
     let panel = Rect::new(margin, (h - STATUS_H - ph - 6.0).max(6.0), pw, ph);
 
@@ -223,8 +222,6 @@ pub(crate) fn draw_completion(
         &rows,
         sel,
         &font,
-        ascent,
-        descent,
     )?;
     Ok(())
 }
