@@ -107,7 +107,6 @@ pub(crate) fn draw_which_key(
             cell_x,
             cell_top + 2.0,
             line_h - 4.0,
-            base,
             4.0,
             font,
             s.chip_bg,

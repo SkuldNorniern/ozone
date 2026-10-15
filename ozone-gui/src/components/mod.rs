@@ -1,14 +1,5 @@
-//! Generic UI component layer.
-//!
-//! The base widgets every overlay is built from — panels, pills — plus the
-//! shared [`Style`] they read colours from. Overlays (`picker`, `minibuffer`,
-//! `search`, `notify`, `whichkey`, the status bar) compose these instead of
-//! reaching into the theme directly, so the look is defined once here and a
-//! theme change flows through uniformly.
-//!
-//! Components are stateless drawing helpers: they take a `DrawingContext` + a
-//! `Rect` and paint. State (selection, query text, lifetimes) stays in the
-//! overlay that owns it.
+//! Thin adapters from Ozone's theme and modal state to Aurea's canvas UI.
+//! Rendering lives in Aurea; editor actions and overlay placement stay here.
 
 pub(crate) mod field;
 pub(crate) mod list;
@@ -60,4 +51,24 @@ pub(crate) fn style() -> Style {
         input_bg: p.picker_input_bg,
         chip_bg: p.status_mode_bg,
     }
+}
+
+// These adapters only paint: they register no hit targets and receive no
+// input. Reuse Aurea's text measurement cache on each drawing thread without
+// taking keyboard focus away from Ozone's modal event routing.
+std::thread_local! {
+    static PAINT_STATE: std::cell::RefCell<aurea::ui::UiState<u8>> =
+        std::cell::RefCell::new(aurea::ui::UiState::new());
+}
+
+pub(crate) fn with_ui<R>(
+    ctx: &mut dyn aurea::render::DrawingContext,
+    paint: impl FnOnce(&mut aurea::ui::Ui<'_, u8>) -> aurea::AureaResult<R>,
+) -> aurea::AureaResult<R> {
+    PAINT_STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        let theme = aurea::ui::Theme::dark();
+        let mut ui = state.frame(ctx, &theme);
+        paint(&mut ui)
+    })
 }

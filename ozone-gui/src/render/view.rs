@@ -17,7 +17,6 @@ use super::text::{
     draw_highlighted, draw_line_with_inline_virtual_text, line_prefix_end, shift_token_spans,
     wrap_line_segments,
 };
-use crate::components::pill::draw_pill;
 use crate::layout::*;
 use crate::terminals::draw_term_row;
 use crate::theme::{palette, solid, stroke, token_color};
@@ -472,17 +471,11 @@ pub(super) fn draw_view(
                 let badge_h = (line_h * 0.55).max(8.0);
                 let badge_w = badge_h * 1.8;
                 let badge_top = line_top + (line_h - badge_h) / 2.0;
-                draw_pill(
+                crate::components::fill_round_rect(
                     ctx,
-                    "",
-                    badge_x,
-                    badge_top,
-                    badge_h,
-                    baseline,
-                    0.0,
-                    font,
+                    Rect::new(badge_x, badge_top, badge_w, badge_h),
+                    5.0,
                     palette().gutter,
-                    palette().line_number_active,
                 )?;
                 // 3 small circles as dots
                 let dot_r = (badge_h * 0.12).max(1.5);

@@ -2,48 +2,21 @@
 //! scrim, and edge/centre placement helpers. The base every popup draws on.
 
 use aurea::AureaResult;
-use aurea::render::{Color, DrawingContext, Point, Rect};
+use aurea::render::{Color, DrawingContext, Rect};
 
-use crate::components::style;
+use aurea::ui::{Component, Surface};
+
+use crate::components::{style, with_ui};
 use crate::theme::solid;
 
-/// Fill a rounded rectangle using a cross of rects plus four corner circles.
-/// The shared building block for every panel and pill.
+/// Paint a rounded surface with Aurea's shared canvas component.
 pub(crate) fn fill_round_rect(
     ctx: &mut dyn DrawingContext,
     rect: Rect,
     r: f32,
     color: Color,
 ) -> AureaResult<()> {
-    let r = r.min(rect.width / 2.0).min(rect.height / 2.0).max(0.0);
-    if r <= 0.5 {
-        return ctx.draw_rect(rect, &solid(color));
-    }
-    ctx.draw_rect(
-        Rect::new(rect.x, rect.y + r, rect.width, rect.height - 2.0 * r),
-        &solid(color),
-    )?;
-    ctx.draw_rect(
-        Rect::new(rect.x + r, rect.y, rect.width - 2.0 * r, rect.height),
-        &solid(color),
-    )?;
-    ctx.draw_circle(Point::new(rect.x + r, rect.y + r), r, &solid(color))?;
-    ctx.draw_circle(
-        Point::new(rect.x + rect.width - r, rect.y + r),
-        r,
-        &solid(color),
-    )?;
-    ctx.draw_circle(
-        Point::new(rect.x + r, rect.y + rect.height - r),
-        r,
-        &solid(color),
-    )?;
-    ctx.draw_circle(
-        Point::new(rect.x + rect.width - r, rect.y + rect.height - r),
-        r,
-        &solid(color),
-    )?;
-    Ok(())
+    with_ui(ctx, |ui| Surface::new(color).radius(r).paint(ui, rect))
 }
 
 /// Dim the whole surface behind a modal popup.
@@ -55,19 +28,12 @@ pub(crate) fn draw_scrim(ctx: &mut dyn DrawingContext, width: f32, height: f32) 
 /// drawn by the caller inside `rect`.
 pub(crate) fn draw_panel(ctx: &mut dyn DrawingContext, rect: Rect, radius: f32) -> AureaResult<()> {
     let s = style();
-    fill_round_rect(
-        ctx,
-        Rect::new(
-            rect.x - 1.0,
-            rect.y - 1.0,
-            rect.width + 2.0,
-            rect.height + 2.0,
-        ),
-        radius + 1.0,
-        s.panel_border,
-    )?;
-    fill_round_rect(ctx, rect, radius, s.panel_bg)?;
-    Ok(())
+    with_ui(ctx, |ui| {
+        Surface::new(s.panel_bg)
+            .radius(radius + 1.0)
+            .border(1.0, s.panel_border)
+            .paint(ui, rect.inset(-1.0))
+    })
 }
 
 /// A `w`×`h` panel centred within `outer_w`×`outer_h`, with its top clamped to
