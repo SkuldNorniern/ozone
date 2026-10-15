@@ -613,7 +613,7 @@ impl OzoneGui {
             if let Some(content) = state.file_tree_job.as_mut().and_then(|job| job.poll()) {
                 state.file_tree_job = None;
                 let mut ws = lock(state.workspace.as_ref());
-                ws.open_virtual_buffer(BufferKind::FileTree, content);
+                ws.show_file_tree(content);
                 state.needs_redraw = true;
             }
 

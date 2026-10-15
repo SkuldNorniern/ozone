@@ -5,9 +5,7 @@ use ozone_buffer::{BufferKind, Pos};
 use crate::ui::{NotifyLevel, UiIntent};
 use crate::workspace_search::WorkspaceMatch;
 
-use super::{
-    CommandRegistry, buffer_display_name, tree_row_dir_path, tree_row_path, workspace_tree_buffer,
-};
+use super::{CommandRegistry, buffer_display_name, tree_row_dir_path, tree_row_path};
 
 pub(super) fn register_file_commands(reg: &mut CommandRegistry) {
     // --- file ---
@@ -55,10 +53,41 @@ pub(super) fn register_file_commands(reg: &mut CommandRegistry) {
     reg.register("file.picker", "Open the workspace file picker", |ctx| {
         ctx.workspace.request_ui(UiIntent::FilePicker);
     });
-    reg.register("file.tree", "Open the workspace file tree", |ctx| {
-        let collapsed = ctx.workspace.tree_collapsed.clone();
-        ctx.workspace.request_ui(UiIntent::FileTree { collapsed });
+    reg.register(
+        "file.tree",
+        "Show, focus or close the workspace explorer",
+        |ctx| {
+            if let Some(tree) = ctx.workspace.file_tree_view() {
+                if ctx.workspace.active_view_id == Some(tree) {
+                    ctx.workspace.close_view(tree);
+                } else {
+                    ctx.workspace.focus_file_tree();
+                }
+                return;
+            }
+            let collapsed = ctx.workspace.tree_collapsed.clone();
+            ctx.workspace.request_ui(UiIntent::FileTree { collapsed });
+        },
+    );
+    reg.register("tree.refresh", "Refresh the workspace explorer", |ctx| {
+        ctx.workspace.request_ui(UiIntent::FileTree {
+            collapsed: ctx.workspace.tree_collapsed.clone(),
+        });
     });
+    reg.register(
+        "tree.expand-selection",
+        "Expand directory or select its first child",
+        |ctx| {
+            ctx.workspace.navigate_file_tree(true);
+        },
+    );
+    reg.register(
+        "tree.collapse-selection",
+        "Collapse directory or select its parent",
+        |ctx| {
+            ctx.workspace.navigate_file_tree(false);
+        },
+    );
     reg.register(
         "file.open-folder",
         "Open a folder as the workspace via the native OS folder picker",
@@ -225,14 +254,9 @@ pub(super) fn register_file_commands(reg: &mut CommandRegistry) {
                 } else {
                     ctx.workspace.tree_collapsed.insert(dir_path);
                 }
-                let Ok(base) = env::current_dir() else {
-                    return;
-                };
-                let new_content =
-                    workspace_tree_buffer(&base, &ctx.workspace.tree_collapsed, 10_000);
-                if let Some(buf) = ctx.workspace.buffers.get_mut(&ctx.buffer_id) {
-                    buf.set_text(&new_content);
-                }
+                ctx.workspace.request_ui(UiIntent::FileTree {
+                    collapsed: ctx.workspace.tree_collapsed.clone(),
+                });
                 return;
             }
 
@@ -245,7 +269,33 @@ pub(super) fn register_file_commands(reg: &mut CommandRegistry) {
             };
             let target = base.join(path);
             if target.is_file() {
-                let _ = ctx.workspace.open_file(target);
+                let previous = ctx.workspace.active_view_id;
+                let created_editor = ctx.workspace.focus_tree_editor();
+                let temporary_editor = ctx.workspace.active_view_id.filter(|_| created_editor);
+                let target = target.canonicalize().unwrap_or(target);
+                let existing = ctx
+                    .workspace
+                    .buffers
+                    .iter()
+                    .find_map(|(id, buffer)| match &buffer.kind {
+                        BufferKind::File(path) | BufferKind::Image(path) if path == &target => {
+                            Some(*id)
+                        }
+                        _ => None,
+                    });
+                if let Some(id) = existing {
+                    ctx.workspace.switch_active_buffer(id);
+                } else if let Err(error) = ctx.workspace.open_file(target) {
+                    if let Some(editor) = temporary_editor {
+                        ctx.workspace.close_view(editor);
+                    }
+                    ctx.workspace.active_view_id = previous;
+                    ctx.workspace
+                        .notify(NotifyLevel::Error, format!("Cannot open file: {error}"));
+                }
+                if let Some(editor) = temporary_editor {
+                    ctx.workspace.discard_orphan_view(editor);
+                }
             }
         },
     );

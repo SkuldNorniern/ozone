@@ -277,19 +277,24 @@ fn collect_workspace_tree_rows(
     }
 }
 
-/// Returns the relative file path encoded in a file tree row, or `None` for
-/// dir/header rows. File rows end with `"  path"` (no trailing `/`).
-pub(super) fn tree_row_path(row: &str) -> Option<&str> {
-    let (_, path) = row.rsplit_once("  ")?;
-    let path = path.trim();
+/// Display text and hidden workspace-relative path in a tree-buffer row.
+/// Accepts the older double-space format when reading existing buffers.
+pub fn tree_row_parts(row: &str) -> Option<(&str, &str)> {
+    row.split_once('\t').or_else(|| {
+        row.rsplit_once("  ")
+            .map(|(label, path)| (label, path.trim()))
+    })
+}
+
+/// The relative file path encoded in a tree row; folders and headers have none.
+pub fn tree_row_path(row: &str) -> Option<&str> {
+    let (_, path) = tree_row_parts(row)?;
     (!path.is_empty() && !path.ends_with('/')).then_some(path)
 }
 
-/// Returns the relative dir path encoded in a dir tree row (without trailing
-/// `/`), or `None` for file/header rows. Dir rows end with `"  path/"`.
-pub(super) fn tree_row_dir_path(row: &str) -> Option<&str> {
-    let (_, path) = row.rsplit_once("  ")?;
-    let path = path.trim();
+/// The relative directory path encoded in a tree row, without its final slash.
+pub fn tree_row_dir_path(row: &str) -> Option<&str> {
+    let (_, path) = tree_row_parts(row)?;
     path.ends_with('/').then(|| path.trim_end_matches('/'))
 }
 

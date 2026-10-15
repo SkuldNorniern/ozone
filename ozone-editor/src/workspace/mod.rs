@@ -14,6 +14,7 @@ use crate::view::{View, ViewId};
 
 mod nav;
 mod pane;
+mod tree;
 
 /// A point in the jump list: which buffer and where in it.
 pub(super) type Loc = (BufferId, Pos);
@@ -64,6 +65,7 @@ pub struct Workspace {
     pub indent: IndentConfig,
     /// Dir paths (workspace-relative) collapsed in the file tree pane.
     pub tree_collapsed: HashSet<String>,
+    pub(super) tree_editor_view: Option<ViewId>,
     pub(super) buffer_options: HashMap<BufferId, BufferLocal>,
     pub(super) decorations: DecorationStore,
     pub(super) events: Vec<EditorEvent>,
@@ -85,6 +87,7 @@ impl Workspace {
             panes: None,
             indent: IndentConfig::default(),
             tree_collapsed: HashSet::new(),
+            tree_editor_view: None,
             buffer_options: HashMap::new(),
             decorations: DecorationStore::new(),
             events: Vec::new(),

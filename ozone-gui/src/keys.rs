@@ -95,6 +95,7 @@ pub(crate) fn handle_key(
                     "references.open-selection"
                 };
                 run_cmd(command, ws, reg, autocmds, shell_jobs);
+                apply_ui_intents(ws, reg, ov, mru, lsp);
                 return true;
             }
             Escape => {

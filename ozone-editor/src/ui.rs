@@ -83,8 +83,8 @@ pub enum UiIntent {
     /// Open a native OS file-picker dialog and open the chosen file as a
     /// buffer. Cancelled → no change.
     OpenFilePicker,
-    /// Build the workspace file tree in the background and open it as a
-    /// FileTree buffer. The collapsed-directory set is captured at command time.
+    /// Build the workspace tree in the background and show or refresh the
+    /// persistent explorer pane. The collapsed set is captured at request time.
     FileTree {
         collapsed: std::collections::HashSet<String>,
     },
