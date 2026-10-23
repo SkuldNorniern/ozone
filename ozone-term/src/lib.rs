@@ -25,6 +25,17 @@ pub use vt::{Cell, Color};
 const INIT_COLS: u16 = 120;
 const INIT_ROWS: u16 = 40;
 
+/// A slice of the terminal's lines, from [`Terminal::cell_window`].
+#[derive(Clone, Debug, Default)]
+pub struct Window {
+    /// Lines in scrollback plus screen.
+    pub lines: usize,
+    /// The requested lines.
+    pub rows: Vec<Vec<Cell>>,
+    /// The cursor's absolute `(line, col)`.
+    pub cursor: (usize, usize),
+}
+
 /// A running shell on a PTY, with its output rendered through a VT grid.
 pub struct Terminal {
     pty: Box<dyn pty::Pty>,
@@ -92,6 +103,19 @@ impl Terminal {
         self.vt.lock().map(|v| v.render_cells()).unwrap_or_default()
     }
 
+    /// Total lines, up to `count` lines from `first`, and the cursor, all read
+    /// under one lock so they agree with each other.
+    pub fn cell_window(&self, first: usize, count: usize) -> Window {
+        self.vt
+            .lock()
+            .map(|v| Window {
+                lines: v.line_count(),
+                rows: v.render_window(first, count),
+                cursor: v.cursor(),
+            })
+            .unwrap_or_default()
+    }
+
     /// The cursor's absolute `(line, col)` in the rendered output.
     pub fn cursor(&self) -> (usize, usize) {
         self.vt.lock().map(|v| v.cursor()).unwrap_or((0, 0))
@@ -111,11 +135,14 @@ fn spawn_reader<R: Read + Send + 'static>(
 ) {
     thread::spawn(move || {
         let mut buf = [0u8; 4096];
+        // Bytes of a char split across two reads wait here for the rest.
+        let mut carry: Vec<u8> = Vec::new();
         loop {
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    let text = String::from_utf8_lossy(&buf[..n]);
+                    carry.extend_from_slice(&buf[..n]);
+                    let text = take_text(&mut carry);
                     if let Ok(mut v) = vt.lock() {
                         v.process(&text);
                     }
@@ -125,4 +152,61 @@ fn spawn_reader<R: Read + Send + 'static>(
             }
         }
     });
+}
+
+/// Decodes what `bytes` holds as text, leaving an incomplete trailing char
+/// in `bytes` for the next read. Invalid bytes become U+FFFD.
+fn take_text(bytes: &mut Vec<u8>) -> String {
+    let mut out = String::new();
+    let mut rest: &[u8] = bytes;
+    loop {
+        match std::str::from_utf8(rest) {
+            Ok(text) => {
+                out.push_str(text);
+                rest = &[];
+                break;
+            }
+            Err(e) => {
+                let (good, after) = rest.split_at(e.valid_up_to());
+                out.push_str(std::str::from_utf8(good).unwrap_or_default());
+                match e.error_len() {
+                    Some(bad) => {
+                        out.push('\u{fffd}');
+                        rest = &after[bad..];
+                    }
+                    // Cut short at the end: keep it for the next read.
+                    None => {
+                        rest = after;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    let start = bytes.len() - rest.len();
+    bytes.drain(..start);
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::take_text;
+
+    #[test]
+    fn split_chars_wait_for_the_next_read() {
+        let hangul = "가".as_bytes();
+        let mut carry = vec![b'a', hangul[0], hangul[1]];
+        assert_eq!(take_text(&mut carry), "a");
+        assert_eq!(carry.len(), 2);
+        carry.push(hangul[2]);
+        assert_eq!(take_text(&mut carry), "가");
+        assert!(carry.is_empty());
+    }
+
+    #[test]
+    fn bad_bytes_become_replacement() {
+        let mut carry = vec![b'x', 0xff, b'y'];
+        assert_eq!(take_text(&mut carry), "x\u{fffd}y");
+        assert!(carry.is_empty());
+    }
 }

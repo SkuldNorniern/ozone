@@ -93,6 +93,8 @@ enum State {
     Osc,
     /// Consume exactly one following byte (e.g. charset-select `ESC ( X`).
     SkipOne,
+    /// ESC inside an OSC: a following `\\` ends it (ST).
+    OscEsc,
 }
 
 pub struct Vt {
@@ -134,11 +136,19 @@ impl Vt {
                 State::Esc => self.esc(ch),
                 State::Csi => self.csi(ch),
                 State::Osc => {
-                    // Consume until BEL or ST (ESC \). Approximate: end on BEL or ESC.
+                    // Consume until BEL or ST (ESC \).
                     if ch == '\u{7}' {
                         self.state = State::Ground;
                     } else if ch == '\u{1b}' {
-                        self.state = State::Ground; // swallow the following '\' next round if any
+                        self.state = State::OscEsc;
+                    }
+                }
+                State::OscEsc => {
+                    if ch == '\\' {
+                        self.state = State::Ground;
+                    } else {
+                        // Not ST: the ESC started a new sequence.
+                        self.esc(ch);
                     }
                 }
                 State::SkipOne => self.state = State::Ground,
@@ -188,7 +198,13 @@ impl Vt {
         match ch {
             '0'..='9' => {
                 let d = ch as u32 - '0' as u32;
-                self.cur_param = Some(self.cur_param.unwrap_or(0) * 10 + d);
+                // Saturate: a run of digits must not overflow.
+                self.cur_param = Some(
+                    self.cur_param
+                        .unwrap_or(0)
+                        .saturating_mul(10)
+                        .saturating_add(d),
+                );
             }
             ';' => {
                 self.params.push(self.cur_param.take().unwrap_or(0));
@@ -416,6 +432,24 @@ impl Vt {
         out
     }
 
+    /// Lines in scrollback plus screen.
+    pub fn line_count(&self) -> usize {
+        self.scrollback.len() + self.screen.len()
+    }
+
+    /// Up to `count` lines from `first` (same numbering as
+    /// [`render_cells`](Self::render_cells)), trailing blank cells trimmed.
+    /// Lets a renderer copy only what it shows.
+    pub fn render_window(&self, first: usize, count: usize) -> Vec<Vec<Cell>> {
+        self.scrollback
+            .iter()
+            .chain(&self.screen)
+            .skip(first)
+            .take(count)
+            .map(|row| trim_cells(row))
+            .collect()
+    }
+
     /// The full visible grid as coloured cells: scrollback then screen, one
     /// `Vec<Cell>` per line with trailing blank cells trimmed.
     pub fn render_cells(&self) -> Vec<Vec<Cell>> {
@@ -469,6 +503,27 @@ mod tests {
         let mut vt = Vt::new(20, 5);
         vt.process(input);
         vt.render()
+    }
+
+    #[test]
+    fn osc_ended_by_st_leaves_no_backslash() {
+        assert_eq!(render("\u{1b}]0;title\u{1b}\\ok"), "ok\n\n\n\n");
+        assert_eq!(render("\u{1b}]0;title\u{7}ok"), "ok\n\n\n\n");
+    }
+
+    #[test]
+    fn huge_csi_numbers_saturate() {
+        render("\u{1b}[99999999999999999999Cx");
+    }
+
+    #[test]
+    fn window_is_a_slice_of_all_lines() {
+        let mut vt = Vt::new(10, 3);
+        vt.process("a\r\nb\r\nc\r\nd\r\ne");
+        let all = vt.render_cells();
+        assert_eq!(vt.line_count(), all.len());
+        assert_eq!(vt.render_window(1, 2), all[1..3].to_vec());
+        assert!(vt.render_window(99, 2).is_empty());
     }
 
     #[test]
