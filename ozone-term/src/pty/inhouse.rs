@@ -25,7 +25,7 @@ use super::Pty;
 use std::io;
 
 /// Spawn the default shell on an in-house PTY. Not yet implemented.
-pub fn spawn() -> io::Result<Box<dyn Pty>> {
+pub fn spawn(_cwd: Option<&std::path::Path>) -> io::Result<Box<dyn Pty>> {
     // When implemented, return Ok(Box::new(InHousePty { … })).
     Err(io::Error::other(
         "in-house PTY backend is not implemented yet; build with the `portable` feature",

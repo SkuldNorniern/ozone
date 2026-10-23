@@ -13,6 +13,7 @@ pub mod pty;
 pub mod vt;
 
 use std::io::Read;
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -36,7 +37,17 @@ pub struct Terminal {
 impl Terminal {
     /// Spawn the platform default shell on a PTY using the configured backend.
     pub fn spawn() -> std::io::Result<Self> {
-        let mut pty = pty::spawn_default()?;
+        Self::spawn_in(None, || {})
+    }
+
+    /// Spawn the shell in `cwd` (the current directory when `None`).
+    /// `on_output` runs on the reader thread after each processed chunk, so a
+    /// GUI can wake up and redraw instead of polling.
+    pub fn spawn_in(
+        cwd: Option<&Path>,
+        on_output: impl Fn() + Send + 'static,
+    ) -> std::io::Result<Self> {
+        let mut pty = pty::spawn_default(cwd)?;
         let reader = pty
             .take_reader()
             .ok_or_else(|| std::io::Error::other("pty produced no reader"))?;
@@ -44,7 +55,7 @@ impl Terminal {
 
         let vt = Arc::new(Mutex::new(Vt::new(INIT_COLS as usize, INIT_ROWS as usize)));
         let version = Arc::new(AtomicU64::new(0));
-        spawn_reader(reader, vt.clone(), version.clone());
+        spawn_reader(reader, vt.clone(), version.clone(), on_output);
         Ok(Self { pty, vt, version })
     }
 
@@ -96,6 +107,7 @@ fn spawn_reader<R: Read + Send + 'static>(
     mut reader: R,
     vt: Arc<Mutex<Vt>>,
     version: Arc<AtomicU64>,
+    on_output: impl Fn() + Send + 'static,
 ) {
     thread::spawn(move || {
         let mut buf = [0u8; 4096];
@@ -108,6 +120,7 @@ fn spawn_reader<R: Read + Send + 'static>(
                         v.process(&text);
                     }
                     version.fetch_add(1, Ordering::Release);
+                    on_output();
                 }
             }
         }

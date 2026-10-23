@@ -11,7 +11,7 @@ fn oerr<E: std::fmt::Display>(e: E) -> io::Error {
 }
 
 /// Spawn the platform default shell on a portable-pty PTY.
-pub fn spawn() -> io::Result<Box<dyn Pty>> {
+pub fn spawn(cwd: Option<&std::path::Path>) -> io::Result<Box<dyn Pty>> {
     let system = native_pty_system();
     let pair = system
         .openpty(PtySize {
@@ -23,8 +23,13 @@ pub fn spawn() -> io::Result<Box<dyn Pty>> {
         .map_err(oerr)?;
 
     let mut cmd = CommandBuilder::new_default_prog();
-    if let Ok(cwd) = std::env::current_dir() {
-        cmd.cwd(cwd);
+    match cwd {
+        Some(dir) => cmd.cwd(dir),
+        None => {
+            if let Ok(cwd) = std::env::current_dir() {
+                cmd.cwd(cwd);
+            }
+        }
     }
     // GUI processes don't inherit a terminal, so TERM is unset (or "dumb")
     // which suppresses color output from the shell and CLI tools. Advertise

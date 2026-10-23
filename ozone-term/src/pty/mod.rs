@@ -6,6 +6,7 @@
 //! - [`inhouse`] — direct ConPTY/forkpty FFI (scaffold; enable with `inhouse`).
 
 use std::io::{self, Read};
+use std::path::Path;
 
 pub mod inhouse;
 #[cfg(feature = "portable")]
@@ -24,17 +25,18 @@ pub trait Pty: Send {
     fn is_running(&self) -> bool;
 }
 
-/// Spawn the default shell on a PTY using the compiled-in backend.
+/// Spawn the default shell on a PTY using the compiled-in backend, in `cwd`
+/// or the process's current directory.
 // Returns are required to keep the cfg-gated branches mutually exclusive.
 #[allow(clippy::needless_return)]
-pub fn spawn_default() -> io::Result<Box<dyn Pty>> {
+pub fn spawn_default(cwd: Option<&Path>) -> io::Result<Box<dyn Pty>> {
     #[cfg(feature = "inhouse")]
     {
-        return inhouse::spawn();
+        return inhouse::spawn(cwd);
     }
     #[cfg(all(feature = "portable", not(feature = "inhouse")))]
     {
-        return portable_backend::spawn();
+        return portable_backend::spawn(cwd);
     }
     #[cfg(not(any(feature = "portable", feature = "inhouse")))]
     {
